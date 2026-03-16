@@ -9,3 +9,4 @@ pub mod server;
 pub mod api;
 pub mod r#loop;
 pub mod memory;
+pub mod redis;
