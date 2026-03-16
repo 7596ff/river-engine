@@ -8,3 +8,4 @@ mod shell;
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::ToolExecutor;
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, GrepTool};
+pub use shell::BashTool;
