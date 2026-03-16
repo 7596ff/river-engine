@@ -43,7 +43,7 @@ impl ToolExecutor {
             Some(tool) => {
                 match tool.execute(call.arguments.clone()) {
                     Ok(tool_result) => {
-                        // Update context tracking (rough estimate: ~4 chars per token)
+                        // Rough estimate: ~4 characters per token (typical for English text)
                         self.context_used += (tool_result.output.len() as u64) / 4;
                         Ok(tool_result)
                     }
@@ -166,5 +166,17 @@ mod tests {
         let response = executor.execute(&call);
         assert!(response.result.is_err());
         assert!(response.result.unwrap_err().contains("Unknown tool"));
+    }
+
+    #[test]
+    fn test_context_warning_threshold() {
+        let registry = ToolRegistry::new();
+        let mut executor = ToolExecutor::new(registry, 1000);
+
+        executor.add_context(895);
+        assert!(!executor.context_warning()); // 89.5%
+
+        executor.add_context(6);
+        assert!(executor.context_warning()); // 90.1%
     }
 }
