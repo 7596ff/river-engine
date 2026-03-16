@@ -14,6 +14,10 @@ struct Args {
     #[arg(short, long)]
     data_dir: PathBuf,
 
+    /// Agent name (used for Redis namespacing)
+    #[arg(long, default_value = "default")]
+    agent_name: String,
+
     /// Gateway port
     #[arg(short, long, default_value = "3000")]
     port: u16,
@@ -25,6 +29,14 @@ struct Args {
     /// Model name
     #[arg(long)]
     model_name: Option<String>,
+
+    /// Embedding server URL (enables memory tools)
+    #[arg(long)]
+    embedding_url: Option<String>,
+
+    /// Redis URL (enables working/medium-term memory tools)
+    #[arg(long)]
+    redis_url: Option<String>,
 }
 
 #[tokio::main]
@@ -34,16 +46,27 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     tracing::info!("Starting River Gateway");
+    tracing::info!("Agent: {}", args.agent_name);
     tracing::info!("Workspace: {:?}", args.workspace);
     tracing::info!("Data dir: {:?}", args.data_dir);
     tracing::info!("Port: {}", args.port);
+
+    if args.embedding_url.is_some() {
+        tracing::info!("Embedding server: {:?}", args.embedding_url);
+    }
+    if args.redis_url.is_some() {
+        tracing::info!("Redis: {:?}", args.redis_url);
+    }
 
     let config = ServerConfig {
         workspace: args.workspace,
         data_dir: args.data_dir,
         port: args.port,
+        agent_name: args.agent_name,
         model_url: args.model_url,
         model_name: args.model_name,
+        embedding_url: args.embedding_url,
+        redis_url: args.redis_url,
     };
 
     run(config).await

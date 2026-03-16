@@ -2,9 +2,12 @@
 
 use crate::api::create_router;
 use crate::db::init_db;
+use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
 use crate::tools::{
-    BashTool, EditTool, GlobTool, GrepTool, ReadTool, ToolRegistry, WriteTool,
+    BashTool, EditTool, EmbedTool, GlobTool, GrepTool, MemoryDeleteTool, MemoryDeleteBySourceTool,
+    MemorySearchTool, ReadTool, ToolRegistry, WriteTool,
 };
 use chrono::{Datelike, Timelike};
 use river_core::AgentBirth;
@@ -17,8 +20,11 @@ pub struct ServerConfig {
     pub workspace: PathBuf,
     pub data_dir: PathBuf,
     pub port: u16,
+    pub agent_name: String,
     pub model_url: Option<String>,
     pub model_name: Option<String>,
+    pub embedding_url: Option<String>,
+    pub redis_url: Option<String>,
 }
 
 /// Initialize and run the gateway server
@@ -27,16 +33,27 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let db_path = config.data_dir.join("river.db");
     let db = init_db(&db_path)?;
 
-    // Create tool registry with core tools
-    let mut registry = ToolRegistry::new();
-    registry.register(Box::new(ReadTool::new(&config.workspace)));
-    registry.register(Box::new(WriteTool::new(&config.workspace)));
-    registry.register(Box::new(EditTool::new(&config.workspace)));
-    registry.register(Box::new(GlobTool::new(&config.workspace)));
-    registry.register(Box::new(GrepTool::new(&config.workspace)));
-    registry.register(Box::new(BashTool::new(&config.workspace)));
+    // Create embedding client if configured
+    let embedding_client = if let Some(url) = &config.embedding_url {
+        let embed_config = EmbeddingConfig {
+            url: url.clone(),
+            ..Default::default()
+        };
+        Some(EmbeddingClient::new(embed_config))
+    } else {
+        None
+    };
 
-    tracing::info!("Registered {} tools", registry.len());
+    // Create Redis client if configured
+    let redis_client = if let Some(url) = &config.redis_url {
+        let redis_config = RedisConfig {
+            url: url.clone(),
+            agent_name: config.agent_name.clone(),
+        };
+        Some(RedisClient::new(redis_config).await?)
+    } else {
+        None
+    };
 
     // Create agent birth (current time)
     let now = chrono::Utc::now();
@@ -50,19 +67,81 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     )?;
 
     // Create gateway config
+    let agent_name = config.agent_name.clone();
     let gateway_config = GatewayConfig {
-        workspace: config.workspace,
-        data_dir: config.data_dir,
+        workspace: config.workspace.clone(),
+        data_dir: config.data_dir.clone(),
         port: config.port,
         model_url: config.model_url.unwrap_or_else(|| "http://localhost:8080".to_string()),
         model_name: config.model_name.unwrap_or_else(|| "default".to_string()),
         context_limit: 65536,
         heartbeat_minutes: 45,
         agent_birth,
+        agent_name: agent_name.clone(),
+        embedding: config.embedding_url.as_ref().map(|url| EmbeddingConfig {
+            url: url.clone(),
+            ..Default::default()
+        }),
+        redis: config.redis_url.as_ref().map(|url| RedisConfig {
+            url: url.clone(),
+            agent_name: agent_name.clone(),
+        }),
     };
 
+    // Wrap database in Arc for sharing
+    let db_arc = Arc::new(std::sync::Mutex::new(db));
+    let snowflake_gen = Arc::new(river_core::SnowflakeGenerator::new(gateway_config.agent_birth));
+
+    // Create tool registry with core tools
+    let mut registry = ToolRegistry::new();
+    registry.register(Box::new(ReadTool::new(&config.workspace)));
+    registry.register(Box::new(WriteTool::new(&config.workspace)));
+    registry.register(Box::new(EditTool::new(&config.workspace)));
+    registry.register(Box::new(GlobTool::new(&config.workspace)));
+    registry.register(Box::new(GrepTool::new(&config.workspace)));
+    registry.register(Box::new(BashTool::new(&config.workspace)));
+
+    // Register memory tools if embedding client is available
+    if let Some(ref embed_client) = embedding_client {
+        let embed_arc = Arc::new(embed_client.clone());
+        registry.register(Box::new(EmbedTool::new(
+            db_arc.clone(),
+            embed_arc.clone(),
+            snowflake_gen.clone(),
+        )));
+        registry.register(Box::new(MemorySearchTool::new(db_arc.clone(), embed_arc.clone())));
+        registry.register(Box::new(MemoryDeleteTool::new(db_arc.clone())));
+        registry.register(Box::new(MemoryDeleteBySourceTool::new(db_arc.clone())));
+        tracing::info!("Registered memory tools (embed, memory_search, memory_delete, memory_delete_by_source)");
+    }
+
+    // Register Redis tools if client is available
+    if let Some(ref redis) = redis_client {
+        let redis_arc = Arc::new(redis.clone());
+        use crate::redis::*;
+        registry.register(Box::new(WorkingMemorySetTool::new(redis_arc.clone())));
+        registry.register(Box::new(WorkingMemoryGetTool::new(redis_arc.clone())));
+        registry.register(Box::new(WorkingMemoryDeleteTool::new(redis_arc.clone())));
+        registry.register(Box::new(MediumTermSetTool::new(redis_arc.clone())));
+        registry.register(Box::new(MediumTermGetTool::new(redis_arc.clone())));
+        registry.register(Box::new(ResourceLockTool::new(redis_arc.clone())));
+        registry.register(Box::new(CounterIncrementTool::new(redis_arc.clone())));
+        registry.register(Box::new(CounterGetTool::new(redis_arc.clone())));
+        registry.register(Box::new(CacheSetTool::new(redis_arc.clone())));
+        registry.register(Box::new(CacheGetTool::new(redis_arc.clone())));
+        tracing::info!("Registered Redis tools (10 tools)");
+    }
+
+    tracing::info!("Registered {} tools total", registry.names().len());
+
     // Create app state
-    let state = Arc::new(AppState::new(gateway_config, db, registry));
+    let state = Arc::new(AppState::new(
+        gateway_config,
+        db_arc,
+        registry,
+        embedding_client,
+        redis_client,
+    ));
 
     // Create router
     let app = create_router(state);
