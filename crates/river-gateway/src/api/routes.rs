@@ -106,11 +106,14 @@ mod tests {
             context_limit: 65536,
             heartbeat_minutes: 45,
             agent_birth: AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap(),
+            agent_name: "test-agent".to_string(),
+            embedding: None,
+            redis: None,
         };
 
-        let db = Database::open_in_memory().unwrap();
+        let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        Arc::new(AppState::new(config, db, registry))
+        Arc::new(AppState::new(config, db, registry, None, None))
     }
 
     #[tokio::test]

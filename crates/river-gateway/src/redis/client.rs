@@ -30,14 +30,14 @@ impl RedisClient {
     /// Create new Redis client
     pub async fn new(config: RedisConfig) -> RiverResult<Self> {
         let redis_config = fred::types::RedisConfig::from_url(&config.url)
-            .map_err(|e| RiverError::database(format!("Invalid Redis URL: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("Invalid Redis URL: {}", e)))?;
 
         let inner = fred::clients::RedisClient::new(redis_config, None, None, None);
         inner.connect();
         inner
             .wait_for_connect()
             .await
-            .map_err(|e| RiverError::database(format!("Connection failed: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("Connection failed: {}", e)))?;
 
         Ok(Self {
             inner,
@@ -56,7 +56,7 @@ impl RedisClient {
         self.inner
             .set::<(), _, _>(&full_key, value, Some(Expiration::EX(ttl_minutes as i64 * 60)), None, false)
             .await
-            .map_err(|e| RiverError::database(format!("SET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("SET failed: {}", e)))
     }
 
     pub async fn working_get(&self, key: &str) -> RiverResult<Option<String>> {
@@ -64,7 +64,7 @@ impl RedisClient {
         self.inner
             .get::<Option<String>, _>(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("GET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("GET failed: {}", e)))
     }
 
     pub async fn working_delete(&self, key: &str) -> RiverResult<bool> {
@@ -72,7 +72,7 @@ impl RedisClient {
         let deleted: i64 = self.inner
             .del(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("DEL failed: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("DEL failed: {}", e)))?;
         Ok(deleted > 0)
     }
 
@@ -82,7 +82,7 @@ impl RedisClient {
         self.inner
             .set::<(), _, _>(&full_key, value, Some(Expiration::EX(ttl_hours as i64 * 3600)), None, false)
             .await
-            .map_err(|e| RiverError::database(format!("SET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("SET failed: {}", e)))
     }
 
     pub async fn medium_get(&self, key: &str) -> RiverResult<Option<String>> {
@@ -90,7 +90,7 @@ impl RedisClient {
         self.inner
             .get::<Option<String>, _>(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("GET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("GET failed: {}", e)))
     }
 
     // Coordination domain
@@ -99,7 +99,7 @@ impl RedisClient {
         let result: Option<String> = self.inner
             .set(&full_key, "locked", Some(Expiration::EX(ttl_seconds as i64)), Some(SetOptions::NX), false)
             .await
-            .map_err(|e| RiverError::database(format!("SET NX failed: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("SET NX failed: {}", e)))?;
         Ok(result.is_some())
     }
 
@@ -108,7 +108,7 @@ impl RedisClient {
         let deleted: i64 = self.inner
             .del(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("DEL failed: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("DEL failed: {}", e)))?;
         Ok(deleted > 0)
     }
 
@@ -117,7 +117,7 @@ impl RedisClient {
         self.inner
             .incr(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("INCR failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("INCR failed: {}", e)))
     }
 
     pub async fn counter_get(&self, key: &str) -> RiverResult<i64> {
@@ -125,7 +125,7 @@ impl RedisClient {
         let value: Option<i64> = self.inner
             .get(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("GET failed: {}", e)))?;
+            .map_err(|e| RiverError::redis(format!("GET failed: {}", e)))?;
         Ok(value.unwrap_or(0))
     }
 
@@ -136,7 +136,7 @@ impl RedisClient {
         self.inner
             .set::<(), _, _>(&full_key, value, expiration, None, false)
             .await
-            .map_err(|e| RiverError::database(format!("SET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("SET failed: {}", e)))
     }
 
     pub async fn cache_get(&self, key: &str) -> RiverResult<Option<String>> {
@@ -144,7 +144,7 @@ impl RedisClient {
         self.inner
             .get::<Option<String>, _>(&full_key)
             .await
-            .map_err(|e| RiverError::database(format!("GET failed: {}", e)))
+            .map_err(|e| RiverError::redis(format!("GET failed: {}", e)))
     }
 
     /// Check if Redis is connected

@@ -65,12 +65,12 @@ impl EmbeddingClient {
             }))
             .send()
             .await
-            .map_err(|e| RiverError::Model(format!("Request failed: {}", e)))?;
+            .map_err(|e| RiverError::embedding(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(RiverError::Model(format!(
+            return Err(RiverError::embedding(format!(
                 "Embedding server error {}: {}",
                 status, body
             )));
@@ -79,13 +79,13 @@ impl EmbeddingClient {
         let resp: EmbeddingResponse = response
             .json()
             .await
-            .map_err(|e| RiverError::Model(format!("Invalid response: {}", e)))?;
+            .map_err(|e| RiverError::embedding(format!("Invalid response: {}", e)))?;
 
         resp.data
             .into_iter()
             .next()
             .map(|d| d.embedding)
-            .ok_or_else(|| RiverError::Model("Empty embedding response".to_string()))
+            .ok_or_else(|| RiverError::embedding("Empty embedding response".to_string()))
     }
 
     /// Get embeddings for multiple texts
@@ -101,12 +101,12 @@ impl EmbeddingClient {
             }))
             .send()
             .await
-            .map_err(|e| RiverError::Model(format!("Request failed: {}", e)))?;
+            .map_err(|e| RiverError::embedding(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(RiverError::Model(format!(
+            return Err(RiverError::embedding(format!(
                 "Embedding server error {}: {}",
                 status, body
             )));
@@ -115,7 +115,7 @@ impl EmbeddingClient {
         let resp: EmbeddingResponse = response
             .json()
             .await
-            .map_err(|e| RiverError::Model(format!("Invalid response: {}", e)))?;
+            .map_err(|e| RiverError::embedding(format!("Invalid response: {}", e)))?;
 
         Ok(resp.data.into_iter().map(|d| d.embedding).collect())
     }
