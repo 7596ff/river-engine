@@ -22,12 +22,23 @@
 - 30 tests passing
 - Binary: `river-gateway --workspace <path> --data-dir <path>`
 
-## Next Up
+### Plan 3: Memory & Embeddings ✅
+- Semantic memory (SQLite embeddings):
+  - Memory CRUD operations with f32 vector storage
+  - Embedding server client (OpenAI-compatible API)
+  - Vector similarity search with cosine similarity
+  - Memory tools (embed, memory_search, memory_delete, memory_delete_by_source)
+- Redis ephemeral memory (4 domains):
+  - Working memory (TTL in minutes)
+  - Medium-term memory (TTL in hours)
+  - Coordination (locks, counters)
+  - Cache (optional TTL)
+  - 10 Redis tools total
+- Added Embedding and Redis error variants to river-core
+- 131 tests passing (83 core, 44 gateway, 4 doc-tests)
+- Binary: `river-gateway ... --embedding-url <url> --redis-url <url> --agent-name <name>`
 
-### Plan 3: Memory & Embeddings
-- Semantic search
-- Auto-embedding on message insert
-- Redis integration (working_memory, medium_term, coordination, cache)
+## Next Up
 
 ### Plan 4: Orchestrator
 - Agent lifecycle management
