@@ -27,3 +27,4 @@ anyhow = "1.0"
 glob = "0.3"
 regex = "1.10"
 chrono = "0.4"
+fred = { version = "9.0", features = ["enable-rustls"] }
