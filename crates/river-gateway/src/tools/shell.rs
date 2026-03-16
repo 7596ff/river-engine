@@ -55,6 +55,7 @@ impl Tool for BashTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: command"))?;
 
+        // TODO: Use for async command execution with timeout support
         let _timeout_ms = args.get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_MS)
@@ -86,12 +87,43 @@ impl Tool for BashTool {
 
         // Handle output file if specified
         if let Some(out_path) = output_file {
-            // Validate output path is within workspace (security)
-            let out_path_buf = std::path::Path::new(out_path);
-            if out_path_buf.is_absolute() {
+            // Security: validate output path stays within workspace
+            let path = std::path::Path::new(out_path);
+
+            // Reject absolute paths
+            if path.is_absolute() {
                 return Err(RiverError::tool("Output file path must be relative"));
             }
-            let full_out_path = self.workspace.join(out_path);
+
+            let full_out_path = self.workspace.join(path);
+
+            // Canonicalize and verify within workspace
+            // For new files, check parent exists and is within workspace
+            let check_path = if full_out_path.exists() {
+                full_out_path.canonicalize()
+                    .map_err(|e| RiverError::tool(format!("Invalid output path: {}", e)))?
+            } else {
+                let parent = full_out_path.parent()
+                    .ok_or_else(|| RiverError::tool("Invalid output path: no parent directory"))?;
+                if parent.exists() {
+                    let canonical_parent = parent.canonicalize()
+                        .map_err(|e| RiverError::tool(format!("Invalid output path: {}", e)))?;
+                    canonical_parent.join(full_out_path.file_name().unwrap_or_default())
+                } else {
+                    // Parent doesn't exist - just use workspace + relative path
+                    self.workspace.canonicalize()
+                        .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?
+                        .join(path)
+                }
+            };
+
+            // Verify path is within workspace
+            let workspace_canonical = self.workspace.canonicalize()
+                .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?;
+
+            if !check_path.starts_with(&workspace_canonical) {
+                return Err(RiverError::tool("Output file path escapes workspace boundary"));
+            }
 
             std::fs::write(&full_out_path, &combined)
                 .map_err(|e| RiverError::tool(format!("Failed to write output file: {}", e)))?;
@@ -186,5 +218,19 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("relative"));
+    }
+
+    #[test]
+    fn test_bash_output_file_path_traversal() {
+        let dir = TempDir::new().unwrap();
+        let tool = BashTool::new(dir.path());
+
+        let result = tool.execute(json!({
+            "command": "echo test",
+            "output_file": "../escape.txt"
+        }));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escapes workspace"));
     }
 }
