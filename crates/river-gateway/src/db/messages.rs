@@ -52,12 +52,28 @@ pub struct Message {
 impl Message {
     fn from_row(row: &Row) -> Result<Self, rusqlite::Error> {
         let id_bytes: Vec<u8> = row.get(0)?;
-        let id = Snowflake::from_bytes(id_bytes.try_into().unwrap_or([0u8; 16]));
+        let id_array: [u8; 16] = id_bytes.try_into().map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Blob,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid snowflake ID length"))
+            )
+        })?;
+        let id = Snowflake::from_bytes(id_array);
+
+        let role_str: String = row.get(2)?;
+        let role = match MessageRole::from_str(&role_str) {
+            Some(r) => r,
+            None => {
+                tracing::warn!("Invalid message role in database: {}, defaulting to User", role_str);
+                MessageRole::User
+            }
+        };
 
         Ok(Self {
             id,
             session_id: row.get(1)?,
-            role: MessageRole::from_str(&row.get::<_, String>(2)?).unwrap_or(MessageRole::User),
+            role,
             content: row.get(3)?,
             tool_calls: row.get(4)?,
             tool_call_id: row.get(5)?,
