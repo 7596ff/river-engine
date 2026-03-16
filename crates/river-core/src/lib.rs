@@ -5,4 +5,5 @@ pub mod types;
 pub mod config;
 pub mod error;
 
-// Re-exports will be added as types are implemented
+// Re-exports
+pub use snowflake::{AgentBirth, Snowflake, SnowflakeGenerator, SnowflakeType};
