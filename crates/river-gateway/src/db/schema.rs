@@ -40,6 +40,7 @@ impl Database {
             .map_err(|e| RiverError::database(e.to_string()))?;
 
         self.run_migration("001_messages", include_str!("migrations/001_messages.sql"))?;
+        self.run_migration("002_memories", include_str!("migrations/002_memories.sql"))?;
         Ok(())
     }
 
