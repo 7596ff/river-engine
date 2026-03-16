@@ -1,0 +1,1 @@
+//! Static model registry

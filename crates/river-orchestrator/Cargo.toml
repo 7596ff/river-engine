@@ -1,0 +1,26 @@
+[package]
+name = "river-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "River Engine orchestrator - coordination service"
+
+[[bin]]
+name = "river-orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+river-core = { path = "../river-core" }
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
