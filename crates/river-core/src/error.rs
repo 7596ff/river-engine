@@ -57,6 +57,14 @@ pub enum RiverError {
     #[error("Orchestrator error: {0}")]
     Orchestrator(String),
 
+    /// Embedding server errors (connection, API, response parsing)
+    #[error("Embedding error: {0}")]
+    Embedding(String),
+
+    /// Redis errors (connection, command execution, timeout)
+    #[error("Redis error: {0}")]
+    Redis(String),
+
     /// JSON serialization/deserialization errors
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -116,6 +124,16 @@ impl RiverError {
     /// Creates a new Orchestrator error with the given message.
     pub fn orchestrator(msg: impl Into<String>) -> Self {
         Self::Orchestrator(msg.into())
+    }
+
+    /// Creates a new Embedding error with the given message.
+    pub fn embedding(msg: impl Into<String>) -> Self {
+        Self::Embedding(msg.into())
+    }
+
+    /// Creates a new Redis error with the given message.
+    pub fn redis(msg: impl Into<String>) -> Self {
+        Self::Redis(msg.into())
     }
 }
 
@@ -227,6 +245,12 @@ mod tests {
 
         let err = RiverError::orchestrator("test");
         assert!(matches!(err, RiverError::Orchestrator(ref s) if s == "test"));
+
+        let err = RiverError::embedding("test");
+        assert!(matches!(err, RiverError::Embedding(ref s) if s == "test"));
+
+        let err = RiverError::redis("test");
+        assert!(matches!(err, RiverError::Redis(ref s) if s == "test"));
     }
 
     #[test]
