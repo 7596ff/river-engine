@@ -1,0 +1,30 @@
+[package]
+name = "river-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "River Engine gateway - agent runtime"
+
+[[bin]]
+name = "river-gateway"
+path = "src/main.rs"
+
+[dependencies]
+river-core = { path = "../river-core" }
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"
