@@ -7,3 +7,6 @@ pub mod api;
 pub mod config;
 pub mod models;
 pub mod state;
+
+pub use config::{ModelConfig, ModelsFile, OrchestratorConfig};
+pub use state::OrchestratorState;
