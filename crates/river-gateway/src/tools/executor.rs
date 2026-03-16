@@ -1,4 +1,170 @@
-//! Tool executor
+//! Tool executor with context tracking
 
-/// Tool executor - executes tools within a session context
-pub struct ToolExecutor;
+use river_core::ContextStatus;
+use super::{ToolRegistry, ToolResult, ToolSchema};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// A tool call from the model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// Result of executing a tool call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallResponse {
+    pub tool_call_id: String,
+    pub result: Result<ToolResult, String>,  // String error for serialization
+    pub context_status: ContextStatus,
+}
+
+/// Executes tools and tracks context
+pub struct ToolExecutor {
+    registry: ToolRegistry,
+    context_used: u64,
+    context_limit: u64,
+}
+
+impl ToolExecutor {
+    pub fn new(registry: ToolRegistry, context_limit: u64) -> Self {
+        Self {
+            registry,
+            context_used: 0,
+            context_limit,
+        }
+    }
+
+    /// Execute a tool call
+    pub fn execute(&mut self, call: &ToolCall) -> ToolCallResponse {
+        let result = match self.registry.get(&call.name) {
+            Some(tool) => {
+                match tool.execute(call.arguments.clone()) {
+                    Ok(tool_result) => {
+                        // Update context tracking (rough estimate: ~4 chars per token)
+                        self.context_used += (tool_result.output.len() as u64) / 4;
+                        Ok(tool_result)
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+            None => Err(format!("Unknown tool: {}", call.name)),
+        };
+
+        ToolCallResponse {
+            tool_call_id: call.id.clone(),
+            result,
+            context_status: self.context_status(),
+        }
+    }
+
+    /// Execute multiple tool calls
+    pub fn execute_all(&mut self, calls: &[ToolCall]) -> Vec<ToolCallResponse> {
+        calls.iter().map(|c| self.execute(c)).collect()
+    }
+
+    /// Get current context status
+    pub fn context_status(&self) -> ContextStatus {
+        ContextStatus {
+            used: self.context_used,
+            limit: self.context_limit,
+        }
+    }
+
+    /// Get all tool schemas
+    pub fn schemas(&self) -> Vec<ToolSchema> {
+        self.registry.schemas()
+    }
+
+    /// Update context usage
+    pub fn add_context(&mut self, tokens: u64) {
+        self.context_used += tokens;
+    }
+
+    /// Reset context (on rotation)
+    pub fn reset_context(&mut self) {
+        self.context_used = 0;
+    }
+
+    /// Check if context is getting full (>90%)
+    pub fn context_warning(&self) -> bool {
+        self.context_status().percent() >= 90.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::{ReadTool, WriteTool};
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_executor() {
+        let dir = TempDir::new().unwrap();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(ReadTool::new(dir.path())));
+        registry.register(Box::new(WriteTool::new(dir.path())));
+
+        let mut executor = ToolExecutor::new(registry, 65536);
+
+        // Write a file
+        let write_call = ToolCall {
+            id: "call_1".to_string(),
+            name: "write".to_string(),
+            arguments: serde_json::json!({
+                "path": "test.txt",
+                "content": "Hello!"
+            }),
+        };
+
+        let response = executor.execute(&write_call);
+        assert!(response.result.is_ok());
+
+        // Read it back
+        let read_call = ToolCall {
+            id: "call_2".to_string(),
+            name: "read".to_string(),
+            arguments: serde_json::json!({
+                "path": "test.txt"
+            }),
+        };
+
+        let response = executor.execute(&read_call);
+        assert!(response.result.is_ok());
+        assert!(response.result.unwrap().output.contains("Hello!"));
+    }
+
+    #[test]
+    fn test_context_tracking() {
+        let registry = ToolRegistry::new();
+        let mut executor = ToolExecutor::new(registry, 1000);
+
+        executor.add_context(500);
+        assert_eq!(executor.context_status().used, 500);
+        assert_eq!(executor.context_status().percent(), 50.0);
+
+        executor.add_context(450);
+        assert!(executor.context_warning()); // 95% used
+
+        executor.reset_context();
+        assert_eq!(executor.context_status().used, 0);
+    }
+
+    #[test]
+    fn test_unknown_tool() {
+        let registry = ToolRegistry::new();
+        let mut executor = ToolExecutor::new(registry, 65536);
+
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "nonexistent".to_string(),
+            arguments: serde_json::json!({}),
+        };
+
+        let response = executor.execute(&call);
+        assert!(response.result.is_err());
+        assert!(response.result.unwrap_err().contains("Unknown tool"));
+    }
+}
