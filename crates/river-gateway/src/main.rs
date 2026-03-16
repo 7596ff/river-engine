@@ -37,6 +37,10 @@ struct Args {
     /// Redis URL (enables working/medium-term memory tools)
     #[arg(long)]
     redis_url: Option<String>,
+
+    /// Orchestrator URL (enables heartbeats)
+    #[arg(long)]
+    orchestrator_url: Option<String>,
 }
 
 #[tokio::main]
@@ -67,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         model_name: args.model_name,
         embedding_url: args.embedding_url,
         redis_url: args.redis_url,
+        orchestrator_url: args.orchestrator_url,
     };
 
     run(config).await

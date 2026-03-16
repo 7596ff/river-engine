@@ -25,6 +25,7 @@ pub struct ServerConfig {
     pub model_name: Option<String>,
     pub embedding_url: Option<String>,
     pub redis_url: Option<String>,
+    pub orchestrator_url: Option<String>,
 }
 
 /// Initialize and run the gateway server
@@ -145,6 +146,22 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Create router
     let app = create_router(state);
+
+    // Start heartbeat task if orchestrator configured
+    if let Some(orchestrator_url) = &config.orchestrator_url {
+        let gateway_url = format!("http://127.0.0.1:{}", config.port);
+        let heartbeat_client = crate::heartbeat::HeartbeatClient::new(
+            orchestrator_url.clone(),
+            config.agent_name.clone(),
+            gateway_url,
+        );
+
+        tokio::spawn(async move {
+            heartbeat_client.run_loop(30).await;
+        });
+
+        tracing::info!("Started heartbeat to orchestrator: {}", orchestrator_url);
+    }
 
     // Bind and serve
     let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
