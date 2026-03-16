@@ -229,24 +229,37 @@ At end of cycle, agent can adjust next wake:
 
 **Automatic rotation:**
 - Triggers at 90% of configured limit
-- Gateway generates summary via model call (uses primary model with summarization prompt)
-- Summary persisted to `memory/context-summary-{timestamp}.md`
-- Session resets — fresh wake
-- **Penalty:** Agent rebuilds state from workspace
-
-**Summary generation:**
-- Gateway sends current context to model with prompt: "Summarize the key state, decisions, and pending items from this session."
-- Model returns structured summary
-- Summary stored in workspace for agent reference on next wake
+- No summarization — session simply resets
+- **Penalty:** Agent must recover state from workspace files and memory search
+- This incentivizes proactive context management
 
 **Manual rotation:**
 - Agent calls `rotate_context()`
-- Same process, agent-initiated
-- No penalty — agent chose this
+- Agent is responsible for summarizing its own state before calling (e.g., writing to `thinking/current-state.md`)
+- No penalty — agent chose this and prepared for it
 
 **Awareness:**
 - `context_status()` returns `{ used, limit, percent }`
+- Context status also included in every tool call response (see 3.8)
 - Agent manages proactively
+
+### 3.8 Tool Call Response Format
+
+Every tool call response includes context status:
+
+```json
+{
+  "tool_result": { ... },
+  "context_status": { "used": 45000, "limit": 65536, "percent": 68.6 },
+  "incoming_messages": [ ... ]  // if any arrived during execution
+}
+```
+
+**Output redirection:**
+- Large tool outputs can be piped to a file instead of returned in context
+- Tool parameter: `output_file: "/path/to/file"`
+- Response contains file path instead of full content
+- Saves context space for large outputs (file contents, command results, etc.)
 
 ---
 
@@ -394,12 +407,19 @@ memories (
 
 **Domains:**
 
-| Domain | Purpose | Typical TTL |
-|--------|---------|-------------|
-| `working_memory` | Short-term task state | Minutes |
-| `medium_term` | Daily context | Hours to days |
-| `coordination` | Locks, counters | No TTL |
-| `cache` | Computed values | Variable |
+| Domain | Purpose | Storage | Typical TTL |
+|--------|---------|---------|-------------|
+| `working_memory` | Short-term task state | Key-value | Minutes |
+| `medium_term` | Daily context | Key-value | Hours to days |
+| `coordination` | Locks, counters | Varies | No TTL |
+| `cache` | Computed values | Key-value | Variable |
+
+**Key-value semantics (working_memory, medium_term):**
+- Agent provides string key and value
+- Keys are namespaced per-agent automatically
+- `working_memory_set(key, value, ttl_minutes)` / `working_memory_get(key)`
+- `medium_term_set(key, value, ttl_hours)` / `medium_term_get(key)`
+- Value can be any JSON-serializable data
 
 **Forgetting:** TTL-based expiry is automatic. Patterns discovered through usage.
 
@@ -626,9 +646,9 @@ workspace/
 2. If changes: stage all, commit with timestamp
 3. If conflicts: notify agent, do not commit
 
-**Commit message:** Timestamp only
+**Commit message:** Timestamp with timezone (ISO 8601)
 ```
-2026-03-16T14:32:00Z
+2026-03-16T14:32:00-04:00
 ```
 
 **Conflict handling:**
@@ -784,7 +804,8 @@ Shared:
     "properties": {
       "path": { "type": "string", "description": "File path to read" },
       "offset": { "type": "integer", "description": "Line number to start from (optional)" },
-      "limit": { "type": "integer", "description": "Maximum lines to read (optional)" }
+      "limit": { "type": "integer", "description": "Maximum lines to read (optional)" },
+      "output_file": { "type": "string", "description": "Pipe output to file instead of context (optional)" }
     },
     "required": ["path"]
   }
@@ -856,7 +877,8 @@ Shared:
       "pattern": { "type": "string", "description": "Regex pattern to search" },
       "path": { "type": "string", "description": "File or directory to search" },
       "glob": { "type": "string", "description": "Filter files by glob pattern (optional)" },
-      "context": { "type": "integer", "description": "Lines of context around matches (optional)" }
+      "context": { "type": "integer", "description": "Lines of context around matches (optional)" },
+      "output_file": { "type": "string", "description": "Pipe output to file instead of context (optional)" }
     },
     "required": ["pattern"]
   }
@@ -873,7 +895,8 @@ Shared:
     "type": "object",
     "properties": {
       "command": { "type": "string", "description": "Command to execute" },
-      "timeout": { "type": "integer", "description": "Timeout in milliseconds (optional)" }
+      "timeout": { "type": "integer", "description": "Timeout in milliseconds (optional)" },
+      "output_file": { "type": "string", "description": "Pipe output to file instead of context (optional)" }
     },
     "required": ["command"]
   }
@@ -911,7 +934,8 @@ Shared:
       "limit": { "type": "integer", "description": "Maximum results", "default": 10 },
       "source": { "type": "string", "description": "Filter by source (optional)" },
       "after": { "type": "string", "description": "Filter by date (ISO 8601, optional)" },
-      "before": { "type": "string", "description": "Filter by date (ISO 8601, optional)" }
+      "before": { "type": "string", "description": "Filter by date (ISO 8601, optional)" },
+      "output_file": { "type": "string", "description": "Pipe output to file instead of context (optional)" }
     },
     "required": ["query"]
   }
@@ -1009,7 +1033,8 @@ Shared:
         "type": "boolean",
         "description": "If true, return raw curl output without pandoc processing",
         "default": false
-      }
+      },
+      "output_file": { "type": "string", "description": "Pipe output to file instead of context (optional)" }
     },
     "required": ["url"]
   }
