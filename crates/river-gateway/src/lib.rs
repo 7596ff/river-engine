@@ -10,3 +10,4 @@ pub mod api;
 pub mod r#loop;
 pub mod memory;
 pub mod redis;
+pub mod heartbeat;
