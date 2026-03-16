@@ -229,10 +229,15 @@ At end of cycle, agent can adjust next wake:
 
 **Automatic rotation:**
 - Triggers at 90% of configured limit
-- Gateway summarizes current context
-- Summary persisted to workspace
+- Gateway generates summary via model call (uses primary model with summarization prompt)
+- Summary persisted to `memory/context-summary-{timestamp}.md`
 - Session resets — fresh wake
 - **Penalty:** Agent rebuilds state from workspace
+
+**Summary generation:**
+- Gateway sends current context to model with prompt: "Summarize the key state, decisions, and pending items from this session."
+- Model returns structured summary
+- Summary stored in workspace for agent reference on next wake
 
 **Manual rotation:**
 - Agent calls `rotate_context()`
@@ -298,7 +303,13 @@ Redis is namespaced per-agent. NOT for inter-agent messaging.
 | `stop_subagent` | Terminate subagent |
 | `internal_send` | Send message to parent/subagent |
 | `internal_receive` | Receive internal messages |
-| `wait_for_subagent` | Block until subagent completes |
+| `wait_for_subagent` | Block tool loop until subagent completes |
+
+**`wait_for_subagent` semantics:**
+- Blocks the current tool loop — no other tool calls execute until subagent completes or timeout
+- Returns subagent's final status and any output
+- Use for synchronous task workers where parent needs result before continuing
+- For async patterns, use `subagent_status` polling or `internal_receive` instead
 
 ### 4.4 Model Tools
 
@@ -534,9 +545,10 @@ spawn_subagent(
 
 **Internal communication (hybrid):**
 - Shared files for state/artifacts
-- Internal message queue for signals
+- Internal message queue for signals (managed in gateway memory, not Redis)
 - `internal_send(to, message)`, `internal_receive()`
 - Scoped to parent + its subagents only
+- Queue is ephemeral — cleared on gateway restart (persistent state belongs in files)
 
 ---
 
@@ -565,6 +577,10 @@ SYSTEM PROMPT
 
 CONTINUITY
   - thinking/current-state.md
+
+SYSTEM NOTIFICATIONS (if any)
+  - Git conflict detected: "Workspace has conflicts that need resolution"
+  - Other system-level alerts
 
 CONVERSATION
   - Recent messages
@@ -756,6 +772,228 @@ Shared:
 ---
 
 ## Appendix A: Tool Schemas
+
+### read
+
+```json
+{
+  "name": "read",
+  "description": "Read file contents",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "File path to read" },
+      "offset": { "type": "integer", "description": "Line number to start from (optional)" },
+      "limit": { "type": "integer", "description": "Maximum lines to read (optional)" }
+    },
+    "required": ["path"]
+  }
+}
+```
+
+### write
+
+```json
+{
+  "name": "write",
+  "description": "Write content to file (creates or overwrites)",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "File path to write" },
+      "content": { "type": "string", "description": "Content to write" }
+    },
+    "required": ["path", "content"]
+  }
+}
+```
+
+### edit
+
+```json
+{
+  "name": "edit",
+  "description": "Replace text in file",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "File path to edit" },
+      "old_string": { "type": "string", "description": "Text to find" },
+      "new_string": { "type": "string", "description": "Text to replace with" },
+      "replace_all": { "type": "boolean", "description": "Replace all occurrences", "default": false }
+    },
+    "required": ["path", "old_string", "new_string"]
+  }
+}
+```
+
+### glob
+
+```json
+{
+  "name": "glob",
+  "description": "Find files matching pattern",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": { "type": "string", "description": "Glob pattern (e.g., **/*.md)" },
+      "path": { "type": "string", "description": "Base directory (optional)" }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+### grep
+
+```json
+{
+  "name": "grep",
+  "description": "Search file contents with regex",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": { "type": "string", "description": "Regex pattern to search" },
+      "path": { "type": "string", "description": "File or directory to search" },
+      "glob": { "type": "string", "description": "Filter files by glob pattern (optional)" },
+      "context": { "type": "integer", "description": "Lines of context around matches (optional)" }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+### bash
+
+```json
+{
+  "name": "bash",
+  "description": "Execute shell command",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": { "type": "string", "description": "Command to execute" },
+      "timeout": { "type": "integer", "description": "Timeout in milliseconds (optional)" }
+    },
+    "required": ["command"]
+  }
+}
+```
+
+### embed
+
+```json
+{
+  "name": "embed",
+  "description": "Create embedding and store in memory index",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "content": { "type": "string", "description": "Text to embed" },
+      "source": { "type": "string", "description": "Source identifier (e.g., 'agent', 'file')" },
+      "metadata": { "type": "object", "description": "Additional metadata (optional)" }
+    },
+    "required": ["content", "source"]
+  }
+}
+```
+
+### memory_search
+
+```json
+{
+  "name": "memory_search",
+  "description": "Semantic search over embeddings",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search query" },
+      "limit": { "type": "integer", "description": "Maximum results", "default": 10 },
+      "source": { "type": "string", "description": "Filter by source (optional)" },
+      "after": { "type": "string", "description": "Filter by date (ISO 8601, optional)" },
+      "before": { "type": "string", "description": "Filter by date (ISO 8601, optional)" }
+    },
+    "required": ["query"]
+  }
+}
+```
+
+### memory_delete
+
+```json
+{
+  "name": "memory_delete",
+  "description": "Delete embedding by ID",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "description": "Snowflake ID of embedding to delete" }
+    },
+    "required": ["id"]
+  }
+}
+```
+
+### schedule_heartbeat
+
+```json
+{
+  "name": "schedule_heartbeat",
+  "description": "Set next heartbeat wake time",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "minutes": { "type": "integer", "description": "Minutes until next heartbeat" }
+    },
+    "required": ["minutes"]
+  }
+}
+```
+
+### context_status
+
+```json
+{
+  "name": "context_status",
+  "description": "Get current context window usage",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  }
+}
+```
+
+### rotate_context
+
+```json
+{
+  "name": "rotate_context",
+  "description": "Manually trigger context rotation",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "reason": { "type": "string", "description": "Reason for rotation (optional, for logging)" }
+    }
+  }
+}
+```
+
+### wait_for_subagent
+
+```json
+{
+  "name": "wait_for_subagent",
+  "description": "Block until subagent completes",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "description": "Subagent ID" },
+      "timeout": { "type": "integer", "description": "Timeout in milliseconds (optional)" }
+    },
+    "required": ["id"]
+  }
+}
+```
 
 ### webfetch
 
