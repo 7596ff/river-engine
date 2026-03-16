@@ -38,12 +38,22 @@
 - 131 tests passing (83 core, 44 gateway, 4 doc-tests)
 - Binary: `river-gateway ... --embedding-url <url> --redis-url <url> --agent-name <name>`
 
-## Next Up
+### Plan 4: Minimal Orchestrator ✅
+- `river-orchestrator` crate with:
+  - Agent health monitoring via heartbeats
+  - Agent status API (`/agents/status`)
+  - Static model registry (`/models/available`)
+  - Health endpoint (`/health`)
+  - Heartbeat endpoint (`POST /heartbeat`)
+  - CLI: `river-orchestrator --port --health-threshold --models-config`
+- Gateway integration:
+  - `--orchestrator-url` flag for heartbeat configuration
+  - Background heartbeat task (30 second interval)
+  - Graceful degradation (works without orchestrator)
+- 151 tests passing (83 core, 46 gateway, 18 orchestrator, 4 doc-tests)
+- Binary: `river-orchestrator --port 5000 --models-config <path>`
 
-### Plan 4: Orchestrator
-- Agent lifecycle management
-- Heartbeat monitoring
-- Inter-agent coordination
+## Next Up
 
 ### Plan 5: Discord Adapter
 - Reference communication adapter
@@ -59,11 +69,13 @@
 - **Plans:** `docs/superpowers/plans/2026-03-16-plan-*.md`
 - **Core:** `crates/river-core/src/`
 - **Gateway:** `crates/river-gateway/src/`
+- **Orchestrator:** `crates/river-orchestrator/src/`
 
 ## Test Commands
 
 ```bash
-cargo test                           # Run all tests
-cargo build --release -p river-gateway  # Build gateway
-./target/release/river-gateway --help   # Show CLI options
+cargo test                              # Run all tests
+cargo build --release                   # Build all binaries
+./target/release/river-gateway --help   # Show gateway CLI options
+./target/release/river-orchestrator --help  # Show orchestrator CLI options
 ```
