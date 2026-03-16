@@ -4,7 +4,67 @@ use river_core::RiverError;
 use super::{Tool, ToolResult};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+// Security constants
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+const MAX_SEARCH_DEPTH: usize = 20;
+
+/// Validate and resolve a path within the workspace
+fn validate_path(workspace: &Path, path: &str) -> Result<PathBuf, RiverError> {
+    let path = Path::new(path);
+
+    // Reject absolute paths
+    if path.is_absolute() {
+        return Err(RiverError::tool("Absolute paths are not allowed"));
+    }
+
+    let full_path = workspace.join(path);
+
+    // For new files that don't exist yet, validate parent
+    let check_path = if full_path.exists() {
+        full_path.canonicalize()
+            .map_err(|e| RiverError::tool(format!("Invalid path: {}", e)))?
+    } else {
+        // For new files, check the parent directory
+        let parent = full_path.parent()
+            .ok_or_else(|| RiverError::tool("Invalid path: no parent directory"))?;
+        if parent.exists() {
+            let canonical_parent = parent.canonicalize()
+                .map_err(|e| RiverError::tool(format!("Invalid path: {}", e)))?;
+            canonical_parent.join(full_path.file_name().unwrap_or_default())
+        } else {
+            // Parent doesn't exist, we'll create it - just join with workspace
+            workspace.canonicalize()
+                .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?
+                .join(path)
+        }
+    };
+
+    // Verify within workspace
+    let workspace_canonical = workspace.canonicalize()
+        .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?;
+
+    if !check_path.starts_with(&workspace_canonical) {
+        return Err(RiverError::tool("Path escapes workspace boundary"));
+    }
+
+    Ok(full_path)
+}
+
+/// Check file size before reading
+fn check_file_size(path: &Path) -> Result<(), RiverError> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| RiverError::tool(format!("Cannot access file: {}", e)))?;
+
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(RiverError::tool(format!(
+            "File too large: {} bytes (max: {} bytes)",
+            metadata.len(), MAX_FILE_SIZE
+        )));
+    }
+    Ok(())
+}
 
 /// Read file tool
 pub struct ReadTool {
@@ -14,15 +74,6 @@ pub struct ReadTool {
 impl ReadTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
         Self { workspace: workspace.into() }
-    }
-
-    fn resolve_path(&self, path: &str) -> std::path::PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.workspace.join(p)
-        }
     }
 }
 
@@ -44,11 +95,13 @@ impl Tool for ReadTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        let path = args.get("path")
+        let path_str = args.get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: path"))?;
 
-        let path = self.resolve_path(path);
+        let path = validate_path(&self.workspace, path_str)?;
+        check_file_size(&path)?;
+
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64());
         let output_file = args.get("output_file").and_then(|v| v.as_str());
@@ -71,7 +124,8 @@ impl Tool for ReadTool {
             .join("\n");
 
         if let Some(out_path) = output_file {
-            fs::write(out_path, &result)
+            let validated_out_path = validate_path(&self.workspace, out_path)?;
+            fs::write(&validated_out_path, &result)
                 .map_err(|e| RiverError::tool(format!("Failed to write output file: {}", e)))?;
             Ok(ToolResult::with_file(format!("Output written to {}", out_path), out_path))
         } else {
@@ -88,11 +142,6 @@ pub struct WriteTool {
 impl WriteTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
         Self { workspace: workspace.into() }
-    }
-
-    fn resolve_path(&self, path: &str) -> std::path::PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { self.workspace.join(p) }
     }
 }
 
@@ -112,12 +161,12 @@ impl Tool for WriteTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        let path = args.get("path").and_then(|v| v.as_str())
+        let path_str = args.get("path").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: path"))?;
         let content = args.get("content").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: content"))?;
 
-        let path = self.resolve_path(path);
+        let path = validate_path(&self.workspace, path_str)?;
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -140,11 +189,6 @@ impl EditTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
         Self { workspace: workspace.into() }
     }
-
-    fn resolve_path(&self, path: &str) -> std::path::PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { self.workspace.join(p) }
-    }
 }
 
 impl Tool for EditTool {
@@ -165,7 +209,7 @@ impl Tool for EditTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        let path = args.get("path").and_then(|v| v.as_str())
+        let path_str = args.get("path").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: path"))?;
         let old_string = args.get("old_string").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: old_string"))?;
@@ -173,7 +217,9 @@ impl Tool for EditTool {
             .ok_or_else(|| RiverError::tool("Missing required parameter: new_string"))?;
         let replace_all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        let path = self.resolve_path(path);
+        let path = validate_path(&self.workspace, path_str)?;
+        check_file_size(&path)?;
+
         let content = fs::read_to_string(&path)
             .map_err(|e| RiverError::tool(format!("Failed to read file: {}", e)))?;
 
@@ -231,19 +277,29 @@ impl Tool for GlobTool {
         let pattern = args.get("pattern").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: pattern"))?;
 
-        let base = args.get("path")
-            .and_then(|v| v.as_str())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| self.workspace.clone());
+        let base = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+            validate_path(&self.workspace, path_str)?
+        } else {
+            self.workspace.clone()
+        };
 
         let full_pattern = base.join(pattern);
         let pattern_str = full_pattern.to_string_lossy();
+
+        let workspace_canonical = self.workspace.canonicalize()
+            .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?;
 
         let paths = glob::glob(&pattern_str)
             .map_err(|e| RiverError::tool(format!("Invalid glob pattern: {}", e)))?;
 
         let files: Vec<String> = paths
             .filter_map(|p| p.ok())
+            .filter(|p| {
+                // Filter out paths outside workspace
+                p.canonicalize()
+                    .map(|cp| cp.starts_with(&workspace_canonical))
+                    .unwrap_or(false)
+            })
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
@@ -290,15 +346,33 @@ impl Tool for GrepTool {
         let regex = regex::Regex::new(pattern)
             .map_err(|e| RiverError::tool(format!("Invalid regex: {}", e)))?;
 
-        let search_path = args.get("path")
-            .and_then(|v| v.as_str())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| self.workspace.clone());
+        let search_path = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+            validate_path(&self.workspace, path_str)?
+        } else {
+            self.workspace.clone()
+        };
 
         let mut results = Vec::new();
 
-        fn walk_and_search(path: &Path, regex: &regex::Regex, results: &mut Vec<String>) {
+        fn walk_and_search(path: &Path, regex: &regex::Regex, results: &mut Vec<String>, depth: usize) {
+            // Stop at max depth to prevent unbounded recursion
+            if depth > MAX_SEARCH_DEPTH {
+                return;
+            }
+
+            // Skip symlinks to prevent cycles
+            if path.is_symlink() {
+                return;
+            }
+
             if path.is_file() {
+                // Check file size before reading
+                if let Ok(metadata) = fs::metadata(path) {
+                    if metadata.len() > MAX_FILE_SIZE {
+                        return; // Skip large files
+                    }
+                }
+
                 if let Ok(content) = fs::read_to_string(path) {
                     for (i, line) in content.lines().enumerate() {
                         if regex.is_match(line) {
@@ -312,14 +386,14 @@ impl Tool for GrepTool {
                         let entry_path = entry.path();
                         let name = entry_path.file_name().map(|n| n.to_string_lossy());
                         if name.map(|n| !n.starts_with('.')).unwrap_or(false) {
-                            walk_and_search(&entry_path, regex, results);
+                            walk_and_search(&entry_path, regex, results, depth + 1);
                         }
                     }
                 }
             }
         }
 
-        walk_and_search(&search_path, &regex, &mut results);
+        walk_and_search(&search_path, &regex, &mut results, 0);
 
         let output = if results.is_empty() {
             "No matches found".to_string()
@@ -328,7 +402,8 @@ impl Tool for GrepTool {
         };
 
         if let Some(out_path) = output_file {
-            fs::write(out_path, &output)
+            let validated_out_path = validate_path(&self.workspace, out_path)?;
+            fs::write(&validated_out_path, &output)
                 .map_err(|e| RiverError::tool(format!("Failed to write output: {}", e)))?;
             Ok(ToolResult::with_file(format!("{} matches written to {}", results.len(), out_path), out_path))
         } else {
@@ -399,5 +474,70 @@ mod tests {
         let result = grep_tool.execute(json!({"pattern": "two"})).unwrap();
         assert!(result.output.contains("line two"));
         assert!(result.output.contains(":2:"));
+    }
+
+    #[test]
+    fn test_path_traversal_blocked() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().to_path_buf();
+
+        let read_tool = ReadTool::new(&workspace);
+
+        // Test path traversal with ../
+        let result = read_tool.execute(json!({"path": "../etc/passwd"}));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("escapes workspace")
+            || err.to_string().contains("Invalid path")
+            || err.to_string().contains("Cannot access file"),
+            "Unexpected error: {}", err
+        );
+
+        // Test absolute path rejection
+        let result = read_tool.execute(json!({"path": "/etc/passwd"}));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Absolute paths are not allowed"));
+    }
+
+    #[test]
+    fn test_write_path_traversal_blocked() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().to_path_buf();
+
+        let write_tool = WriteTool::new(&workspace);
+
+        // Test path traversal with ../
+        let result = write_tool.execute(json!({"path": "../evil.txt", "content": "bad"}));
+        assert!(result.is_err());
+
+        // Test absolute path rejection
+        let result = write_tool.execute(json!({"path": "/tmp/evil.txt", "content": "bad"}));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Absolute paths are not allowed"));
+    }
+
+    #[test]
+    fn test_grep_skips_symlinks() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().to_path_buf();
+
+        // Create a file
+        fs::write(workspace.join("real.txt"), "findme").unwrap();
+
+        // Create a directory with a symlink that could cause a cycle
+        fs::create_dir(workspace.join("subdir")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&workspace, workspace.join("subdir/link_to_parent")).ok();
+        }
+
+        let grep_tool = GrepTool::new(&workspace);
+        // This should complete without infinite loop
+        let result = grep_tool.execute(json!({"pattern": "findme"}));
+        assert!(result.is_ok());
+        assert!(result.unwrap().output.contains("findme"));
     }
 }
