@@ -138,6 +138,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_incoming() {
+        let app = create_router(test_state());
+
+        let body = serde_json::json!({
+            "adapter": "discord",
+            "event_type": "message",
+            "channel": "general",
+            "author": {
+                "id": "user123",
+                "name": "Alice"
+            },
+            "content": "Hello, world!"
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/incoming")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap()
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn test_context_status() {
         let app = create_router(test_state());
 
