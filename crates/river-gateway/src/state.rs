@@ -1,6 +1,8 @@
 //! Shared application state
 
 use crate::db::Database;
+use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::redis::{RedisClient, RedisConfig};
 use crate::tools::{ToolExecutor, ToolRegistry};
 use river_core::{AgentBirth, SnowflakeGenerator};
 use std::path::PathBuf;
@@ -13,6 +15,8 @@ pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub snowflake_gen: Arc<SnowflakeGenerator>,
     pub tool_executor: Arc<RwLock<ToolExecutor>>,
+    pub embedding_client: Option<Arc<EmbeddingClient>>,
+    pub redis_client: Option<Arc<RedisClient>>,
 }
 
 /// Gateway configuration (runtime)
@@ -26,16 +30,27 @@ pub struct GatewayConfig {
     pub context_limit: u64,
     pub heartbeat_minutes: u32,
     pub agent_birth: AgentBirth,
+    pub agent_name: String,
+    pub embedding: Option<EmbeddingConfig>,
+    pub redis: Option<RedisConfig>,
 }
 
 impl AppState {
-    pub fn new(config: GatewayConfig, db: Database, registry: ToolRegistry) -> Self {
+    pub fn new(
+        config: GatewayConfig,
+        db: Arc<Mutex<Database>>,
+        registry: ToolRegistry,
+        embedding_client: Option<EmbeddingClient>,
+        redis_client: Option<RedisClient>,
+    ) -> Self {
         let executor = ToolExecutor::new(registry, config.context_limit);
 
         Self {
             snowflake_gen: Arc::new(SnowflakeGenerator::new(config.agent_birth)),
-            db: Arc::new(Mutex::new(db)),
+            db,
             tool_executor: Arc::new(RwLock::new(executor)),
+            embedding_client: embedding_client.map(Arc::new),
+            redis_client: redis_client.map(Arc::new),
             config,
         }
     }
@@ -58,14 +73,18 @@ mod tests {
             context_limit: 65536,
             heartbeat_minutes: 45,
             agent_birth: AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap(),
+            agent_name: "test".to_string(),
+            embedding: None,
+            redis: None,
         };
 
-        let db = Database::open_in_memory().unwrap();
+        let db = Arc::new(Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        let state = AppState::new(config, db, registry);
+        let state = AppState::new(config, db, registry, None, None);
 
-        // Verify state was created correctly
         assert_eq!(state.config.port, 3000);
         assert_eq!(state.config.context_limit, 65536);
+        assert!(state.embedding_client.is_none());
+        assert!(state.redis_client.is_none());
     }
 }
