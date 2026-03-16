@@ -1,4 +1,5 @@
-use rusqlite::{Connection, Result};
+use river_core::{RiverError, RiverResult};
+use rusqlite::Connection;
 use std::path::Path;
 
 /// Database wrapper
@@ -8,50 +9,57 @@ pub struct Database {
 
 impl Database {
     /// Open or create database at path
-    pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
+    pub fn open(path: &Path) -> RiverResult<Self> {
+        let conn = Connection::open(path).map_err(|e| RiverError::database(e.to_string()))?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
     }
 
     /// Open in-memory database (for testing)
-    pub fn open_in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
+    pub fn open_in_memory() -> RiverResult<Self> {
+        let conn =
+            Connection::open_in_memory().map_err(|e| RiverError::database(e.to_string()))?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
     }
 
     /// Run migrations
-    fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
+    fn migrate(&self) -> RiverResult<()> {
+        self.conn
+            .execute_batch(
+                "
             CREATE TABLE IF NOT EXISTS migrations (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 applied_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             );
-            "
-        )?;
+            ",
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?;
 
         self.run_migration("001_messages", include_str!("migrations/001_messages.sql"))?;
         Ok(())
     }
 
-    fn run_migration(&self, name: &str, sql: &str) -> Result<()> {
-        let applied: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM migrations WHERE name = ?)",
-            [name],
-            |row| row.get(0),
-        )?;
+    fn run_migration(&self, name: &str, sql: &str) -> RiverResult<()> {
+        let applied: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM migrations WHERE name = ?)",
+                [name],
+                |row| row.get(0),
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?;
 
         if !applied {
-            self.conn.execute_batch(sql)?;
-            self.conn.execute(
-                "INSERT INTO migrations (name) VALUES (?)",
-                [name],
-            )?;
+            self.conn
+                .execute_batch(sql)
+                .map_err(|e| RiverError::database(e.to_string()))?;
+            self.conn
+                .execute("INSERT INTO migrations (name) VALUES (?)", [name])
+                .map_err(|e| RiverError::database(e.to_string()))?;
             tracing::info!("Applied migration: {}", name);
         }
         Ok(())
@@ -64,10 +72,10 @@ impl Database {
 }
 
 /// Initialize database at path
-pub fn init_db(path: &Path) -> Result<Database> {
+pub fn init_db(path: &Path) -> RiverResult<Database> {
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent)?;
     }
     Database::open(path)
 }

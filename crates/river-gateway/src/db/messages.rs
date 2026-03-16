@@ -1,7 +1,11 @@
 //! Message CRUD operations
 
+use river_core::Snowflake;
+use serde::{Deserialize, Serialize};
+
 /// Message role types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     System,
     User,
@@ -10,9 +14,9 @@ pub enum MessageRole {
 }
 
 /// A stored message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub id: Vec<u8>,
+    pub id: Snowflake,
     pub session_id: String,
     pub role: MessageRole,
     pub content: Option<String>,
