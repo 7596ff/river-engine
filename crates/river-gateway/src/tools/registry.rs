@@ -1,13 +1,29 @@
+use river_core::RiverError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Tool execution result
+/// Tool execution result (success case)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub success: bool,
     pub output: String,
-    pub output_file: Option<String>,  // If output was redirected to file
+    pub output_file: Option<String>,
+}
+
+impl ToolResult {
+    pub fn success(output: impl Into<String>) -> Self {
+        Self {
+            output: output.into(),
+            output_file: None,
+        }
+    }
+
+    pub fn with_file(output: impl Into<String>, file: impl Into<String>) -> Self {
+        Self {
+            output: output.into(),
+            output_file: Some(file.into()),
+        }
+    }
 }
 
 /// JSON Schema for tool parameters
@@ -15,7 +31,7 @@ pub struct ToolResult {
 pub struct ToolSchema {
     pub name: String,
     pub description: String,
-    pub parameters: Value,  // JSON Schema object
+    pub parameters: Value, // JSON Schema object
 }
 
 /// Tool trait - implemented by each tool
@@ -30,7 +46,8 @@ pub trait Tool: Send + Sync {
     fn parameters(&self) -> Value;
 
     /// Execute the tool with given arguments
-    fn execute(&self, args: Value) -> ToolResult;
+    /// Returns Ok(ToolResult) on success, Err with descriptive message on failure
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError>;
 
     /// Get full schema for this tool
     fn schema(&self) -> ToolSchema {
@@ -64,6 +81,23 @@ impl ToolRegistry {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
+    /// Execute a tool by name
+    pub fn execute(&self, name: &str, args: Value) -> Result<ToolResult, RiverError> {
+        self.get(name)
+            .ok_or_else(|| RiverError::tool(format!("Unknown tool: {}", name)))?
+            .execute(args)
+    }
+
+    /// Get number of registered tools
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    /// Check if registry is empty
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+
     /// Get all tool schemas (for sending to model)
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.tools.values().map(|t| t.schema()).collect()
@@ -88,8 +122,12 @@ mod tests {
     struct DummyTool;
 
     impl Tool for DummyTool {
-        fn name(&self) -> &str { "dummy" }
-        fn description(&self) -> &str { "A dummy tool for testing" }
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn description(&self) -> &str {
+            "A dummy tool for testing"
+        }
         fn parameters(&self) -> Value {
             serde_json::json!({
                 "type": "object",
@@ -99,13 +137,12 @@ mod tests {
                 "required": ["input"]
             })
         }
-        fn execute(&self, args: Value) -> ToolResult {
-            let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
-            ToolResult {
-                success: true,
-                output: format!("Received: {}", input),
-                output_file: None,
-            }
+        fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+            let input = args
+                .get("input")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| RiverError::tool("Missing required parameter: input"))?;
+            Ok(ToolResult::success(format!("Received: {}", input)))
         }
     }
 
@@ -122,8 +159,41 @@ mod tests {
     #[test]
     fn test_tool_execution() {
         let tool = DummyTool;
-        let result = tool.execute(serde_json::json!({"input": "hello"}));
-        assert!(result.success);
+        let result = tool.execute(serde_json::json!({"input": "hello"})).unwrap();
         assert!(result.output.contains("hello"));
+    }
+
+    #[test]
+    fn test_tool_execution_error() {
+        let tool = DummyTool;
+        let result = tool.execute(serde_json::json!({}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_registry_len_and_is_empty() {
+        let mut registry = ToolRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+
+        registry.register(Box::new(DummyTool));
+        assert!(!registry.is_empty());
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_registry_execute() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool));
+
+        let result = registry
+            .execute("dummy", serde_json::json!({"input": "test"}))
+            .unwrap();
+        assert!(result.output.contains("test"));
+
+        let err = registry
+            .execute("nonexistent", serde_json::json!({}))
+            .unwrap_err();
+        assert!(err.to_string().contains("Unknown tool"));
     }
 }
