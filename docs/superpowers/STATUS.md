@@ -82,11 +82,18 @@
 - 181 tests passing (83 core, 46 gateway, 48 orchestrator, 4 doc-tests)
 - Binary: `river-orchestrator --model-dirs /models --external-models config.json`
 
-## Next Up
+### Plan 6: Discord Adapter ✅
+- Twilight-based Discord adapter
+- Channel management via slash commands and admin API
+- Message and reaction forwarding to gateway
+- Outbound message sending from agent
+- Dynamic channel add/remove at runtime
+- State persistence to file
+- Thread support (send to threads, create threads)
+- 197 tests passing (83 core, 46 gateway, 47 orchestrator, 16 discord, 1 integration, 4 doc-tests)
+- Binary: `river-discord --token-file /path --gateway-url http://localhost:3000 --guild-id 123`
 
-### Plan 6: Discord Adapter
-- Reference communication adapter
-- Message routing to gateway
+## Next Up
 
 ### Plan 7: NixOS Module
 - `services.river.agents.<name>` configuration
