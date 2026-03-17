@@ -45,7 +45,7 @@ pub async fn register_commands(
         .set_guild_commands(guild_id, &commands)
         .await?;
 
-    tracing::info!("Registered slash commands for guild {}", guild_id);
+    tracing::info!("Registered slash commands");
     Ok(())
 }
 
