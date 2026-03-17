@@ -53,13 +53,42 @@
 - 151 tests passing (83 core, 46 gateway, 18 orchestrator, 4 doc-tests)
 - Binary: `river-orchestrator --port 5000 --models-config <path>`
 
+### Plan 5: Advanced Orchestrator ✅
+- Model discovery via GGUF header parsing:
+  - Parse GGUF magic number, version, metadata
+  - Extract architecture, parameters, quantization type
+  - Calculate VRAM requirements from file size + KV cache overhead
+- GPU/VRAM and CPU memory tracking:
+  - GPU discovery via nvidia-smi
+  - System memory tracking from /proc/meminfo
+  - Swap detection with warnings (proceeds but warns if swap would be used)
+  - Device resource allocation with reserved memory
+- llama-server process lifecycle management:
+  - Automatic port allocation (default range 8080-8180)
+  - Process spawning with GPU/CPU selection
+  - Health monitoring loop (10s interval)
+  - Idle model eviction (configurable timeout, default 15 minutes)
+- LiteLLM integration for external models:
+  - External models config file support
+  - Direct endpoint routing for external models
+- On-demand model loading:
+  - GPU-first with CPU fallback
+  - Automatic eviction of releasable models when resources needed
+- New API endpoints:
+  - `POST /model/request` - Request model, blocks until ready
+  - `POST /model/release` - Mark model as releasable
+  - `GET /resources` - Device and loaded model status
+  - Enhanced `GET /models/available` - Local/external models with resources
+- 181 tests passing (83 core, 46 gateway, 48 orchestrator, 4 doc-tests)
+- Binary: `river-orchestrator --model-dirs /models --external-models config.json`
+
 ## Next Up
 
-### Plan 5: Discord Adapter
+### Plan 6: Discord Adapter
 - Reference communication adapter
 - Message routing to gateway
 
-### Plan 6: NixOS Module
+### Plan 7: NixOS Module
 - `services.river.agents.<name>` configuration
 - Multi-agent deployment
 
