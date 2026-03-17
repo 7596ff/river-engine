@@ -151,10 +151,10 @@ services.river = {
         discord = {
           enable = mkEnableOption "Discord adapter";
           tokenFile = mkOption { type = path; };                    # Required if enabled
-          guildId = mkOption { type = str; };                       # Discord snowflake (string)
+          guildId = mkOption { type = int; };                       # Discord snowflake (fits in 64-bit signed)
           gatewayUrl = mkOption { type = nullOr str; default = null; };  # Auto-derives from agent port if null
           port = mkOption { type = port; default = 3002; };
-          channels = mkOption { type = listOf str; default = []; }; # Discord snowflakes (strings)
+          channels = mkOption { type = listOf int; default = []; }; # Discord channel IDs
           stateFile = mkOption { type = nullOr path; default = null; };
         };
       };
@@ -200,7 +200,7 @@ services.river.agents.thomas = {
   discord = {
     enable = true;
     tokenFile = "/run/user/1000/secrets/discord-token";
-    guildId = "123456789012345678";  # Discord snowflake as string
+    guildId = 123456789012345678;  # Discord snowflake (fits in 64-bit signed)
     port = 3002;
   };
 };
@@ -387,7 +387,7 @@ All services use:
     discord = {
       enable = true;
       tokenFile = "${config.xdg.configHome}/secrets/discord-token";
-      guildId = "123456789012345678";
+      guildId = 123456789012345678;
     };
   };
 }
