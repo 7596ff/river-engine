@@ -2,12 +2,13 @@
 
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::r#loop::{LoopEvent, MessageQueue};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::tools::{ToolExecutor, ToolRegistry};
 use river_core::{AgentBirth, SnowflakeGenerator};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 /// Shared application state
 pub struct AppState {
@@ -17,6 +18,8 @@ pub struct AppState {
     pub tool_executor: Arc<RwLock<ToolExecutor>>,
     pub embedding_client: Option<Arc<EmbeddingClient>>,
     pub redis_client: Option<Arc<RedisClient>>,
+    pub loop_tx: mpsc::Sender<LoopEvent>,
+    pub message_queue: Arc<MessageQueue>,
 }
 
 /// Gateway configuration (runtime)
@@ -42,6 +45,8 @@ impl AppState {
         registry: ToolRegistry,
         embedding_client: Option<EmbeddingClient>,
         redis_client: Option<RedisClient>,
+        loop_tx: mpsc::Sender<LoopEvent>,
+        message_queue: Arc<MessageQueue>,
     ) -> Self {
         let executor = ToolExecutor::new(registry, config.context_limit);
 
@@ -51,6 +56,8 @@ impl AppState {
             tool_executor: Arc::new(RwLock::new(executor)),
             embedding_client: embedding_client.map(Arc::new),
             redis_client: redis_client.map(Arc::new),
+            loop_tx,
+            message_queue,
             config,
         }
     }
@@ -62,8 +69,8 @@ mod tests {
     use crate::db::Database;
     use crate::tools::ToolRegistry;
 
-    #[test]
-    fn test_state_creation() {
+    #[tokio::test]
+    async fn test_state_creation() {
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
             data_dir: PathBuf::from("/tmp/test"),
@@ -80,7 +87,9 @@ mod tests {
 
         let db = Arc::new(Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        let state = AppState::new(config, db, registry, None, None);
+        let (loop_tx, _loop_rx) = mpsc::channel(256);
+        let message_queue = Arc::new(MessageQueue::new());
+        let state = AppState::new(config, db, registry, None, None, loop_tx, message_queue);
 
         assert_eq!(state.config.port, 3000);
         assert_eq!(state.config.context_limit, 65536);

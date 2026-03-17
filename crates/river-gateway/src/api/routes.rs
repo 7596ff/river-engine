@@ -1,5 +1,6 @@
 //! HTTP API routes
 
+use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use axum::{
     extract::State,
@@ -53,20 +54,23 @@ async fn health_check() -> Json<HealthResponse> {
 }
 
 async fn handle_incoming(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(msg): Json<IncomingMessage>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     tracing::info!(
-        "Received message from {} in {}: {}",
+        "Received message from {} in {}",
         msg.author.name,
-        msg.channel,
-        msg.content
+        msg.channel
     );
 
-    // TODO: Queue message and trigger tool loop (implemented in later plan)
+    // Send to the loop
+    if state.loop_tx.send(LoopEvent::Message(msg)).await.is_err() {
+        tracing::error!("Failed to send message to loop - channel closed");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     Ok(Json(serde_json::json!({
-        "status": "queued",
-        "channel": msg.channel
+        "status": "delivered"
     })))
 }
 
@@ -88,15 +92,17 @@ async fn context_status(
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::r#loop::MessageQueue;
     use crate::state::GatewayConfig;
     use crate::tools::ToolRegistry;
     use axum::body::Body;
     use axum::http::Request;
     use river_core::AgentBirth;
     use std::path::PathBuf;
+    use tokio::sync::mpsc;
     use tower::ServiceExt;
 
-    fn test_state() -> Arc<AppState> {
+    fn test_state() -> (Arc<AppState>, mpsc::Receiver<LoopEvent>) {
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
             data_dir: PathBuf::from("/tmp/test"),
@@ -113,12 +119,15 @@ mod tests {
 
         let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        Arc::new(AppState::new(config, db, registry, None, None))
+        let (loop_tx, loop_rx) = mpsc::channel(256);
+        let message_queue = Arc::new(MessageQueue::new());
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue)), loop_rx)
     }
 
     #[tokio::test]
     async fn test_health_check() {
-        let app = create_router(test_state());
+        let (state, _rx) = test_state();
+        let app = create_router(state);
 
         let response = app
             .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -130,7 +139,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tools() {
-        let app = create_router(test_state());
+        let (state, _rx) = test_state();
+        let app = create_router(state);
 
         let response = app
             .oneshot(Request::builder().uri("/tools").body(Body::empty()).unwrap())
@@ -142,7 +152,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_incoming() {
-        let app = create_router(test_state());
+        let (state, _rx) = test_state();
+        let app = create_router(state);
 
         let body = serde_json::json!({
             "adapter": "discord",
@@ -172,7 +183,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_status() {
-        let app = create_router(test_state());
+        let (state, _rx) = test_state();
+        let app = create_router(state);
 
         let response = app
             .oneshot(Request::builder().uri("/context/status").body(Body::empty()).unwrap())

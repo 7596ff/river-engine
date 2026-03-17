@@ -3,6 +3,7 @@
 use crate::api::create_router;
 use crate::db::init_db;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
 use crate::tools::{
@@ -14,6 +15,8 @@ use river_core::AgentBirth;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// Server configuration from CLI args
 pub struct ServerConfig {
@@ -135,14 +138,49 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     tracing::info!("Registered {} tools total", registry.names().len());
 
+    // Create loop components
+    let (loop_tx, loop_rx) = mpsc::channel(256);
+    let message_queue = Arc::new(MessageQueue::new());
+
+    // Create model client
+    let model_client = ModelClient::new(
+        gateway_config.model_url.clone(),
+        gateway_config.model_name.clone(),
+        Duration::from_secs(120),
+    )?;
+
+    // Create loop config
+    let loop_config = LoopConfig {
+        workspace: gateway_config.workspace.clone(),
+        default_heartbeat_minutes: gateway_config.heartbeat_minutes,
+        context_limit: gateway_config.context_limit,
+        model_timeout: Duration::from_secs(120),
+        max_tool_calls_per_generation: 50,
+    };
+
     // Create app state
     let state = Arc::new(AppState::new(
         gateway_config,
-        db_arc,
+        db_arc.clone(),
         registry,
         embedding_client,
         redis_client,
+        loop_tx,
+        message_queue.clone(),
     ));
+
+    // Spawn the agent loop
+    let mut agent_loop = AgentLoop::new(
+        loop_rx,
+        message_queue,
+        model_client,
+        state.tool_executor.clone(),
+        db_arc,
+        loop_config,
+    );
+    tokio::spawn(async move {
+        agent_loop.run().await;
+    });
 
     // Create router
     let app = create_router(state);
