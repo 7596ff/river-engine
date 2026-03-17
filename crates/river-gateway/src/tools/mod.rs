@@ -6,6 +6,7 @@ mod file;
 mod shell;
 mod memory;
 mod communication;
+mod web;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -15,3 +16,4 @@ pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySo
 pub use communication::{
     AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool
 };
+pub use web::WebFetchTool;
