@@ -13,7 +13,7 @@ pub use model::{ModelClient, ModelResponse, Usage};
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::session::PRIMARY_SESSION_ID;
-use crate::tools::{HeartbeatScheduler, ToolExecutor, ToolCall};
+use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
 use river_core::{SnowflakeGenerator, SnowflakeType};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -58,6 +58,7 @@ pub struct AgentLoop {
     db: Arc<Mutex<Database>>,
     snowflake_gen: Arc<SnowflakeGenerator>,
     heartbeat_scheduler: Arc<HeartbeatScheduler>,
+    context_rotation: Arc<ContextRotation>,
     config: LoopConfig,
     pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
@@ -78,6 +79,7 @@ impl AgentLoop {
     ) -> Self {
         let git = GitOps::new(&config.workspace);
         let heartbeat_scheduler = Arc::new(HeartbeatScheduler::new(config.default_heartbeat_minutes));
+        let context_rotation = Arc::new(ContextRotation::new());
         Self {
             state: LoopState::Sleeping,
             event_rx,
@@ -88,6 +90,7 @@ impl AgentLoop {
             db,
             snowflake_gen,
             heartbeat_scheduler,
+            context_rotation,
             pending_tool_calls: Vec::new(),
             shutdown_requested: false,
             git,
@@ -99,6 +102,11 @@ impl AgentLoop {
     /// Get a reference to the heartbeat scheduler for tools
     pub fn heartbeat_scheduler(&self) -> Arc<HeartbeatScheduler> {
         self.heartbeat_scheduler.clone()
+    }
+
+    /// Get a reference to the context rotation state for tools
+    pub fn context_rotation(&self) -> Arc<ContextRotation> {
+        self.context_rotation.clone()
     }
 
     /// Run the continuous loop
@@ -313,8 +321,19 @@ impl AgentLoop {
         // Add tool results and incoming messages to context
         self.context.add_tool_results(results, incoming_messages, context_status);
 
-        // Back to thinking
-        self.state = LoopState::Thinking;
+        // Check if context rotation was requested
+        if let Some(reason) = self.context_rotation.take_request() {
+            if reason.is_empty() {
+                tracing::info!("Context rotation requested (no reason given)");
+            } else {
+                tracing::info!("Context rotation requested: {}", reason);
+            }
+            // Go to settling, which will clear context on next wake
+            self.state = LoopState::Settling;
+        } else {
+            // Back to thinking
+            self.state = LoopState::Thinking;
+        }
     }
 
     /// Persist conversation messages to database

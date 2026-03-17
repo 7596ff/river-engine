@@ -1,13 +1,15 @@
-//! Scheduling tools for controlling loop timing
+//! Scheduling tools for controlling loop timing and context rotation
 //!
-//! These tools allow the agent to control when the next heartbeat occurs.
+//! These tools allow the agent to control when the next heartbeat occurs
+//! and to manually trigger context rotation.
 
 use crate::tools::{Tool, ToolResult};
 use river_core::RiverError;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 
 /// Shared state for heartbeat scheduling
 ///
@@ -131,6 +133,116 @@ impl Tool for ScheduleHeartbeatTool {
     }
 }
 
+/// Shared state for context rotation requests
+///
+/// When rotation is requested, the loop will transition to settling/sleeping
+/// after completing the current tool calls.
+#[derive(Debug)]
+pub struct ContextRotation {
+    /// Whether rotation has been requested
+    requested: AtomicBool,
+    /// Reason for the rotation (for logging)
+    reason: RwLock<Option<String>>,
+}
+
+impl ContextRotation {
+    pub fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            reason: RwLock::new(None),
+        }
+    }
+
+    /// Request a context rotation
+    pub fn request(&self, reason: Option<String>) {
+        self.requested.store(true, Ordering::SeqCst);
+        // Store reason asynchronously - use blocking for sync context
+        if let Ok(mut r) = self.reason.try_write() {
+            *r = reason;
+        }
+    }
+
+    /// Check if rotation is requested and clear the flag
+    /// Returns Some(reason) if rotation was requested (reason may be empty string)
+    pub fn take_request(&self) -> Option<String> {
+        if self.requested.swap(false, Ordering::SeqCst) {
+            // Rotation was requested - get reason or default to empty string
+            self.reason
+                .try_write()
+                .ok()
+                .and_then(|mut r| r.take())
+                .or_else(|| Some(String::new()))
+        } else {
+            None
+        }
+    }
+
+    /// Check if rotation is pending (without clearing)
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for ContextRotation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Manually trigger context rotation
+pub struct RotateContextTool {
+    rotation: Arc<ContextRotation>,
+}
+
+impl RotateContextTool {
+    pub fn new(rotation: Arc<ContextRotation>) -> Self {
+        Self { rotation }
+    }
+}
+
+impl Tool for RotateContextTool {
+    fn name(&self) -> &str {
+        "rotate_context"
+    }
+
+    fn description(&self) -> &str {
+        "Manually trigger context rotation. Call this after saving your state to thinking/current-state.md"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for rotation (optional, for logging)"
+                }
+            },
+            "required": []
+        })
+    }
+
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        let reason = args["reason"].as_str().map(|s| s.to_string());
+
+        self.rotation.request(reason.clone());
+
+        let output = if let Some(r) = reason {
+            format!(
+                "Context rotation requested. Reason: {}. \
+                Ensure you have saved your state to thinking/current-state.md before this cycle ends.",
+                r
+            )
+        } else {
+            "Context rotation requested. \
+            Ensure you have saved your state to thinking/current-state.md before this cycle ends."
+                .to_string()
+        };
+
+        Ok(ToolResult::success(output))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +309,69 @@ mod tests {
         // Missing parameter
         let result = tool.execute(serde_json::json!({}));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_context_rotation_default() {
+        let rotation = ContextRotation::new();
+        assert!(!rotation.is_requested());
+    }
+
+    #[test]
+    fn test_context_rotation_request() {
+        let rotation = ContextRotation::new();
+        rotation.request(Some("Testing".to_string()));
+        assert!(rotation.is_requested());
+    }
+
+    #[test]
+    fn test_context_rotation_take_request() {
+        let rotation = ContextRotation::new();
+        rotation.request(Some("Testing".to_string()));
+
+        let reason = rotation.take_request();
+        assert!(reason.is_some());
+        assert_eq!(reason.unwrap(), "Testing");
+        assert!(!rotation.is_requested());
+    }
+
+    #[test]
+    fn test_context_rotation_take_request_empty() {
+        let rotation = ContextRotation::new();
+        let reason = rotation.take_request();
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn test_context_rotation_take_request_no_reason() {
+        let rotation = ContextRotation::new();
+        rotation.request(None);
+
+        let reason = rotation.take_request();
+        assert!(reason.is_some());
+        assert_eq!(reason.unwrap(), ""); // Empty string when no reason given
+        assert!(!rotation.is_requested());
+    }
+
+    #[test]
+    fn test_rotate_context_tool() {
+        let rotation = Arc::new(ContextRotation::new());
+        let tool = RotateContextTool::new(rotation.clone());
+
+        assert_eq!(tool.name(), "rotate_context");
+
+        let result = tool.execute(serde_json::json!({"reason": "Test rotation"}));
+        assert!(result.is_ok());
+        assert!(rotation.is_requested());
+    }
+
+    #[test]
+    fn test_rotate_context_tool_no_reason() {
+        let rotation = Arc::new(ContextRotation::new());
+        let tool = RotateContextTool::new(rotation.clone());
+
+        let result = tool.execute(serde_json::json!({}));
+        assert!(result.is_ok());
+        assert!(rotation.is_requested());
     }
 }

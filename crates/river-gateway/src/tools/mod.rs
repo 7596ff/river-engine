@@ -23,4 +23,4 @@ pub use web::WebFetchTool;
 pub use model::{
     ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
 };
-pub use scheduling::{HeartbeatScheduler, ScheduleHeartbeatTool};
+pub use scheduling::{ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool};
