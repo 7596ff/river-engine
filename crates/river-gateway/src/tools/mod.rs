@@ -20,7 +20,7 @@ pub use communication::{
     AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool,
     ReadChannelTool
 };
-pub use web::WebFetchTool;
+pub use web::{WebFetchTool, WebSearchTool};
 pub use model::{
     ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
 };

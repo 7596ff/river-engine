@@ -216,6 +216,124 @@ impl Tool for WebFetchTool {
     }
 }
 
+/// Search the web using ddgr (DuckDuckGo CLI)
+pub struct WebSearchTool;
+
+impl WebSearchTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Tool for WebSearchTool {
+    fn name(&self) -> &str {
+        "websearch"
+    }
+
+    fn description(&self) -> &str {
+        "Search the web"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query"
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Search backend (default: ddgr)",
+                    "enum": ["ddgr"],
+                    "default": "ddgr"
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default: 10, max: 25)",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        })
+    }
+
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing 'query' parameter"))?;
+
+        let num_results = args["num_results"]
+            .as_u64()
+            .unwrap_or(10)
+            .min(25) as usize;
+
+        // Use ddgr for DuckDuckGo search
+        let output = Command::new("ddgr")
+            .args([
+                "--json",                    // JSON output
+                "-n", &num_results.to_string(), // Number of results
+                "--unsafe",                  // Don't filter results
+                query,
+            ])
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    RiverError::tool("ddgr not found - install with: pip install ddgr")
+                } else {
+                    RiverError::tool(format!("Failed to execute ddgr: {}", e))
+                }
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(RiverError::tool(format!("ddgr failed: {}", stderr)));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse JSON output
+        let results: Vec<SearchResult> = serde_json::from_str(&stdout)
+            .map_err(|e| RiverError::tool(format!("Failed to parse ddgr output: {}", e)))?;
+
+        if results.is_empty() {
+            return Ok(ToolResult::success("No results found"));
+        }
+
+        // Format results
+        let formatted: Vec<String> = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                format!(
+                    "{}. {}\n   {}\n   {}",
+                    i + 1,
+                    r.title,
+                    r.url,
+                    r.abstract_text.as_deref().unwrap_or("No description")
+                )
+            })
+            .collect();
+
+        Ok(ToolResult::success(formatted.join("\n\n")))
+    }
+}
+
+/// Search result from ddgr
+#[derive(Debug, serde::Deserialize)]
+struct SearchResult {
+    title: String,
+    url: String,
+    #[serde(rename = "abstract")]
+    abstract_text: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +376,26 @@ mod tests {
         let result = tool.execute(serde_json::json!({"url": "file:///etc/passwd"}));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("http"));
+    }
+
+    #[test]
+    fn test_websearch_tool_schema() {
+        let tool = WebSearchTool::new();
+
+        assert_eq!(tool.name(), "websearch");
+        let params = tool.parameters();
+        assert!(params["properties"]["query"].is_object());
+        assert!(params["properties"]["backend"].is_object());
+        assert!(params["properties"]["num_results"].is_object());
+    }
+
+    #[test]
+    fn test_websearch_requires_query() {
+        let tool = WebSearchTool::new();
+
+        // Missing query should fail
+        let result = tool.execute(serde_json::json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("query"));
     }
 }
