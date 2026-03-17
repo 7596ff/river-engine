@@ -11,6 +11,7 @@ pub use context::{ChatMessage, ContextBuilder, ToolCallRequest, FunctionCall};
 pub use model::{ModelClient, ModelResponse, Usage};
 
 use crate::db::Database;
+use crate::git::{GitOps, GitCommitResult};
 use crate::tools::{ToolExecutor, ToolCall};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -57,6 +58,7 @@ pub struct AgentLoop {
     config: LoopConfig,
     pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
+    git: GitOps,
 }
 
 impl AgentLoop {
@@ -68,6 +70,7 @@ impl AgentLoop {
         db: Arc<Mutex<Database>>,
         config: LoopConfig,
     ) -> Self {
+        let git = GitOps::new(&config.workspace);
         Self {
             state: LoopState::Sleeping,
             event_rx,
@@ -76,9 +79,10 @@ impl AgentLoop {
             context: ContextBuilder::new(),
             tool_executor,
             db,
-            config,
             pending_tool_calls: Vec::new(),
             shutdown_requested: false,
+            git,
+            config,
         }
     }
 
@@ -290,7 +294,34 @@ impl AgentLoop {
         tracing::debug!("Settling...");
 
         // TODO: Persist messages to database
-        // TODO: Git commit if workspace changed
+
+        // Git commit if workspace changed
+        if self.git.is_git_repo() {
+            match self.git.commit_if_changed() {
+                GitCommitResult::NoChanges => {
+                    tracing::debug!("No workspace changes to commit");
+                }
+                GitCommitResult::Committed { files, commit_hash } => {
+                    tracing::info!(
+                        "Committed {} file(s) as {} ({})",
+                        files.len(),
+                        commit_hash,
+                        files.join(", ")
+                    );
+                }
+                GitCommitResult::Conflicts { conflicting_files } => {
+                    // Conflicts are reported but don't stop the loop
+                    tracing::warn!(
+                        "Git conflicts detected in {} file(s): {}. Agent should resolve manually.",
+                        conflicting_files.len(),
+                        conflicting_files.join(", ")
+                    );
+                }
+                GitCommitResult::Error(e) => {
+                    tracing::warn!("Git commit failed: {}", e);
+                }
+            }
+        }
 
         // Check if messages arrived during settle
         // Note: drain() is atomic with the queue, so we don't need a separate is_empty() check

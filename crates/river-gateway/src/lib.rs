@@ -11,3 +11,4 @@ pub mod r#loop;
 pub mod memory;
 pub mod redis;
 pub mod heartbeat;
+pub mod git;
