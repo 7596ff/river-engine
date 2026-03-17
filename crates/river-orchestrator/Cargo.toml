@@ -21,6 +21,8 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
+which = "7.0"
+reqwest.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
