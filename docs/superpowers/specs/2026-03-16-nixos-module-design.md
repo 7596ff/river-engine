@@ -5,24 +5,30 @@
 
 ## Overview
 
-NixOS and home-manager modules for deploying River Engine services. System-level modules manage shared infrastructure (orchestrator, embedding server), while user-level modules manage per-user agents (gateway, discord adapter).
+NixOS and home-manager modules for deploying River Engine services. Both modules provide identical functionality - the full stack can run at either the system level or user level.
 
 ## Architecture
 
 ### Deployment Model
 
-- **System level (NixOS module)**: Orchestrator, embedding server, Redis - shared infrastructure running as system services
-- **User level (home-manager module)**: Agents with gateway and optional adapters - per-user services running in user sessions
+Both modules support the complete River Engine stack:
+- **Orchestrator** - Model management and health monitoring
+- **Embedding server** - Semantic memory via llama-cpp
+- **Redis** - Ephemeral memory (NixOS uses redis module, home-manager uses user service)
+- **Agents** - Gateway instances with optional Discord adapters
 
-Users compose these layers: system services start at boot, user agents start on login and connect to system services via explicit URLs.
+**Deployment flexibility:**
+- Run everything at system level (multi-user server)
+- Run everything at user level (personal workstation)
+- Mix: system-level infrastructure + user-level agents (compose via explicit URLs)
 
 ### File Structure
 
 ```
 nix/
-├── lib.nix              # Shared option types and builders
-├── nixos-module.nix     # System services (orchestrator, embedding, redis)
-├── home-module.nix      # User agents (gateway, discord)
+├── lib.nix              # Shared option types and service builders
+├── nixos-module.nix     # System services (full stack)
+├── home-module.nix      # User services (full stack)
 └── packages.nix         # Package definitions for River binaries
 ```
 
@@ -67,6 +73,35 @@ services.river = {
     enable = mkEnableOption "Redis for River";
     port = mkOption { type = port; default = 6379; };
   };
+
+  agents = mkOption {
+    type = attrsOf (submodule ({ name, ... }: {
+      options = {
+        enable = mkEnableOption "this River agent";
+        workspace = mkOption { type = path; };
+        dataDir = mkOption { type = path; };
+        agentName = mkOption { type = str; default = name; };
+        port = mkOption { type = port; default = 3000; };
+        modelUrl = mkOption { type = nullOr str; default = null; };
+        modelName = mkOption { type = nullOr str; default = null; };
+        orchestratorUrl = mkOption { type = nullOr str; default = null; };
+        embeddingUrl = mkOption { type = nullOr str; default = null; };
+        redisUrl = mkOption { type = nullOr str; default = null; };
+        environment = mkOption { type = attrsOf str; default = {}; };
+
+        discord = {
+          enable = mkEnableOption "Discord adapter";
+          tokenFile = mkOption { type = path; };
+          guildId = mkOption { type = int; };
+          gatewayUrl = mkOption { type = nullOr str; default = null; };
+          port = mkOption { type = port; default = 3002; };
+          channels = mkOption { type = listOf int; default = []; };
+          stateFile = mkOption { type = nullOr path; default = null; };
+        };
+      };
+    }));
+    default = {};
+  };
 };
 ```
 
@@ -88,6 +123,22 @@ services.river = {
 
 **Redis:**
 - When `services.river.redis.enable = true`, configures `services.redis.servers.river` using the standard NixOS redis module
+
+**For each agent `name` with `enable = true`:**
+
+**river-{name}-gateway.service:**
+- Runs `river-gateway` with workspace, data-dir, model settings
+- `DynamicUser = false` (uses dedicated system user)
+- `StateDirectory = "river-{name}"`
+- `Restart = "on-failure"` with 5 second delay
+- `WantedBy = ["multi-user.target"]`
+
+**river-{name}-discord.service (if discord.enable):**
+- Runs `river-discord` with token file, guild ID, gateway URL
+- `After = ["river-{name}-gateway.service"]`
+- `BindsTo = ["river-{name}-gateway.service"]`
+- `Restart = "on-failure"`
+- `WantedBy = ["multi-user.target"]`
 
 ### Example Configuration
 
@@ -111,7 +162,7 @@ services.river = {
 };
 ```
 
-## Home-Manager Module (User Agents)
+## Home-Manager Module (User Services)
 
 ### Import
 
@@ -124,6 +175,35 @@ imports = [ /path/to/river-engine/nix/home-module.nix ];
 
 ```nix
 services.river = {
+  orchestrator = {
+    enable = mkEnableOption "River orchestrator";
+    port = mkOption { type = port; default = 5000; };
+    healthThreshold = mkOption { type = int; default = 120; };
+    modelDirs = mkOption { type = listOf path; default = []; };
+    externalModelsFile = mkOption { type = nullOr path; default = null; };
+    modelsConfigFile = mkOption { type = nullOr path; default = null; };
+    llamaServerPath = mkOption { type = nullOr path; default = null; };
+    idleTimeout = mkOption { type = int; default = 900; };
+    portRange = mkOption { type = str; default = "8080-8180"; };
+    reserveVramMb = mkOption { type = int; default = 500; };
+    reserveRamMb = mkOption { type = int; default = 2000; };
+    cudaSupport = mkOption { type = bool; default = false; };
+    environment = mkOption { type = attrsOf str; default = {}; };
+  };
+
+  embedding = {
+    enable = mkEnableOption "River embedding server";
+    port = mkOption { type = port; default = 8200; };
+    modelPath = mkOption { type = path; };
+    gpuLayers = mkOption { type = int; default = 99; };
+    cudaSupport = mkOption { type = bool; default = false; };
+  };
+
+  redis = {
+    enable = mkEnableOption "Redis for River";
+    port = mkOption { type = port; default = 6379; };
+  };
+
   agents = mkOption {
     type = attrsOf (submodule ({ name, ... }: {
       options = {
@@ -166,7 +246,24 @@ services.river = {
 
 ### Generated Services
 
-For each agent `name` with `enable = true`:
+**river-orchestrator.service (user unit):**
+- Runs `river-orchestrator` binary with configured options
+- `Restart = "on-failure"` with 5 second delay
+- `WantedBy = ["default.target"]`
+
+**river-embedding.service (user unit):**
+- Runs `llama-server --embedding` with model path and port
+- Uses CUDA-enabled llama-cpp if `cudaSupport = true`
+- `Restart = "on-failure"`
+- `WantedBy = ["default.target"]`
+
+**river-redis.service (user unit):**
+- Runs `redis-server` on configured port
+- State in `${XDG_DATA_HOME}/river/redis`
+- `Restart = "on-failure"`
+- `WantedBy = ["default.target"]`
+
+**For each agent `name` with `enable = true`:**
 
 **river-{name}-gateway.service (user unit):**
 - Runs `river-gateway` with workspace, data-dir, model settings
@@ -208,15 +305,27 @@ services.river.agents.thomas = {
 
 ## Shared Library (lib.nix)
 
-Defines common option types used by both modules:
+Defines common option types and service builders used by both modules:
 
+**Option definitions:**
+- `orchestratorOptions` - Options for orchestrator configuration
+- `embeddingOptions` - Options for embedding server configuration
+- `redisOptions` - Options for Redis configuration
 - `agentOptions` - Submodule options for agent configuration
 - `discordOptions` - Submodule options for Discord adapter
-- `mkGatewayService` - Function to generate gateway service config
-- `mkDiscordService` - Function to generate Discord adapter service config
+
+**Service builders:**
+- `mkOrchestratorService` - Generate orchestrator service config
+- `mkEmbeddingService` - Generate embedding server service config
+- `mkGatewayService` - Generate gateway service config
+- `mkDiscordService` - Generate Discord adapter service config
+
+**Shared types:**
 - `serviceUrlOption` - Reusable option type for service URLs
 
-This ensures option definitions are identical between NixOS and home-manager modules.
+This ensures option definitions and service generation are identical between NixOS and home-manager modules. The only differences are:
+- NixOS uses system units (`multi-user.target`), home-manager uses user units (`default.target`)
+- NixOS Redis uses `services.redis.servers`, home-manager runs redis-server directly
 
 ## Package Definitions (packages.nix)
 
@@ -268,13 +377,13 @@ in {
 
 ## Service Discovery
 
-User-level agents discover system-level services via explicit URLs. No automatic discovery or magic defaults. Users specify:
+Services discover each other via explicit URLs. No automatic discovery or magic defaults. Agents specify:
 
-- `orchestratorUrl` - URL to system orchestrator (e.g., `http://localhost:5000`)
-- `embeddingUrl` - URL to system embedding server (e.g., `http://localhost:8200/v1`)
-- `redisUrl` - URL to system Redis (e.g., `redis://localhost:6379`)
+- `orchestratorUrl` - URL to orchestrator (e.g., `http://localhost:5000`)
+- `embeddingUrl` - URL to embedding server (e.g., `http://localhost:8200/v1`)
+- `redisUrl` - URL to Redis (e.g., `redis://localhost:6379`)
 
-This keeps configuration explicit and transparent.
+This keeps configuration explicit and transparent, whether services run at the same level (all system or all user) or mixed (system infrastructure + user agents).
 
 ## Secrets Handling
 
@@ -288,30 +397,32 @@ This works with any secrets manager without requiring module changes.
 
 ## Service Dependencies
 
-### System Services (NixOS)
+Both modules use the same dependency structure:
 
 ```
-network.target
+network.target (+ default.target for user services)
     ↓
 ┌───────────────────────────────────────┐
 │ river-orchestrator.service            │
 │ river-embedding.service               │
-│ redis-river.service                   │
+│ redis service                         │
 │ (all independent, start in parallel)  │
+└───────────────────────────────────────┘
+    ↓
+┌───────────────────────────────────────┐
+│ river-{name}-gateway.service          │
+│ (one per agent, start in parallel)    │
+└───────────────────────────────────────┘
+    ↓ (After, BindsTo)
+┌───────────────────────────────────────┐
+│ river-{name}-discord.service          │
+│ (binds to its gateway)                │
 └───────────────────────────────────────┘
 ```
 
-### User Services (home-manager)
-
-```
-network.target + default.target
-    ↓
-river-{name}-gateway.service
-    ↓ (After, BindsTo)
-river-{name}-discord.service
-```
-
 The Discord adapter binds to its gateway - if the gateway stops or restarts, the adapter does too.
+
+**Note:** Agents don't have systemd dependencies on infrastructure services (orchestrator, embedding, redis) since they connect via URLs and handle unavailability gracefully.
 
 ## Systemd Service Configuration
 
@@ -334,63 +445,114 @@ All services use:
 - State in user-specified `dataDir`
 - `WantedBy = ["default.target"]` - Start on login
 
-## Full Example
+## Full Examples
 
-### System Configuration (configuration.nix)
+### All System Level (Multi-User Server)
 
 ```nix
+# configuration.nix
 { config, pkgs, ... }:
-
 {
   imports = [ /path/to/river-engine/nix/nixos-module.nix ];
 
   services.river = {
     orchestrator = {
       enable = true;
-      port = 5000;
       modelDirs = [ /data/models ];
       cudaSupport = true;
     };
 
     embedding = {
       enable = true;
-      port = 8200;
       modelPath = /data/models/nomic-embed-text-v1.5.Q8_0.gguf;
       cudaSupport = true;
     };
 
     redis.enable = true;
+
+    agents.shared-agent = {
+      enable = true;
+      workspace = /srv/river/shared-agent;
+      dataDir = /var/lib/river/shared-agent;
+      orchestratorUrl = "http://localhost:5000";
+      embeddingUrl = "http://localhost:8200/v1";
+      redisUrl = "redis://localhost:6379";
+
+      discord = {
+        enable = true;
+        tokenFile = /run/secrets/discord-token;
+        guildId = 123456789012345678;
+      };
+    };
   };
 }
 ```
 
-### User Configuration (home.nix)
+### All User Level (Personal Workstation)
 
 ```nix
+# home.nix
 { config, pkgs, ... }:
-
 {
   imports = [ /path/to/river-engine/nix/home-module.nix ];
 
-  services.river.agents.myagent = {
-    enable = true;
-    workspace = "${config.home.homeDirectory}/agents/myagent";
-    dataDir = "${config.xdg.dataHome}/river/myagent";
-    port = 3000;
-
-    modelUrl = "http://localhost:8080/v1";
-    modelName = "qwen3-32b-q4_k_m";
-    orchestratorUrl = "http://localhost:5000";
-    embeddingUrl = "http://localhost:8200/v1";
-    redisUrl = "redis://localhost:6379";
-
-    discord = {
+  services.river = {
+    orchestrator = {
       enable = true;
-      tokenFile = "${config.xdg.configHome}/secrets/discord-token";
-      guildId = 123456789012345678;
+      modelDirs = [ "${config.home.homeDirectory}/models" ];
+      cudaSupport = true;
+    };
+
+    embedding = {
+      enable = true;
+      modelPath = "${config.home.homeDirectory}/models/nomic-embed-text-v1.5.Q8_0.gguf";
+      cudaSupport = true;
+    };
+
+    redis.enable = true;
+
+    agents.myagent = {
+      enable = true;
+      workspace = "${config.home.homeDirectory}/agents/myagent";
+      dataDir = "${config.xdg.dataHome}/river/myagent";
+      orchestratorUrl = "http://localhost:5000";
+      embeddingUrl = "http://localhost:8200/v1";
+      redisUrl = "redis://localhost:6379";
+
+      discord = {
+        enable = true;
+        tokenFile = "${config.xdg.configHome}/secrets/discord-token";
+        guildId = 123456789012345678;
+      };
     };
   };
 }
+```
+
+### Mixed: System Infrastructure + User Agents
+
+```nix
+# configuration.nix - shared infrastructure
+services.river = {
+  orchestrator.enable = true;
+  embedding = {
+    enable = true;
+    modelPath = /data/models/nomic-embed-text-v1.5.Q8_0.gguf;
+  };
+  redis.enable = true;
+};
+```
+
+```nix
+# home.nix - per-user agents connect to system services
+services.river.agents.myagent = {
+  enable = true;
+  workspace = "${config.home.homeDirectory}/agents/myagent";
+  dataDir = "${config.xdg.dataHome}/river/myagent";
+  orchestratorUrl = "http://localhost:5000";
+  embeddingUrl = "http://localhost:8200/v1";
+  redisUrl = "redis://localhost:6379";
+};
 ```
 
 ## Testing Strategy
