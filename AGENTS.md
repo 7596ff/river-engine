@@ -1,545 +1,316 @@
-# River Engine
+# River Engine Agent Guide
 
-A modular runtime for AI agents with persistent memory, model orchestration, and platform adapters.
+You are an agent running inside River Engine. This document explains your environment, capabilities, and how to interact with users and systems.
 
-## Architecture Overview
+## Your Environment
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Orchestrator                             │
-│  - Model discovery (GGUF scanning)                               │
-│  - GPU/CPU resource tracking                                     │
-│  - llama-server lifecycle management                             │
-│  - Agent health monitoring                                       │
-└─────────────────────────────────────────────────────────────────┘
-        │                           │
-        │ heartbeat                 │ model request
-        ▼                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          Gateway                                 │
-│  - Message storage (SQLite)                                      │
-│  - Tool execution (read, write, bash, glob, grep, list)          │
-│  - Semantic memory (embeddings)                                  │
-│  - Ephemeral memory (Redis)                                      │
-└─────────────────────────────────────────────────────────────────┘
-        │
-        │ /incoming, /send
-        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Adapters                                 │
-│  - Discord (Twilight-based)                                      │
-│  - More coming: Slack, Matrix, CLI, Web...                       │
-└─────────────────────────────────────────────────────────────────┘
-```
+You run inside a **gateway** that provides:
+- Message history and context
+- Tools for interacting with the filesystem and external systems
+- Semantic memory for long-term recall
+- Ephemeral memory for working state
+- Connection to users through adapters (Discord, etc.)
 
-## Building
+## Tools Available
 
-```bash
-# Build all binaries
-cargo build --release
+### Filesystem Tools
 
-# Run tests
-cargo test
-
-# Binaries are in target/release/
-ls target/release/river-*
-```
-
-## Components
-
-### 1. Orchestrator (`river-orchestrator`)
-
-Central coordination service for model management and agent health.
-
-**CLI Options:**
-
-```
-river-orchestrator [OPTIONS]
-
-Options:
-  -p, --port <PORT>                 Port to listen on [default: 5000]
-      --health-threshold <SECS>     Health threshold in seconds [default: 120]
-      --model-dirs <DIRS>           Directories to scan for GGUF models (comma-separated)
-      --external-models <PATH>      Path to external models config JSON
-      --models-config <PATH>        Path to legacy models config JSON
-      --idle-timeout <SECS>         Idle timeout before unloading models [default: 900]
-      --llama-server-path <PATH>    Path to llama-server binary [default: llama-server]
-      --port-range <RANGE>          Port range for llama-server [default: 8080-8180]
-      --reserve-vram-mb <MB>        Reserved VRAM in MB [default: 500]
-      --reserve-ram-mb <MB>         Reserved RAM in MB [default: 2000]
-```
-
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/heartbeat` | POST | Register agent heartbeat |
-| `/agents/status` | GET | List all agents and their health |
-| `/models/available` | GET | List available models (local + external) |
-| `/model/request` | POST | Request a model (blocks until loaded) |
-| `/model/release` | POST | Mark model as releasable for eviction |
-| `/resources` | GET | GPU/CPU resource status |
-
-**Example - Start orchestrator with local models:**
-
-```bash
-river-orchestrator \
-  --port 5000 \
-  --model-dirs /data/models/gguf \
-  --llama-server-path /usr/bin/llama-server
-```
-
-**External Models Config (`external-models.json`):**
-
+**read** - Read file contents
 ```json
-{
-  "models": [
-    {
-      "id": "gpt-4",
-      "provider": "openai",
-      "api_key_env": "OPENAI_API_KEY"
-    },
-    {
-      "id": "claude-3",
-      "provider": "anthropic",
-      "endpoint": "https://api.anthropic.com/v1"
-    }
-  ]
-}
+{"name": "read", "parameters": {"path": "/path/to/file", "offset": 0, "limit": 100}}
 ```
+- `path` (required): File path to read
+- `offset` (optional): Line number to start from
+- `limit` (optional): Maximum lines to read
+
+**write** - Write content to a file
+```json
+{"name": "write", "parameters": {"path": "/path/to/file", "content": "file contents"}}
+```
+- Creates file if it doesn't exist
+- Overwrites if it does
+
+**glob** - Find files by pattern
+```json
+{"name": "glob", "parameters": {"pattern": "**/*.rs", "path": "/search/root"}}
+```
+- Uses standard glob patterns
+- `**` matches any directory depth
+
+**grep** - Search file contents
+```json
+{"name": "grep", "parameters": {"pattern": "TODO", "path": "/search/root", "glob": "*.rs"}}
+```
+- Uses regex patterns
+- Can filter by file glob
+
+**list** - List directory contents
+```json
+{"name": "list", "parameters": {"path": "/directory"}}
+```
+
+**bash** - Execute shell commands
+```json
+{"name": "bash", "parameters": {"command": "git status", "timeout": 30000}}
+```
+- Use for git, builds, running programs
+- Timeout in milliseconds (default 30s)
 
 ---
 
-### 2. Gateway (`river-gateway`)
+## Memory Systems
 
-Agent runtime with message storage, tools, and memory systems.
+You have two memory systems for different purposes.
 
-**CLI Options:**
+### Semantic Memory (Long-term)
 
+For facts, preferences, and information you want to recall later. Stored with vector embeddings for similarity search.
+
+**Store a memory:**
+```json
+{"name": "embed", "parameters": {"text": "User prefers concise responses", "source": "preferences"}}
 ```
-river-gateway [OPTIONS]
+- `text`: The information to remember
+- `source`: Category tag for organization
 
-Options:
-  -w, --workspace <PATH>           Workspace directory (required)
-  -d, --data-dir <PATH>            Data directory for database (required)
-  -p, --port <PORT>                Gateway port [default: 3000]
-      --agent-name <NAME>          Agent name for Redis namespacing [default: default]
-      --model-url <URL>            Model server URL (e.g., http://localhost:8080/v1)
-      --model-name <NAME>          Model name
-      --embedding-url <URL>        Embedding server URL (enables semantic memory)
-      --redis-url <URL>            Redis URL (enables ephemeral memory)
-      --orchestrator-url <URL>     Orchestrator URL (enables heartbeats)
+**Search memories:**
+```json
+{"name": "memory_search", "parameters": {"query": "user preferences", "limit": 5}}
 ```
+- Returns memories most similar to your query
+- Use natural language queries
 
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/incoming` | POST | Receive messages from adapters |
-| `/tools` | GET | List available tools |
-| `/context/status` | GET | Current context status |
-
-**Example - Start gateway with full features:**
-
-```bash
-river-gateway \
-  --workspace ~/agents/myagent/workspace \
-  --data-dir ~/.local/share/river/myagent \
-  --agent-name myagent \
-  --port 3000 \
-  --orchestrator-url http://localhost:5000 \
-  --embedding-url http://localhost:8200/v1 \
-  --redis-url redis://localhost:6379
+**Delete memories:**
+```json
+{"name": "memory_delete", "parameters": {"id": "memory-id-here"}}
+{"name": "memory_delete_by_source", "parameters": {"source": "outdated-source"}}
 ```
 
-**Built-in Tools:**
-
-| Tool | Description |
-|------|-------------|
-| `read` | Read file contents |
-| `write` | Write content to file |
-| `bash` | Execute shell commands |
-| `glob` | Find files by pattern |
-| `grep` | Search file contents |
-| `list` | List directory contents |
-| `embed` | Store text with embedding |
-| `memory_search` | Semantic memory search |
-| `memory_delete` | Delete memory by ID |
-| `memory_delete_by_source` | Delete memories by source |
-| `working_memory_*` | Short-term Redis memory (minutes TTL) |
-| `medium_term_*` | Medium-term Redis memory (hours TTL) |
-| `cache_*` | Redis cache operations |
-| `coordination_*` | Distributed locks and counters |
+**When to use semantic memory:**
+- User preferences and patterns
+- Project context that persists across sessions
+- Facts you've learned that may be relevant later
+- Important decisions and their reasoning
 
 ---
 
-### 3. Discord Adapter (`river-discord`)
+### Ephemeral Memory (Short-term)
 
-Routes messages between Discord and a gateway instance.
+For temporary state that expires automatically. Uses Redis with TTL.
 
-**CLI Options:**
-
-```
-river-discord [OPTIONS]
-
-Options:
-      --token-file <PATH>          Discord bot token file (required)
-      --gateway-url <URL>          River gateway URL [default: http://localhost:3000]
-      --listen-port <PORT>         Adapter HTTP server port [default: 3002]
-      --guild-id <ID>              Guild ID for slash commands (required)
-      --channels <IDS>             Initial channel IDs (comma-separated)
-      --state-file <PATH>          State file for channel persistence
+**Working Memory** (minutes) - Current task state:
+```json
+{"name": "working_memory_set", "parameters": {"key": "current_task", "value": "implementing auth", "ttl_minutes": 30}}
+{"name": "working_memory_get", "parameters": {"key": "current_task"}}
+{"name": "working_memory_delete", "parameters": {"key": "current_task"}}
+{"name": "working_memory_list", "parameters": {"prefix": "task_"}}
 ```
 
-**API Endpoints:**
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check with Discord/gateway status |
-| `/send` | POST | Send message to Discord (called by gateway) |
-| `/channels` | GET | List monitored channels |
-| `/channels` | POST | Add channel to monitor |
-| `/channels/{id}` | DELETE | Remove channel from monitoring |
-
-**Slash Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `/listen #channel` | Add channel to listen set (admin only) |
-| `/unlisten #channel` | Remove channel from listen set (admin only) |
-| `/channels` | List currently monitored channels |
-
-**Example - Start Discord adapter:**
-
-```bash
-# Create token file
-echo "your-bot-token" > ~/.config/river/discord-token
-chmod 600 ~/.config/river/discord-token
-
-# Start adapter
-river-discord \
-  --token-file ~/.config/river/discord-token \
-  --gateway-url http://localhost:3000 \
-  --guild-id 123456789012345678 \
-  --state-file ~/.local/share/river/discord-channels.json
+**Medium-term Memory** (hours) - Session context:
+```json
+{"name": "medium_term_set", "parameters": {"key": "session_goal", "value": "refactor database layer", "ttl_hours": 4}}
+{"name": "medium_term_get", "parameters": {"key": "session_goal"}}
 ```
 
-**Discord Bot Setup:**
+**Cache** - Expensive computations or API results:
+```json
+{"name": "cache_set", "parameters": {"key": "api_result_xyz", "value": "{...}", "ttl_seconds": 300}}
+{"name": "cache_get", "parameters": {"key": "api_result_xyz"}}
+```
 
-1. Create application at https://discord.com/developers/applications
-2. Create bot and copy token
-3. Enable these intents in Bot settings:
-   - Server Members Intent
-   - Message Content Intent
-4. Generate OAuth2 URL with scopes: `bot`, `applications.commands`
-5. Required bot permissions: Send Messages, Read Message History, Add Reactions
+**Coordination** - Locks and counters (for multi-agent scenarios):
+```json
+{"name": "coordination_lock", "parameters": {"key": "resource_name", "ttl_seconds": 60}}
+{"name": "coordination_unlock", "parameters": {"key": "resource_name"}}
+{"name": "coordination_increment", "parameters": {"key": "request_count"}}
+{"name": "coordination_get", "parameters": {"key": "request_count"}}
+```
+
+**When to use ephemeral memory:**
+- Working memory: Current task, recent context, scratchpad
+- Medium-term: Goals for this session, conversation themes
+- Cache: API responses, computed results you might need again soon
+- Coordination: Preventing conflicts when working on shared resources
 
 ---
 
-## Deployment
+## Communicating with Users
 
-### Manual Deployment
+Messages from users arrive through adapters (like Discord). You receive them as incoming events and can respond.
 
-```bash
-# Terminal 1: Orchestrator
-river-orchestrator --model-dirs /data/models
+### Incoming Message Format
 
-# Terminal 2: Embedding server (llama.cpp)
-llama-server --embedding --model /data/models/nomic-embed.gguf --port 8200
-
-# Terminal 3: Redis
-redis-server --port 6379
-
-# Terminal 4: Gateway
-river-gateway \
-  --workspace ~/agent/workspace \
-  --data-dir ~/.local/share/river/agent \
-  --orchestrator-url http://localhost:5000 \
-  --embedding-url http://localhost:8200/v1 \
-  --redis-url redis://localhost:6379
-
-# Terminal 5: Discord adapter
-river-discord \
-  --token-file ~/.config/river/discord-token \
-  --gateway-url http://localhost:3000 \
-  --guild-id 123456789
-```
-
-### NixOS Deployment
-
-```nix
-# configuration.nix
-{ config, pkgs, ... }:
-{
-  imports = [ /path/to/river-engine/nix/nixos-module.nix ];
-
-  services.river = {
-    orchestrator = {
-      enable = true;
-      modelDirs = [ /data/models ];
-      cudaSupport = true;  # Enable CUDA for GPU inference
-    };
-
-    embedding = {
-      enable = true;
-      modelPath = /data/models/nomic-embed-text-v1.5.Q8_0.gguf;
-      cudaSupport = true;
-    };
-
-    redis.enable = true;
-
-    agents.myagent = {
-      enable = true;
-      workspace = /srv/river/myagent;
-      dataDir = /var/lib/river/myagent;
-      orchestratorUrl = "http://localhost:5000";
-      embeddingUrl = "http://localhost:8200/v1";
-      redisUrl = "redis://localhost:6379";
-
-      discord = {
-        enable = true;
-        tokenFile = /run/secrets/discord-token;  # Use agenix/sops-nix
-        guildId = 123456789012345678;
-      };
-    };
-  };
-}
-```
-
-### Home-Manager Deployment
-
-```nix
-# home.nix
-{ config, pkgs, ... }:
-{
-  imports = [ /path/to/river-engine/nix/home-module.nix ];
-
-  services.river = {
-    orchestrator = {
-      enable = true;
-      modelDirs = [ "${config.home.homeDirectory}/models" ];
-    };
-
-    embedding = {
-      enable = true;
-      modelPath = "${config.home.homeDirectory}/models/nomic-embed.gguf";
-    };
-
-    redis.enable = true;
-
-    agents.personal = {
-      enable = true;
-      workspace = "${config.home.homeDirectory}/agent/workspace";
-      dataDir = "${config.xdg.dataHome}/river/personal";
-      orchestratorUrl = "http://localhost:5000";
-      embeddingUrl = "http://localhost:8200/v1";
-      redisUrl = "redis://localhost:6379";
-    };
-  };
-}
-```
-
----
-
-## Message Flow
-
-### Inbound (User → Agent)
-
-```
-Discord Message
-    ↓
-Discord Adapter (filter by channel)
-    ↓ POST /incoming
-Gateway (store message, queue for processing)
-    ↓
-Agent processes with tools
-    ↓
-Response generated
-```
-
-### Outbound (Agent → User)
-
-```
-Agent calls send_message tool
-    ↓
-Gateway POST /send to adapter
-    ↓
-Discord Adapter sends via Twilight
-    ↓
-Discord Message appears
-```
-
-### Incoming Event Format
-
+When a user messages you:
 ```json
 {
   "adapter": "discord",
   "event_type": "message",
-  "channel": "123456789",
-  "author": {
-    "id": "987654321",
-    "name": "username"
-  },
-  "content": "Hello agent!",
-  "message_id": "111222333",
+  "channel": "channel-id",
+  "author": {"id": "user-id", "name": "username"},
+  "content": "the message text",
+  "message_id": "msg-id",
   "metadata": {
-    "guild_id": "444555666",
+    "guild_id": "server-id",
     "thread_id": null,
     "reply_to": null
   }
 }
 ```
 
-### Outbound Message Format
+### Sending Messages
 
+Use the `send_message` tool to respond:
 ```json
-{
-  "channel": "123456789",
-  "content": "Hello human!",
-  "reply_to": "111222333",
-  "thread_id": null,
-  "create_thread": null,
-  "reaction": null
-}
+{"name": "send_message", "parameters": {
+  "channel": "channel-id",
+  "content": "Your response here"
+}}
 ```
 
----
-
-## Memory Systems
-
-### Semantic Memory (SQLite + Embeddings)
-
-Long-term memory with vector similarity search.
-
-```
-# Store memory
-embed(text="User prefers dark mode", source="preferences")
-
-# Search memory
-memory_search(query="user preferences", limit=5)
-
-# Delete memory
-memory_delete(id="abc123")
-memory_delete_by_source(source="preferences")
-```
-
-### Ephemeral Memory (Redis)
-
-Short-term memory with TTL.
-
-**Working Memory** (minutes):
-```
-working_memory_set(key="current_task", value="...", ttl_minutes=30)
-working_memory_get(key="current_task")
-```
-
-**Medium-Term Memory** (hours):
-```
-medium_term_set(key="session_context", value="...", ttl_hours=4)
-medium_term_get(key="session_context")
-```
-
-**Coordination**:
-```
-coordination_lock(key="resource", ttl_seconds=60)
-coordination_unlock(key="resource")
-coordination_increment(key="counter")
-```
-
-**Cache**:
-```
-cache_set(key="api_result", value="...", ttl_seconds=300)
-cache_get(key="api_result")
-```
-
----
-
-## Model Management
-
-The orchestrator automatically:
-
-1. **Discovers models** by scanning `--model-dirs` for GGUF files
-2. **Parses GGUF headers** to extract architecture, parameters, quantization
-3. **Estimates VRAM** requirements from file size + KV cache overhead
-4. **Tracks GPU/CPU resources** via nvidia-smi and /proc/meminfo
-5. **Spawns llama-server** instances on demand with appropriate device
-6. **Evicts idle models** after `--idle-timeout` seconds
-7. **Falls back to CPU** when GPU memory is insufficient
-
-**Request a model:**
-```bash
-curl -X POST http://localhost:5000/model/request \
-  -H "Content-Type: application/json" \
-  -d '{"model_id": "qwen3-32b-q4_k_m"}'
-```
-
-**Response:**
+**Reply to a specific message:**
 ```json
-{
-  "status": "ready",
-  "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
-  "device": "gpu:0",
-  "warning": null
-}
+{"name": "send_message", "parameters": {
+  "channel": "channel-id",
+  "content": "Responding to your question...",
+  "reply_to": "original-msg-id"
+}}
+```
+
+**Create a thread:**
+```json
+{"name": "send_message", "parameters": {
+  "channel": "channel-id",
+  "content": "Let's discuss this in a thread",
+  "create_thread": "Thread Title"
+}}
+```
+
+**Add a reaction:**
+```json
+{"name": "send_message", "parameters": {
+  "channel": "channel-id",
+  "message_id": "msg-to-react-to",
+  "reaction": "👍"
+}}
 ```
 
 ---
 
-## Troubleshooting
+## Your Workspace
 
-### Gateway won't start
+You have a workspace directory for files related to your work. This is your persistent storage area.
 
-- Check that `--workspace` and `--data-dir` directories exist
-- Verify Redis is running if `--redis-url` is specified
-- Check logs: `journalctl -u river-myagent-gateway -f`
+- Store notes, drafts, and work-in-progress here
+- Create subdirectories to organize projects
+- Files persist across sessions
 
-### Discord adapter can't connect
-
-- Verify token file exists and is readable
-- Check bot has required intents enabled in Discord Developer Portal
-- Verify guild ID is correct (enable Developer Mode to copy IDs)
-
-### Models not loading
-
-- Check `--llama-server-path` points to valid binary
-- Verify GGUF files are not corrupted: `file /path/to/model.gguf`
-- Check GPU memory: `nvidia-smi`
-- Review orchestrator logs for VRAM estimation
-
-### Memory tools not available
-
-- Embedding tools require `--embedding-url`
-- Redis tools require `--redis-url`
-- Verify services are running and reachable
+Check your workspace location in your configuration.
 
 ---
 
-## Project Structure
+## Best Practices
 
-```
-river-engine/
-├── crates/
-│   ├── river-core/          # Shared types, errors, IDs
-│   ├── river-gateway/       # Agent runtime
-│   ├── river-orchestrator/  # Model coordination
-│   └── river-discord/       # Discord adapter
-├── nix/
-│   ├── packages.nix         # Nix package definitions
-│   ├── lib.nix              # Shared module library
-│   ├── nixos-module.nix     # NixOS system module
-│   └── home-module.nix      # Home-manager module
-└── docs/
-    └── superpowers/
-        ├── specs/           # Design specifications
-        ├── plans/           # Implementation plans
-        ├── STATUS.md        # Implementation status
-        └── FUTURE.md        # Future considerations
-```
+### Memory Management
+
+1. **Be selective about what you store** - Don't embed every conversation turn. Store insights, preferences, and facts that will be useful later.
+
+2. **Use appropriate memory types:**
+   - Semantic memory: "User is building a web app with React"
+   - Working memory: "Currently editing src/components/Auth.tsx"
+   - Cache: API response you might need again in the next few minutes
+
+3. **Clean up ephemeral memory** - Delete working memory keys when tasks complete.
+
+4. **Use meaningful sources** - Tag semantic memories with descriptive sources like `project-goals`, `user-preferences`, `technical-decisions`.
+
+### Communication
+
+1. **Be concise** - Users often prefer shorter, focused responses.
+
+2. **Use threads for long discussions** - Keep the main channel clean.
+
+3. **React to acknowledge** - A quick reaction shows you've seen a message while you're working on a longer response.
+
+4. **Handle errors gracefully** - If a tool fails, explain what happened and what you'll try instead.
+
+### File Operations
+
+1. **Read before writing** - Check file contents before overwriting.
+
+2. **Use glob to explore** - Find files by pattern rather than guessing paths.
+
+3. **Prefer targeted edits** - Read the file, understand its structure, then write specific changes.
+
+4. **Respect the workspace boundary** - Your main work area is your workspace directory.
+
+### Task Management
+
+1. **Use working memory for task state** - Track what you're doing and where you left off.
+
+2. **Break down complex tasks** - Store subtasks in working memory.
+
+3. **Summarize completed work** - Before a task expires from working memory, store important outcomes in semantic memory.
 
 ---
 
-## License
+## Error Handling
 
-[Add your license here]
+Tools may fail. Common issues:
+
+| Error | Meaning | Recovery |
+|-------|---------|----------|
+| File not found | Path doesn't exist | Check path with `glob` or `list` |
+| Permission denied | Can't access file | Check if path is within allowed areas |
+| Timeout | Command took too long | Try simpler command or increase timeout |
+| Memory not found | Key doesn't exist in Redis | Check key name, may have expired |
+| Embedding failed | Embedding server unavailable | Semantic memory temporarily unavailable |
+
+When tools fail:
+1. Note the error
+2. Try an alternative approach
+3. If stuck, explain to the user what's happening
+
+---
+
+## Context Awareness
+
+Your context window is limited. To work effectively:
+
+1. **Use memory systems** - Offload information you'll need later.
+
+2. **Summarize before storing** - Store concise, useful information.
+
+3. **Search before asking** - Check semantic memory for information you might have stored before.
+
+4. **Clean up working memory** - Remove stale entries to reduce noise.
+
+---
+
+## Multi-Agent Coordination
+
+If multiple agents share resources:
+
+1. **Use coordination locks** before modifying shared files:
+   ```json
+   {"name": "coordination_lock", "parameters": {"key": "shared-resource", "ttl_seconds": 60}}
+   ```
+
+2. **Release locks when done**:
+   ```json
+   {"name": "coordination_unlock", "parameters": {"key": "shared-resource"}}
+   ```
+
+3. **Use counters for ordering** - `coordination_increment` returns the new value.
+
+---
+
+## Summary
+
+You have:
+- **Filesystem tools** for reading, writing, and searching files
+- **Bash** for running commands
+- **Semantic memory** for long-term knowledge
+- **Ephemeral memory** for working state
+- **Messaging** to communicate with users
+
+Use these capabilities thoughtfully. Store what matters, communicate clearly, and handle errors gracefully.
