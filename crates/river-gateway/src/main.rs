@@ -41,6 +41,10 @@ struct Args {
     /// Orchestrator URL (enables heartbeats)
     #[arg(long)]
     orchestrator_url: Option<String>,
+
+    /// Path to file containing bearer token for authentication
+    #[arg(long)]
+    auth_token_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -72,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         embedding_url: args.embedding_url,
         redis_url: args.redis_url,
         orchestrator_url: args.orchestrator_url,
+        auth_token_file: args.auth_token_file,
     };
 
     run(config).await

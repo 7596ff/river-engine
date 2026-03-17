@@ -20,6 +20,8 @@ pub struct AppState {
     pub redis_client: Option<Arc<RedisClient>>,
     pub loop_tx: mpsc::Sender<LoopEvent>,
     pub message_queue: Arc<MessageQueue>,
+    /// Bearer token for authentication (if configured)
+    pub auth_token: Option<String>,
 }
 
 /// Gateway configuration (runtime)
@@ -47,6 +49,7 @@ impl AppState {
         redis_client: Option<RedisClient>,
         loop_tx: mpsc::Sender<LoopEvent>,
         message_queue: Arc<MessageQueue>,
+        auth_token: Option<String>,
     ) -> Self {
         let executor = ToolExecutor::new(registry, config.context_limit);
 
@@ -59,6 +62,7 @@ impl AppState {
             loop_tx,
             message_queue,
             config,
+            auth_token,
         }
     }
 }
@@ -89,7 +93,7 @@ mod tests {
         let registry = ToolRegistry::new();
         let (loop_tx, _loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
-        let state = AppState::new(config, db, registry, None, None, loop_tx, message_queue);
+        let state = AppState::new(config, db, registry, None, None, loop_tx, message_queue, None);
 
         assert_eq!(state.config.port, 3000);
         assert_eq!(state.config.context_limit, 65536);

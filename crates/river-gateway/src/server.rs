@@ -29,6 +29,7 @@ pub struct ServerConfig {
     pub embedding_url: Option<String>,
     pub redis_url: Option<String>,
     pub orchestrator_url: Option<String>,
+    pub auth_token_file: Option<PathBuf>,
 }
 
 /// Initialize and run the gateway server
@@ -158,6 +159,20 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         max_tool_calls_per_generation: 50,
     };
 
+    // Load auth token if configured
+    let auth_token = if let Some(ref token_file) = config.auth_token_file {
+        let token = tokio::fs::read_to_string(token_file)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read auth token file: {}", e))?
+            .trim()
+            .to_string();
+        tracing::info!("Loaded auth token from {:?}", token_file);
+        Some(token)
+    } else {
+        tracing::warn!("No auth token configured - API endpoints are unprotected");
+        None
+    };
+
     // Create app state
     let state = Arc::new(AppState::new(
         gateway_config,
@@ -167,6 +182,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         redis_client,
         loop_tx,
         message_queue.clone(),
+        auth_token,
     ));
 
     // Spawn the agent loop
