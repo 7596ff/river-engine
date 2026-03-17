@@ -289,19 +289,49 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits
 
 ### 4.2 Memory Tracking
 
-Track system RAM for CPU-only inference:
+Track system RAM and swap for CPU-only inference:
 
 ```rust
 pub struct SystemMemory {
-    pub total: u64,
-    pub available: u64,
+    pub total_ram: u64,
+    pub available_ram: u64,
     pub used_by_models: u64,
+    pub total_swap: u64,
+    pub available_swap: u64,
 }
 
 impl SystemMemory {
     pub fn current() -> Self {
-        // Read from /proc/meminfo
+        // Read from /proc/meminfo:
+        // - MemTotal, MemAvailable
+        // - SwapTotal, SwapFree
     }
+
+    /// Check if loading a model would require swap
+    pub fn would_use_swap(&self, model_bytes: u64) -> bool {
+        let after_load = self.used_by_models + model_bytes;
+        after_load > self.available_ram
+    }
+
+    /// Estimate how much swap would be used
+    pub fn estimated_swap_usage(&self, model_bytes: u64) -> u64 {
+        let after_load = self.used_by_models + model_bytes;
+        after_load.saturating_sub(self.available_ram)
+    }
+}
+```
+
+**Swap Warning:**
+When loading a model on CPU that would require swap, log a warning but proceed:
+
+```rust
+if system_memory.would_use_swap(model.metadata.estimated_vram) {
+    let swap_needed = system_memory.estimated_swap_usage(model.metadata.estimated_vram);
+    tracing::warn!(
+        "Model '{}' will use ~{:.1}GB swap. Expect slow inference due to memory pressure.",
+        model.id,
+        swap_needed as f64 / 1_073_741_824.0
+    );
 }
 ```
 
@@ -743,6 +773,18 @@ The endpoint blocks for up to `timeout_seconds` (default: 120). If the model bec
 }
 ```
 
+**Response (success with swap warning):**
+```json
+{
+  "status": "ready",
+  "endpoint": "http://localhost:8082/v1/chat/completions",
+  "model": "llama3-70b-q4_k_m",
+  "device": "cpu",
+  "priority": "interactive",
+  "warning": "Model will use ~8.5GB swap. Expect slow inference due to memory pressure."
+}
+```
+
 **Response (loading - timeout expired):**
 ```json
 {
@@ -866,7 +908,9 @@ List all models with detailed status.
       {
         "id": "cpu",
         "total_ram_gb": 64.0,
-        "available_ram_gb": 48.2
+        "available_ram_gb": 48.2,
+        "total_swap_gb": 32.0,
+        "available_swap_gb": 31.5
       }
     ]
   },
@@ -984,6 +1028,8 @@ RiverError::orchestrator("Local model inference unavailable: llama-server not fo
 ### 9.2 Graceful Degradation
 
 - **No GPUs detected**: Fall back to CPU-only inference, log info message
+- **Insufficient VRAM**: Fall back to CPU if model doesn't fit on any GPU
+- **Model would use swap**: Log warning, proceed anyway (swap is slow but works)
 - **llama-server not found**: Log warning at startup, return specific error on `/model/request` for local models, external models still work
 - **Model directory missing**: Log warning, skip that directory, continue with others
 - **GGUF parse failure**: Log warning with path, skip that model, continue scanning
