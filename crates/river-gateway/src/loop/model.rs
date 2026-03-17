@@ -14,13 +14,13 @@ pub struct ModelClient {
 }
 
 impl ModelClient {
-    pub fn new(url: String, model: String, timeout: Duration) -> Self {
+    pub fn new(url: String, model: String, timeout: Duration) -> Result<Self, RiverError> {
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| RiverError::config(format!("Failed to create HTTP client: {}", e)))?;
 
-        Self { url, model, http }
+        Ok(Self { url, model, http })
     }
 
     /// Call the model with the current context
@@ -57,7 +57,7 @@ impl ModelClient {
             .await
             .map_err(|e| RiverError::model(format!("JSON parse error: {}", e)))?;
 
-        Ok(ModelResponse::from(completion))
+        ModelResponse::from_completion(completion)
     }
 
     /// Get the model URL
@@ -124,14 +124,11 @@ pub struct ModelResponse {
     pub usage: Usage,
 }
 
-impl From<ChatCompletionResponse> for ModelResponse {
-    fn from(resp: ChatCompletionResponse) -> Self {
-        let choice = resp.choices.into_iter().next().unwrap_or(Choice {
-            message: AssistantMessage {
-                content: None,
-                tool_calls: None,
-            },
-        });
+impl ModelResponse {
+    fn from_completion(resp: ChatCompletionResponse) -> Result<Self, RiverError> {
+        let choice = resp.choices.into_iter().next().ok_or_else(|| {
+            RiverError::model("API response contained no choices".to_string())
+        })?;
 
         let tool_calls = choice
             .message
@@ -148,15 +145,13 @@ impl From<ChatCompletionResponse> for ModelResponse {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             content: choice.message.content,
             tool_calls,
             usage: resp.usage,
-        }
+        })
     }
-}
 
-impl ModelResponse {
     /// Check if response has tool calls
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
@@ -205,7 +200,8 @@ mod tests {
             "http://localhost:8080".to_string(),
             "test-model".to_string(),
             Duration::from_secs(30),
-        );
+        )
+        .expect("test client creation should succeed");
         assert_eq!(client.url(), "http://localhost:8080");
         assert_eq!(client.model(), "test-model");
     }
