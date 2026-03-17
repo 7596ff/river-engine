@@ -22,6 +22,8 @@ impl Default for ResourceConfig {
 /// Central tracker for all device resources
 pub struct ResourceTracker {
     devices: RwLock<Vec<DeviceResources>>,
+    /// Config is applied during construction; kept for potential runtime reconfiguration
+    #[allow(dead_code)]
     config: ResourceConfig,
 }
 

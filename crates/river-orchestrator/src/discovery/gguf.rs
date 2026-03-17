@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use river_core::RiverError;
 
 /// Quantization types supported in GGUF models
+/// Names match GGUF specification naming convention
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum QuantizationType {
     Q4_0,
     Q4_1,
@@ -97,7 +99,9 @@ impl GgufMetadata {
 const GGUF_MAGIC: u32 = 0x46554747;
 
 /// GGUF value types for metadata key-value pairs
+/// All variants defined per GGUF spec; not all are currently parsed
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum GgufValue {
     U32(u32),
     I32(i32),

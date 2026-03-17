@@ -5,7 +5,7 @@
 
 use crate::tools::{Tool, ToolResult};
 use river_core::RiverError;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +51,7 @@ impl Default for ModelManagerState {
 #[derive(Debug, Deserialize)]
 struct ModelRequestResponse {
     status: String,
+    #[allow(dead_code)] // Present in API response but we use the local variable
     model: String,
     endpoint: Option<String>,
     device: Option<String>,

@@ -1,7 +1,7 @@
 //! Embedding server client (llama-server --embedding compatible)
 
 use river_core::{RiverError, RiverResult};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// Configuration for embedding server
 #[derive(Debug, Clone)]
@@ -26,11 +26,6 @@ impl Default for EmbeddingConfig {
 pub struct EmbeddingClient {
     client: reqwest::Client,
     config: EmbeddingConfig,
-}
-
-#[derive(Serialize)]
-struct EmbeddingRequest {
-    input: String,
 }
 
 #[derive(Deserialize)]
