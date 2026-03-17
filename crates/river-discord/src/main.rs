@@ -37,17 +37,20 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Connected to Discord");
 
     // Get application ID for slash commands
-    let app_info = discord.http.current_user_application().await?.model().await?;
+    let app_info = discord.http().current_user_application().await?.model().await?;
     let application_id = app_info.id;
 
     // Register slash commands
-    register_commands(&discord.http, application_id, discord.guild_id).await?;
+    register_commands(discord.http(), application_id, discord.guild_id()).await?;
 
     // Create event handler
     let event_handler = EventHandler::new(channels.clone(), gateway_client.clone());
 
     // Create HTTP server state
     let http_state = AppState::new(channels.clone());
+
+    // Set up Discord sender for outbound messages
+    http_state.set_discord(discord.sender()).await;
 
     // Spawn HTTP server
     let http_state_clone = http_state.clone();
@@ -96,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
                 event_handler.handle_reaction(reaction).await;
             }
             Event::InteractionCreate(interaction) => {
-                let http = discord.http.clone();
+                let http = discord.http().clone();
                 let channels = channels.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_interaction(&http, interaction.0, channels).await {

@@ -9,8 +9,10 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use crate::channels::ChannelState;
+use crate::client::DiscordSender;
 
 /// Send message request from gateway
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,7 @@ pub struct HealthResponse {
 /// Shared application state for HTTP server
 pub struct AppState {
     pub channels: Arc<ChannelState>,
+    pub discord: Arc<RwLock<Option<DiscordSender>>>,
     pub discord_connected: std::sync::atomic::AtomicBool,
     pub gateway_reachable: std::sync::atomic::AtomicBool,
 }
@@ -100,9 +103,14 @@ impl AppState {
     pub fn new(channels: Arc<ChannelState>) -> Arc<Self> {
         Arc::new(Self {
             channels,
+            discord: Arc::new(RwLock::new(None)),
             discord_connected: std::sync::atomic::AtomicBool::new(false),
             gateway_reachable: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    pub async fn set_discord(&self, sender: DiscordSender) {
+        *self.discord.write().await = Some(sender);
     }
 
     pub fn set_discord_connected(&self, connected: bool) {
@@ -154,7 +162,7 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
 }
 
 async fn handle_send(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<SendRequest>,
 ) -> Result<Json<SendResponse>, (StatusCode, Json<SendResponse>)> {
     // Validate request
@@ -169,11 +177,139 @@ async fn handle_send(
         ));
     }
 
-    // TODO: Actually send to Discord via Twilight HTTP client
-    // For now, return a placeholder response
+    // Get Discord sender
+    let discord_guard = state.discord.read().await;
+    let Some(ref discord) = *discord_guard else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("discord client not initialized".to_string()),
+            }),
+        ));
+    };
+
+    // Parse channel ID
+    let channel_id: u64 = req.channel.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("invalid channel id".to_string()),
+            }),
+        )
+    })?;
+
+    // Handle reaction
+    if let Some(emoji) = &req.reaction {
+        let message_id: u64 = req
+            .reply_to
+            .as_ref()
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(SendResponse {
+                        success: false,
+                        message_id: None,
+                        error: Some("reply_to required for reactions".to_string()),
+                    }),
+                )
+            })?
+            .parse()
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(SendResponse {
+                        success: false,
+                        message_id: None,
+                        error: Some("invalid message id".to_string()),
+                    }),
+                )
+            })?;
+
+        discord
+            .add_reaction(channel_id, message_id, emoji)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(SendResponse {
+                        success: false,
+                        message_id: None,
+                        error: Some(format!("discord api error: {}", e)),
+                    }),
+                )
+            })?;
+
+        return Ok(Json(SendResponse {
+            success: true,
+            message_id: None,
+            error: None,
+        }));
+    }
+
+    // Handle message
+    let content = req.content.as_ref().unwrap();
+    let reply_to = req.reply_to.as_ref().and_then(|s| s.parse().ok());
+
+    // If thread_id is provided, use it as the target channel (threads are channels in Discord)
+    let target_channel_id = if let Some(ref thread_id_str) = req.thread_id {
+        thread_id_str.parse().map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(SendResponse {
+                    success: false,
+                    message_id: None,
+                    error: Some("invalid thread_id".to_string()),
+                }),
+            )
+        })?
+    } else {
+        channel_id
+    };
+
+    let message_id = discord
+        .send_message(target_channel_id, content, reply_to)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(SendResponse {
+                    success: false,
+                    message_id: None,
+                    error: Some(format!("discord api error: {}", e)),
+                }),
+            )
+        })?;
+
+    // If create_thread is provided, create a thread from the message we just sent
+    if let Some(ref thread_name) = req.create_thread {
+        let thread_id = discord
+            .create_thread(target_channel_id, message_id, thread_name)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(SendResponse {
+                        success: false,
+                        message_id: Some(message_id.to_string()),
+                        error: Some(format!("failed to create thread: {}", e)),
+                    }),
+                )
+            })?;
+
+        // Add the thread to channel state so we listen to it
+        state.channels.add(thread_id).await;
+        tracing::info!(thread_id = thread_id, "Created thread and added to listen set");
+    }
+
+    tracing::info!("Sent message to Discord");
+
     Ok(Json(SendResponse {
         success: true,
-        message_id: Some("placeholder".to_string()),
+        message_id: Some(message_id.to_string()),
         error: None,
     }))
 }
@@ -280,7 +416,10 @@ mod tests {
             create_thread: None,
             reaction: None,
         };
-        assert_eq!(req.validate().unwrap_err(), "must provide content or reaction");
+        assert_eq!(
+            req.validate().unwrap_err(),
+            "must provide content or reaction"
+        );
     }
 
     #[test]
@@ -293,7 +432,10 @@ mod tests {
             create_thread: None,
             reaction: Some("\u{1F44D}".to_string()),
         };
-        assert_eq!(req.validate().unwrap_err(), "content and reaction are mutually exclusive");
+        assert_eq!(
+            req.validate().unwrap_err(),
+            "content and reaction are mutually exclusive"
+        );
     }
 
     #[test]

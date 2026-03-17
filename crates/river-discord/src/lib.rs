@@ -11,7 +11,7 @@ pub mod handler;
 pub mod outbound;
 
 pub use channels::ChannelState;
-pub use client::DiscordClient;
+pub use client::{DiscordClient, DiscordSender};
 pub use config::{Args, DiscordConfig};
 pub use gateway::{Author, EventMetadata, GatewayClient, GatewayError, IncomingEvent, IncomingResponse};
 pub use handler::EventHandler;

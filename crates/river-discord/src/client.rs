@@ -5,46 +5,15 @@ use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt
 use twilight_http::Client as HttpClient;
 use twilight_model::id::{marker::GuildMarker, Id};
 
-/// Discord client wrapping Twilight components
-pub struct DiscordClient {
+/// Shared Discord HTTP client (for sending messages)
+/// Can be cloned and shared across tasks
+#[derive(Clone)]
+pub struct DiscordSender {
     pub http: Arc<HttpClient>,
-    pub shard: Shard,
     pub guild_id: Id<GuildMarker>,
 }
 
-impl DiscordClient {
-    /// Create a new Discord client
-    pub async fn new(token: &str, guild_id: u64) -> anyhow::Result<Self> {
-        let http = Arc::new(HttpClient::new(token.to_string()));
-
-        let intents = Intents::GUILDS
-            | Intents::GUILD_MESSAGES
-            | Intents::GUILD_MESSAGE_REACTIONS
-            | Intents::MESSAGE_CONTENT
-            | Intents::DIRECT_MESSAGES;
-
-        let shard = Shard::new(ShardId::ONE, token.to_string(), intents);
-
-        Ok(Self {
-            http,
-            shard,
-            guild_id: Id::new(guild_id),
-        })
-    }
-
-    /// Receive the next event from Discord
-    pub async fn next_event(&mut self) -> Option<Event> {
-        // next_event returns Option<Result<Event, ReceiveMessageError>>
-        match self.shard.next_event(EventTypeFlags::all()).await {
-            Some(Ok(event)) => Some(event),
-            Some(Err(e)) => {
-                tracing::warn!("Error receiving Discord event: {}", e);
-                None
-            }
-            None => None,
-        }
-    }
-
+impl DiscordSender {
     /// Send a message to a channel
     pub async fn send_message(
         &self,
@@ -91,9 +60,85 @@ impl DiscordClient {
         Ok(())
     }
 
+    /// Create a thread from a message
+    pub async fn create_thread(
+        &self,
+        channel_id: u64,
+        message_id: u64,
+        name: &str,
+    ) -> anyhow::Result<u64> {
+        use twilight_model::id::{marker::ChannelMarker, marker::MessageMarker, Id};
+
+        let channel: Id<ChannelMarker> = Id::new(channel_id);
+        let message: Id<MessageMarker> = Id::new(message_id);
+
+        let response = self
+            .http
+            .create_thread_from_message(channel, message, name)
+            .await?;
+        let thread = response.model().await?;
+
+        Ok(thread.id.get())
+    }
+}
+
+/// Discord client with gateway shard (for receiving events)
+pub struct DiscordClient {
+    pub sender: DiscordSender,
+    pub shard: Shard,
+}
+
+impl DiscordClient {
+    /// Create a new Discord client
+    pub async fn new(token: &str, guild_id: u64) -> anyhow::Result<Self> {
+        let http = Arc::new(HttpClient::new(token.to_string()));
+
+        let intents = Intents::GUILDS
+            | Intents::GUILD_MESSAGES
+            | Intents::GUILD_MESSAGE_REACTIONS
+            | Intents::MESSAGE_CONTENT
+            | Intents::DIRECT_MESSAGES;
+
+        let shard = Shard::new(ShardId::ONE, token.to_string(), intents);
+
+        Ok(Self {
+            sender: DiscordSender {
+                http,
+                guild_id: Id::new(guild_id),
+            },
+            shard,
+        })
+    }
+
+    /// Get the sender (can be cloned and shared)
+    pub fn sender(&self) -> DiscordSender {
+        self.sender.clone()
+    }
+
+    /// Get the HTTP client (for slash command registration)
+    pub fn http(&self) -> &Arc<HttpClient> {
+        &self.sender.http
+    }
+
+    /// Get the guild ID
+    pub fn guild_id(&self) -> Id<GuildMarker> {
+        self.sender.guild_id
+    }
+
+    /// Receive the next event from Discord
+    pub async fn next_event(&mut self) -> Option<Event> {
+        match self.shard.next_event(EventTypeFlags::all()).await {
+            Some(Ok(event)) => Some(event),
+            Some(Err(e)) => {
+                tracing::warn!("Error receiving Discord event: {}", e);
+                None
+            }
+            None => None,
+        }
+    }
+
     /// Check if connected to Discord
     pub fn is_connected(&self) -> bool {
-        // is_identified returns true if Active or Resuming
         self.shard.state().is_identified()
     }
 }
