@@ -1,4 +1,8 @@
 //! Thread-safe message queue for mid-generation messages
+//!
+//! Note: This queue uses `unwrap()` on mutex locks. Mutex poisoning only occurs
+//! when a thread panics while holding the lock, which would indicate a severe
+//! bug elsewhere. In that case, propagating the panic is the correct behavior.
 
 use crate::api::IncomingMessage;
 use std::collections::VecDeque;

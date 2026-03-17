@@ -180,6 +180,8 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     );
     tokio::spawn(async move {
         agent_loop.run().await;
+        // Log if the loop exits (shouldn't happen in normal operation)
+        tracing::error!("Agent loop exited unexpectedly");
     });
 
     // Create router
