@@ -314,14 +314,10 @@ impl AgentLoop {
             executor.context_status()
         };
 
-        if context_status.is_near_limit() {
-            tracing::warn!("Context at {:.1}% - approaching limit", context_status.percent());
-        }
-
         // Add tool results and incoming messages to context
-        self.context.add_tool_results(results, incoming_messages, context_status);
+        self.context.add_tool_results(results, incoming_messages, context_status.clone());
 
-        // Check if context rotation was requested
+        // Check if context rotation was requested manually
         if let Some(reason) = self.context_rotation.take_request() {
             if reason.is_empty() {
                 tracing::info!("Context rotation requested (no reason given)");
@@ -329,6 +325,17 @@ impl AgentLoop {
                 tracing::info!("Context rotation requested: {}", reason);
             }
             // Go to settling, which will clear context on next wake
+            self.state = LoopState::Settling;
+        } else if context_status.is_near_limit() {
+            // Automatic rotation at 90% per spec Section 3.7
+            // Penalty: Agent must recover state from workspace files and memory search
+            tracing::warn!(
+                "AUTOMATIC CONTEXT ROTATION: {:.1}% of limit reached ({}k/{}k tokens). \
+                Session will reset. Agent must recover from workspace/memory.",
+                context_status.percent(),
+                context_status.used / 1000,
+                context_status.limit / 1000
+            );
             self.state = LoopState::Settling;
         } else {
             // Back to thinking
