@@ -10,7 +10,7 @@ use crate::resources::{DeviceId, ResourceConfig, ResourceTracker, SystemMemory};
 use river_core::RiverError;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Model status for API responses
@@ -128,8 +128,15 @@ impl OrchestratorState {
     }
 
     /// Request a model to be loaded
-    pub async fn request_model(&self, model_id: &str) -> Result<ModelRequestResponse, RiverError> {
-        // Check external models first
+    ///
+    /// Blocks for up to `timeout_seconds` waiting for the model to become ready.
+    /// Returns `Loading` if timeout expires (model continues loading in background).
+    pub async fn request_model(&self, model_id: &str, timeout_seconds: u32) -> Result<ModelRequestResponse, RiverError> {
+        let timeout = Duration::from_secs(timeout_seconds as u64);
+        let start = Instant::now();
+        let poll_interval = Duration::from_millis(500);
+
+        // Check external models first (always ready immediately)
         for ext in &self.external_models {
             if ext.id == model_id {
                 return Ok(ModelRequestResponse::Ready {
@@ -141,84 +148,158 @@ impl OrchestratorState {
         }
 
         // Check local models
-        let mut local_models = self.local_models.write().await;
-        let entry = local_models.get_mut(model_id).ok_or_else(|| {
-            RiverError::orchestrator(format!("Model not found: {}", model_id))
-        })?;
-
-        // Already loaded?
-        if let LocalModelStatus::Loaded { endpoint, device, .. } = &entry.status {
-            return Ok(ModelRequestResponse::Ready {
-                endpoint: endpoint.clone(),
-                device: Some(*device),
-                warning: None,
-            });
-        }
-
-        // Check if llama-server is available
-        if !self.process_manager.is_available() {
-            return Err(RiverError::orchestrator(
-                "Local model inference unavailable: llama-server not found"
-            ));
-        }
-
-        // Find a device (or evict to make space)
-        let vram_needed = entry.model.metadata.estimate_vram();
-        let device = match self.resource_tracker.find_device_for(vram_needed).await {
-            Some(dev) => dev,
-            None => {
-                // Try to evict releasable models to make space
-                self.evict_for_space(vram_needed).await?;
-                self.resource_tracker.find_device_for(vram_needed).await
-                    .ok_or_else(|| {
-                        RiverError::orchestrator(format!(
-                            "Insufficient resources: model requires {} bytes, eviction failed",
-                            vram_needed
-                        ))
-                    })?
+        {
+            let local_models = self.local_models.read().await;
+            if !local_models.contains_key(model_id) {
+                return Err(RiverError::orchestrator(format!("Model not found: {}", model_id)));
             }
-        };
+        }
 
-        // Check for swap warning on CPU
-        let warning = if matches!(device, DeviceId::Cpu) {
-            let sys_mem = SystemMemory::current();
-            let cpu_allocated = self.resource_tracker.cpu_allocated().await;
-            if sys_mem.would_use_swap(vram_needed, cpu_allocated) {
-                let swap_gb = sys_mem.estimated_swap_usage(vram_needed, cpu_allocated) as f64
-                    / 1_073_741_824.0;
-                Some(format!(
-                    "Model will use ~{:.1}GB swap. Expect slow inference due to memory pressure.",
-                    swap_gb
-                ))
+        // Main loop: check status, spawn if needed, poll until ready or timeout
+        loop {
+            // Check current status
+            {
+                let local_models = self.local_models.read().await;
+                if let Some(entry) = local_models.get(model_id) {
+                    match &entry.status {
+                        LocalModelStatus::Loaded { endpoint, device, .. } => {
+                            return Ok(ModelRequestResponse::Ready {
+                                endpoint: endpoint.clone(),
+                                device: Some(*device),
+                                warning: None,
+                            });
+                        }
+                        LocalModelStatus::Loading => {
+                            // Model is loading (either from us or another request)
+                            // Check timeout and continue polling
+                            if start.elapsed() >= timeout {
+                                let remaining = 30; // Estimate 30 more seconds
+                                return Ok(ModelRequestResponse::Loading {
+                                    estimated_seconds: remaining,
+                                });
+                            }
+                            // Drop lock and poll again after interval
+                            drop(local_models);
+                            tokio::time::sleep(poll_interval).await;
+                            continue;
+                        }
+                        LocalModelStatus::Error(e) => {
+                            return Err(RiverError::orchestrator(format!(
+                                "Model failed to load: {}", e
+                            )));
+                        }
+                        LocalModelStatus::Available => {
+                            // Need to spawn - continue below
+                        }
+                    }
+                }
+            }
+
+            // Model is Available - need to spawn it
+            // Check if llama-server is available
+            if !self.process_manager.is_available() {
+                return Err(RiverError::orchestrator(
+                    "Local model inference unavailable: llama-server not found"
+                ));
+            }
+
+            // Get model info and find device
+            let (model_clone, vram_needed) = {
+                let local_models = self.local_models.read().await;
+                let entry = local_models.get(model_id).ok_or_else(|| {
+                    RiverError::orchestrator(format!("Model not found: {}", model_id))
+                })?;
+                (entry.model.clone(), entry.model.metadata.estimate_vram())
+            };
+
+            let device = match self.resource_tracker.find_device_for(vram_needed).await {
+                Some(dev) => dev,
+                None => {
+                    // Try to evict releasable models to make space
+                    self.evict_for_space(vram_needed).await?;
+                    self.resource_tracker.find_device_for(vram_needed).await
+                        .ok_or_else(|| {
+                            RiverError::orchestrator(format!(
+                                "Insufficient resources: model requires {} bytes, eviction failed",
+                                vram_needed
+                            ))
+                        })?
+                }
+            };
+
+            // Check for swap warning on CPU
+            let warning = if matches!(device, DeviceId::Cpu) {
+                let sys_mem = SystemMemory::current();
+                let cpu_allocated = self.resource_tracker.cpu_allocated().await;
+                if sys_mem.would_use_swap(vram_needed, cpu_allocated) {
+                    let swap_gb = sys_mem.estimated_swap_usage(vram_needed, cpu_allocated) as f64
+                        / 1_073_741_824.0;
+                    Some(format!(
+                        "Model will use ~{:.1}GB swap. Expect slow inference due to memory pressure.",
+                        swap_gb
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
+            };
+
+            // Mark as loading before spawning
+            {
+                let mut local_models = self.local_models.write().await;
+                if let Some(entry) = local_models.get_mut(model_id) {
+                    entry.status = LocalModelStatus::Loading;
+                }
             }
-        } else {
-            None
-        };
 
-        // Mark as loading
-        entry.status = LocalModelStatus::Loading;
+            // Spawn process (this blocks until healthy or its internal timeout)
+            match self.process_manager.spawn(&model_clone, device).await {
+                Ok(snapshot) => {
+                    // Allocate resources
+                    self.resource_tracker.allocate(model_id, device, vram_needed).await;
 
-        // Spawn process
-        let snapshot = self.process_manager.spawn(&entry.model, device).await?;
+                    // Update status to loaded
+                    let endpoint = format!("http://127.0.0.1:{}/v1/chat/completions", snapshot.port);
+                    {
+                        let mut local_models = self.local_models.write().await;
+                        if let Some(entry) = local_models.get_mut(model_id) {
+                            entry.status = LocalModelStatus::Loaded {
+                                endpoint: endpoint.clone(),
+                                device,
+                                idle_seconds: 0,
+                            };
+                        }
+                    }
 
-        // Allocate resources
-        self.resource_tracker.allocate(model_id, device, vram_needed).await;
+                    return Ok(ModelRequestResponse::Ready {
+                        endpoint,
+                        device: Some(device),
+                        warning,
+                    });
+                }
+                Err(e) => {
+                    // Check if it's a timeout error - return Loading instead
+                    let error_msg = e.to_string();
+                    if error_msg.contains("timeout") || error_msg.contains("Health check") {
+                        // Model is still loading in background
+                        return Ok(ModelRequestResponse::Loading {
+                            estimated_seconds: 30, // Estimate 30 more seconds
+                        });
+                    }
 
-        // Update status
-        let endpoint = format!("http://127.0.0.1:{}/v1/chat/completions", snapshot.port);
-        entry.status = LocalModelStatus::Loaded {
-            endpoint: endpoint.clone(),
-            device,
-            idle_seconds: 0,
-        };
+                    // Mark as error
+                    {
+                        let mut local_models = self.local_models.write().await;
+                        if let Some(entry) = local_models.get_mut(model_id) {
+                            entry.status = LocalModelStatus::Error(error_msg.clone());
+                        }
+                    }
 
-        Ok(ModelRequestResponse::Ready {
-            endpoint,
-            device: Some(device),
-            warning,
-        })
+                    return Err(e);
+                }
+            }
+        }
     }
 
     /// Mark a model as releasable for eviction

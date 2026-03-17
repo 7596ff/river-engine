@@ -266,7 +266,7 @@ async fn model_request(
     State(state): State<Arc<OrchestratorState>>,
     Json(req): Json<ModelRequest>,
 ) -> Result<Json<ModelRequestApiResponse>, (StatusCode, Json<ModelRequestApiResponse>)> {
-    match state.request_model(&req.model).await {
+    match state.request_model(&req.model, req.timeout_seconds).await {
         Ok(ModelRequestResponse::Ready { endpoint, device, warning }) => {
             Ok(Json(ModelRequestApiResponse {
                 status: "ready".to_string(),
