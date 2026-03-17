@@ -336,6 +336,18 @@ impl ProcessManager {
             .map(|info| info.model_id.clone())
             .collect()
     }
+
+    /// Mark a process as unhealthy
+    pub async fn mark_unhealthy(&self, model_id: &str, reason: &str) {
+        let mut processes = self.processes.write().await;
+        if let Some(proc) = processes.get_mut(model_id) {
+            proc.health = ProcessHealth::Unhealthy {
+                since: std::time::Instant::now(),
+                reason: reason.to_string(),
+            };
+            tracing::warn!("Process {} marked unhealthy: {}", model_id, reason);
+        }
+    }
 }
 
 #[cfg(test)]
