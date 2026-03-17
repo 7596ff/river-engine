@@ -28,3 +28,7 @@ glob = "0.3"
 regex = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 fred = { version = "9.0", features = ["enable-rustls"] }
+twilight-gateway = "0.16"
+twilight-http = "0.16"
+twilight-model = "0.16"
+twilight-util = { version = "0.16", features = ["builder"] }

@@ -1,0 +1,31 @@
+[package]
+name = "river-discord"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "River Engine Discord adapter using Twilight"
+
+[[bin]]
+name = "river-discord"
+path = "src/main.rs"
+
+[dependencies]
+river-core = { path = "../river-core" }
+tokio.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+twilight-gateway.workspace = true
+twilight-http.workspace = true
+twilight-model.workspace = true
+twilight-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"
+tower = { workspace = true, features = ["util"] }
