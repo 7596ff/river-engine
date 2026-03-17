@@ -7,6 +7,7 @@ mod shell;
 mod memory;
 mod communication;
 mod web;
+mod model;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -17,3 +18,6 @@ pub use communication::{
     AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool
 };
 pub use web::WebFetchTool;
+pub use model::{
+    ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
+};
