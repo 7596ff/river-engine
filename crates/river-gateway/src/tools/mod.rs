@@ -9,6 +9,7 @@ mod communication;
 mod web;
 mod model;
 mod scheduling;
+mod logging;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -24,3 +25,4 @@ pub use model::{
     ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
 };
 pub use scheduling::{ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool};
+pub use logging::LogReadTool;
