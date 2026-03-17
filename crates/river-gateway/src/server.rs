@@ -192,6 +192,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         model_client,
         state.tool_executor.clone(),
         db_arc,
+        snowflake_gen,
         loop_config,
     );
     tokio::spawn(async move {

@@ -10,12 +10,14 @@ pub use queue::MessageQueue;
 pub use context::{ChatMessage, ContextBuilder, ToolCallRequest, FunctionCall};
 pub use model::{ModelClient, ModelResponse, Usage};
 
-use crate::db::Database;
+use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
+use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ToolExecutor, ToolCall};
+use river_core::{SnowflakeGenerator, SnowflakeType};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 
 /// Configuration for the agent loop
@@ -53,8 +55,8 @@ pub struct AgentLoop {
     model_client: ModelClient,
     context: ContextBuilder,
     tool_executor: Arc<RwLock<ToolExecutor>>,
-    #[allow(dead_code)]
     db: Arc<Mutex<Database>>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
     config: LoopConfig,
     pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
@@ -68,6 +70,7 @@ impl AgentLoop {
         model_client: ModelClient,
         tool_executor: Arc<RwLock<ToolExecutor>>,
         db: Arc<Mutex<Database>>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
         config: LoopConfig,
     ) -> Self {
         let git = GitOps::new(&config.workspace);
@@ -79,6 +82,7 @@ impl AgentLoop {
             context: ContextBuilder::new(),
             tool_executor,
             db,
+            snowflake_gen,
             pending_tool_calls: Vec::new(),
             shutdown_requested: false,
             git,
@@ -290,10 +294,70 @@ impl AgentLoop {
         self.state = LoopState::Thinking;
     }
 
+    /// Persist conversation messages to database
+    fn persist_messages(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::error!("Failed to acquire database lock: {}", e);
+                return;
+            }
+        };
+
+        let mut persisted = 0;
+        for chat_msg in self.context.messages() {
+            // Skip system messages - they're context assembly, not conversation
+            if chat_msg.role == "system" {
+                continue;
+            }
+
+            // Convert role string to MessageRole enum
+            let role = match chat_msg.role.as_str() {
+                "user" => MessageRole::User,
+                "assistant" => MessageRole::Assistant,
+                "tool" => MessageRole::Tool,
+                _ => continue, // Skip unknown roles
+            };
+
+            // Serialize tool_calls to JSON if present
+            let tool_calls_json = chat_msg.tool_calls.as_ref().map(|tc| {
+                serde_json::to_string(tc).unwrap_or_default()
+            });
+
+            let msg = Message {
+                id: self.snowflake_gen.next_id(SnowflakeType::Message),
+                session_id: PRIMARY_SESSION_ID.to_string(),
+                role,
+                content: chat_msg.content.clone(),
+                tool_calls: tool_calls_json,
+                tool_call_id: chat_msg.tool_call_id.clone(),
+                name: chat_msg.name.clone(),
+                created_at: now,
+                metadata: None,
+            };
+
+            if let Err(e) = db.insert_message(&msg) {
+                tracing::warn!("Failed to persist message: {}", e);
+            } else {
+                persisted += 1;
+            }
+        }
+
+        if persisted > 0 {
+            tracing::debug!("Persisted {} messages to database", persisted);
+        }
+    }
+
     async fn settle_phase(&mut self) {
         tracing::debug!("Settling...");
 
-        // TODO: Persist messages to database
+        // Persist conversation messages to database
+        self.persist_messages();
 
         // Git commit if workspace changed
         if self.git.is_git_repo() {
