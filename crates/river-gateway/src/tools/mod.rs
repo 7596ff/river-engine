@@ -8,6 +8,7 @@ mod memory;
 mod communication;
 mod web;
 mod model;
+mod scheduling;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -22,3 +23,4 @@ pub use web::WebFetchTool;
 pub use model::{
     ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
 };
+pub use scheduling::{HeartbeatScheduler, ScheduleHeartbeatTool};

@@ -13,7 +13,7 @@ pub use model::{ModelClient, ModelResponse, Usage};
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::session::PRIMARY_SESSION_ID;
-use crate::tools::{ToolExecutor, ToolCall};
+use crate::tools::{HeartbeatScheduler, ToolExecutor, ToolCall};
 use river_core::{SnowflakeGenerator, SnowflakeType};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -57,6 +57,7 @@ pub struct AgentLoop {
     tool_executor: Arc<RwLock<ToolExecutor>>,
     db: Arc<Mutex<Database>>,
     snowflake_gen: Arc<SnowflakeGenerator>,
+    heartbeat_scheduler: Arc<HeartbeatScheduler>,
     config: LoopConfig,
     pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
@@ -76,6 +77,7 @@ impl AgentLoop {
         config: LoopConfig,
     ) -> Self {
         let git = GitOps::new(&config.workspace);
+        let heartbeat_scheduler = Arc::new(HeartbeatScheduler::new(config.default_heartbeat_minutes));
         Self {
             state: LoopState::Sleeping,
             event_rx,
@@ -85,12 +87,18 @@ impl AgentLoop {
             tool_executor,
             db,
             snowflake_gen,
+            heartbeat_scheduler,
             pending_tool_calls: Vec::new(),
             shutdown_requested: false,
             git,
             config,
             pending_notifications: Vec::new(),
         }
+    }
+
+    /// Get a reference to the heartbeat scheduler for tools
+    pub fn heartbeat_scheduler(&self) -> Arc<HeartbeatScheduler> {
+        self.heartbeat_scheduler.clone()
     }
 
     /// Run the continuous loop
@@ -125,9 +133,7 @@ impl AgentLoop {
     }
 
     async fn sleep_phase(&mut self) {
-        let heartbeat_delay = Duration::from_secs(
-            self.config.default_heartbeat_minutes as u64 * 60
-        );
+        let heartbeat_delay = self.heartbeat_scheduler.take_delay();
 
         tokio::select! {
             event = self.event_rx.recv() => {
