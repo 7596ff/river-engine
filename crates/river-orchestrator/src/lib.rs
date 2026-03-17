@@ -3,6 +3,7 @@
 //! Coordination service for River Engine agents.
 
 pub mod agents;
+pub mod discovery;
 pub mod api;
 pub mod config;
 pub mod models;
