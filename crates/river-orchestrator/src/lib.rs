@@ -4,6 +4,7 @@
 
 pub mod agents;
 pub mod discovery;
+pub mod resources;
 pub mod api;
 pub mod config;
 pub mod models;
