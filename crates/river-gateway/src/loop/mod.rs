@@ -61,6 +61,8 @@ pub struct AgentLoop {
     pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
     git: GitOps,
+    /// System notifications to surface on next wake (git conflicts, etc.)
+    pending_notifications: Vec<String>,
 }
 
 impl AgentLoop {
@@ -87,6 +89,7 @@ impl AgentLoop {
             shutdown_requested: false,
             git,
             config,
+            pending_notifications: Vec::new(),
         }
     }
 
@@ -183,6 +186,20 @@ impl AgentLoop {
             trigger,
             queued_messages,
         ).await;
+
+        // Add any pending system notifications (git conflicts, etc.)
+        if !self.pending_notifications.is_empty() {
+            let notifications = std::mem::take(&mut self.pending_notifications);
+            let notification_text = format!(
+                "SYSTEM NOTIFICATIONS:\n{}",
+                notifications.iter()
+                    .map(|n| format!("- {}", n))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            self.context.add_message(ChatMessage::system(notification_text));
+            tracing::info!("Surfaced {} system notification(s) to agent", notifications.len());
+        }
 
         // Load tool schemas
         let executor = self.tool_executor.read().await;
@@ -380,6 +397,11 @@ impl AgentLoop {
                         conflicting_files.len(),
                         conflicting_files.join(", ")
                     );
+                    // Surface to agent on next wake
+                    self.pending_notifications.push(format!(
+                        "Git conflict detected: The following files have merge conflicts that need resolution: {}",
+                        conflicting_files.join(", ")
+                    ));
                 }
                 GitCommitResult::Error(e) => {
                     tracing::warn!("Git commit failed: {}", e);
