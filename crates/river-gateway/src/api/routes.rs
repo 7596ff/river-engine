@@ -18,7 +18,7 @@ struct HealthResponse {
 }
 
 /// Incoming message request
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct IncomingMessage {
     pub adapter: String,
     pub event_type: String,
@@ -29,7 +29,7 @@ pub struct IncomingMessage {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Author {
     pub id: String,
     pub name: String,
