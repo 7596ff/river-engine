@@ -45,7 +45,8 @@ impl EventHandler {
             message_id: msg.id.get().to_string(),
             metadata: EventMetadata {
                 guild_id: msg.guild_id.map(|id| id.get().to_string()),
-                thread_id: None, // TODO: detect thread context
+                // If message has/created a thread, capture its ID
+                thread_id: msg.thread.as_ref().map(|t| t.id.get().to_string()),
                 reply_to: msg.referenced_message.as_ref().map(|m| m.id.get().to_string()),
             },
         };
