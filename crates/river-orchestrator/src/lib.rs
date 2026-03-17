@@ -5,6 +5,7 @@
 pub mod agents;
 pub mod discovery;
 pub mod resources;
+pub mod process;
 pub mod api;
 pub mod config;
 pub mod models;
