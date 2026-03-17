@@ -15,7 +15,8 @@ pub use file::{ReadTool, WriteTool, EditTool, GlobTool, GrepTool};
 pub use shell::BashTool;
 pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool};
 pub use communication::{
-    AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool
+    AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool,
+    ReadChannelTool
 };
 pub use web::WebFetchTool;
 pub use model::{

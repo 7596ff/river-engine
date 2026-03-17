@@ -14,8 +14,10 @@ use tokio::sync::RwLock;
 pub struct AdapterConfig {
     /// Adapter name (e.g., "discord", "slack")
     pub name: String,
-    /// Outbound webhook URL
+    /// Outbound webhook URL (for sending messages)
     pub outbound_url: String,
+    /// Read URL (for fetching channel history), optional
+    pub read_url: Option<String>,
 }
 
 /// Registry of configured adapters
@@ -264,6 +266,112 @@ impl Tool for ContextStatusTool {
     }
 }
 
+/// Read messages from a channel via adapter
+pub struct ReadChannelTool {
+    registry: Arc<RwLock<AdapterRegistry>>,
+    http_client: reqwest::Client,
+}
+
+impl ReadChannelTool {
+    pub fn new(registry: Arc<RwLock<AdapterRegistry>>) -> Self {
+        Self {
+            registry,
+            http_client: reqwest::Client::new(),
+        }
+    }
+}
+
+impl Tool for ReadChannelTool {
+    fn name(&self) -> &str {
+        "read_channel"
+    }
+
+    fn description(&self) -> &str {
+        "Read messages from a channel via communication adapter"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "adapter": {
+                    "type": "string",
+                    "description": "Adapter name (e.g., 'discord')"
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Channel to read from"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of messages to fetch (default: 20)",
+                    "default": 20
+                }
+            },
+            "required": ["adapter", "channel"]
+        })
+    }
+
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        let adapter = args["adapter"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing 'adapter' parameter"))?;
+        let channel = args["channel"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing 'channel' parameter"))?;
+        let limit = args["limit"].as_u64().unwrap_or(20);
+
+        let registry = self.registry.clone();
+        let http_client = self.http_client.clone();
+        let adapter = adapter.to_string();
+        let channel = channel.to_string();
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let registry = registry.read().await;
+                let config = registry
+                    .get(&adapter)
+                    .ok_or_else(|| RiverError::tool(format!("Unknown adapter: {}", adapter)))?;
+
+                let read_url = config.read_url.as_ref()
+                    .ok_or_else(|| RiverError::tool(format!(
+                        "Adapter '{}' does not support reading channel history",
+                        adapter
+                    )))?;
+
+                let url = format!("{}?channel={}&limit={}", read_url, channel, limit);
+
+                let response = http_client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| RiverError::tool(format!("Failed to read channel: {}", e)))?;
+
+                if response.status().is_success() {
+                    let body = response.text().await
+                        .map_err(|e| RiverError::tool(format!("Failed to read response: {}", e)))?;
+
+                    // Try to parse as JSON and format nicely
+                    if let Ok(json) = serde_json::from_str::<Value>(&body) {
+                        Ok(ToolResult::success(serde_json::to_string_pretty(&json).unwrap()))
+                    } else {
+                        Ok(ToolResult::success(body))
+                    }
+                } else {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    Err(RiverError::tool(format!(
+                        "Adapter returned error {}: {}",
+                        status, body
+                    )))
+                }
+            })
+        });
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,11 +383,24 @@ mod tests {
         registry.register(AdapterConfig {
             name: "discord".to_string(),
             outbound_url: "http://localhost:8080/outbound".to_string(),
+            read_url: Some("http://localhost:8080/read".to_string()),
         });
 
         assert!(registry.get("discord").is_some());
         assert!(registry.get("slack").is_none());
         assert_eq!(registry.names().len(), 1);
+    }
+
+    #[test]
+    fn test_read_channel_tool_schema() {
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let tool = ReadChannelTool::new(registry);
+
+        assert_eq!(tool.name(), "read_channel");
+        let params = tool.parameters();
+        assert!(params["properties"]["adapter"].is_object());
+        assert!(params["properties"]["channel"].is_object());
+        assert!(params["properties"]["limit"].is_object());
     }
 
     #[test]
