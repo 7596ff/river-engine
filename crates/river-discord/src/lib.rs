@@ -4,6 +4,7 @@
 
 pub mod channels;
 pub mod client;
+pub mod commands;
 pub mod config;
 pub mod gateway;
 pub mod handler;
