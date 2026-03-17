@@ -332,6 +332,8 @@ impl Tool for GrepTool {
             "properties": {
                 "pattern": { "type": "string", "description": "Regex pattern to search" },
                 "path": { "type": "string", "description": "File or directory to search" },
+                "glob": { "type": "string", "description": "Filter files by glob pattern (optional)" },
+                "context": { "type": "integer", "description": "Lines of context around matches (optional)" },
                 "output_file": { "type": "string", "description": "Pipe output to file (optional)" }
             },
             "required": ["pattern"]
@@ -342,9 +344,19 @@ impl Tool for GrepTool {
         let pattern = args.get("pattern").and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: pattern"))?;
         let output_file = args.get("output_file").and_then(|v| v.as_str());
+        let glob_pattern = args.get("glob").and_then(|v| v.as_str());
+        let context_lines = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
         let regex = regex::Regex::new(pattern)
             .map_err(|e| RiverError::tool(format!("Invalid regex: {}", e)))?;
+
+        // Compile glob pattern if provided
+        let glob_matcher = if let Some(gp) = glob_pattern {
+            Some(glob::Pattern::new(gp)
+                .map_err(|e| RiverError::tool(format!("Invalid glob pattern: {}", e)))?)
+        } else {
+            None
+        };
 
         let search_path = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
             validate_path(&self.workspace, path_str)?
@@ -354,7 +366,14 @@ impl Tool for GrepTool {
 
         let mut results = Vec::new();
 
-        fn walk_and_search(path: &Path, regex: &regex::Regex, results: &mut Vec<String>, depth: usize) {
+        fn walk_and_search(
+            path: &Path,
+            regex: &regex::Regex,
+            glob_matcher: Option<&glob::Pattern>,
+            context_lines: usize,
+            results: &mut Vec<String>,
+            depth: usize,
+        ) {
             // Stop at max depth to prevent unbounded recursion
             if depth > MAX_SEARCH_DEPTH {
                 return;
@@ -366,6 +385,16 @@ impl Tool for GrepTool {
             }
 
             if path.is_file() {
+                // Check glob filter if provided
+                if let Some(matcher) = glob_matcher {
+                    let file_name = path.file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default();
+                    if !matcher.matches(&file_name) {
+                        return;
+                    }
+                }
+
                 // Check file size before reading
                 if let Ok(metadata) = fs::metadata(path) {
                     if metadata.len() > MAX_FILE_SIZE {
@@ -374,9 +403,41 @@ impl Tool for GrepTool {
                 }
 
                 if let Ok(content) = fs::read_to_string(path) {
-                    for (i, line) in content.lines().enumerate() {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let mut matched_ranges: Vec<(usize, usize)> = Vec::new();
+
+                    // Find all matching lines
+                    for (i, line) in lines.iter().enumerate() {
                         if regex.is_match(line) {
-                            results.push(format!("{}:{}: {}", path.display(), i + 1, line));
+                            let start = i.saturating_sub(context_lines);
+                            let end = (i + context_lines + 1).min(lines.len());
+                            matched_ranges.push((start, end));
+                        }
+                    }
+
+                    // Merge overlapping ranges
+                    if !matched_ranges.is_empty() {
+                        let mut merged: Vec<(usize, usize)> = Vec::new();
+                        let mut current = matched_ranges[0];
+                        for &(start, end) in &matched_ranges[1..] {
+                            if start <= current.1 {
+                                current.1 = current.1.max(end);
+                            } else {
+                                merged.push(current);
+                                current = (start, end);
+                            }
+                        }
+                        merged.push(current);
+
+                        // Output merged ranges
+                        for (range_idx, (start, end)) in merged.iter().enumerate() {
+                            if range_idx > 0 {
+                                results.push("--".to_string());
+                            }
+                            for i in *start..*end {
+                                let marker = if regex.is_match(lines[i]) { ":" } else { "-" };
+                                results.push(format!("{}:{}{} {}", path.display(), i + 1, marker, lines[i]));
+                            }
                         }
                     }
                 }
@@ -386,14 +447,14 @@ impl Tool for GrepTool {
                         let entry_path = entry.path();
                         let name = entry_path.file_name().map(|n| n.to_string_lossy());
                         if name.map(|n| !n.starts_with('.')).unwrap_or(false) {
-                            walk_and_search(&entry_path, regex, results, depth + 1);
+                            walk_and_search(&entry_path, regex, glob_matcher, context_lines, results, depth + 1);
                         }
                     }
                 }
             }
         }
 
-        walk_and_search(&search_path, &regex, &mut results, 0);
+        walk_and_search(&search_path, &regex, glob_matcher.as_ref(), context_lines, &mut results, 0);
 
         let output = if results.is_empty() {
             "No matches found".to_string()
@@ -517,6 +578,42 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Absolute paths are not allowed"));
+    }
+
+    #[test]
+    fn test_grep_with_context() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().to_path_buf();
+
+        fs::write(workspace.join("test.txt"), "line one\nline two\nline three\nline four\nline five").unwrap();
+
+        let grep_tool = GrepTool::new(&workspace);
+        let result = grep_tool.execute(json!({"pattern": "three", "context": 1})).unwrap();
+        // Should include line two (before), three (match), and four (after)
+        assert!(result.output.contains("line two"));
+        assert!(result.output.contains("line three"));
+        assert!(result.output.contains("line four"));
+    }
+
+    #[test]
+    fn test_grep_with_glob_filter() {
+        let dir = TempDir::new().unwrap();
+        let workspace = dir.path().to_path_buf();
+
+        fs::write(workspace.join("test.txt"), "findme here").unwrap();
+        fs::write(workspace.join("test.rs"), "findme here too").unwrap();
+
+        let grep_tool = GrepTool::new(&workspace);
+
+        // Only search .txt files
+        let result = grep_tool.execute(json!({"pattern": "findme", "glob": "*.txt"})).unwrap();
+        assert!(result.output.contains("test.txt"));
+        assert!(!result.output.contains("test.rs"));
+
+        // Only search .rs files
+        let result = grep_tool.execute(json!({"pattern": "findme", "glob": "*.rs"})).unwrap();
+        assert!(!result.output.contains("test.txt"));
+        assert!(result.output.contains("test.rs"));
     }
 
     #[test]
