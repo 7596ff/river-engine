@@ -242,11 +242,20 @@ impl AgentLoop {
         {
             let mut executor = self.tool_executor.write().await;
             for tc in &tool_calls {
+                let arguments = match serde_json::from_str(&tc.function.arguments) {
+                    Ok(args) => args,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Invalid JSON arguments for tool {}: {} - using empty object",
+                            tc.function.name, e
+                        );
+                        serde_json::Value::Object(serde_json::Map::new())
+                    }
+                };
                 let call = ToolCall {
                     id: tc.id.clone(),
                     name: tc.function.name.clone(),
-                    arguments: serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
+                    arguments,
                 };
                 let result = executor.execute(&call);
                 tracing::debug!("Tool {}: {:?}", tc.function.name, result.result.is_ok());
@@ -284,9 +293,9 @@ impl AgentLoop {
         // TODO: Git commit if workspace changed
 
         // Check if messages arrived during settle
-        if !self.message_queue.is_empty() {
-            let messages = self.message_queue.drain();
-            let msg = messages.into_iter().next().unwrap();
+        // Note: drain() is atomic with the queue, so we don't need a separate is_empty() check
+        let messages = self.message_queue.drain();
+        if let Some(msg) = messages.into_iter().next() {
             tracing::info!("Message arrived during settle, immediate wake");
             self.state = LoopState::Waking {
                 trigger: WakeTrigger::Message(msg),
