@@ -4,6 +4,8 @@
 
 pub mod channels;
 pub mod config;
+pub mod gateway;
 
 pub use channels::ChannelState;
 pub use config::{Args, DiscordConfig};
+pub use gateway::{Author, EventMetadata, GatewayClient, GatewayError, IncomingEvent, IncomingResponse};
