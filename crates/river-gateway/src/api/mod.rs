@@ -2,4 +2,4 @@
 
 mod routes;
 
-pub use routes::{create_router, IncomingMessage};
+pub use routes::{create_router, IncomingMessage, Author};
