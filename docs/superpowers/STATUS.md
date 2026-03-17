@@ -93,11 +93,24 @@
 - 197 tests passing (83 core, 46 gateway, 47 orchestrator, 16 discord, 1 integration, 4 doc-tests)
 - Binary: `river-discord --token-file /path --gateway-url http://localhost:3000 --guild-id 123`
 
+### Plan 7: NixOS Module ✅
+- NixOS module (`nix/nixos-module.nix`):
+  - Orchestrator, embedding, Redis, agents with Discord
+  - System services with DynamicUser
+  - Dedicated users for agents
+- Home-manager module (`nix/home-module.nix`):
+  - Identical functionality as user services
+  - Redis as direct user service
+- Shared library (`nix/lib.nix`):
+  - Option type definitions
+  - Command builders for all services
+- Package definitions (`nix/packages.nix`):
+  - CUDA-optional llama-cpp
+  - All River binaries
+
 ## Next Up
 
-### Plan 7: NixOS Module
-- `services.river.agents.<name>` configuration
-- Multi-agent deployment
+(No pending plans)
 
 ## Key Files
 
@@ -106,6 +119,8 @@
 - **Core:** `crates/river-core/src/`
 - **Gateway:** `crates/river-gateway/src/`
 - **Orchestrator:** `crates/river-orchestrator/src/`
+- **Discord:** `crates/river-discord/src/`
+- **Nix Modules:** `nix/`
 
 ## Test Commands
 
