@@ -17,6 +17,21 @@ const BASE_YEAR: u16 = 2000;
 /// Maximum year offset (10 bits = 1023).
 const MAX_YEAR_OFFSET: u16 = 1023;
 
+/// Check if a year is a leap year.
+fn is_leap_year(year: u16) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Get the number of days in a month for a given year.
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        _ => 0, // Invalid month
+    }
+}
+
 /// Error type for AgentBirth validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentBirthError {
@@ -24,8 +39,8 @@ pub enum AgentBirthError {
     InvalidYear(u16),
     /// Month is out of valid range (1-12).
     InvalidMonth(u8),
-    /// Day is out of valid range (1-31).
-    InvalidDay(u8),
+    /// Day is out of valid range for the given month.
+    InvalidDay { day: u8, month: u8, max_days: u8 },
     /// Hour is out of valid range (0-23).
     InvalidHour(u8),
     /// Minute is out of valid range (0-59).
@@ -39,7 +54,9 @@ impl fmt::Display for AgentBirthError {
         match self {
             AgentBirthError::InvalidYear(y) => write!(f, "invalid year: {} (must be 2000-2999)", y),
             AgentBirthError::InvalidMonth(m) => write!(f, "invalid month: {} (must be 1-12)", m),
-            AgentBirthError::InvalidDay(d) => write!(f, "invalid day: {} (must be 1-31)", d),
+            AgentBirthError::InvalidDay { day, month, max_days } => {
+                write!(f, "invalid day: {} for month {} (must be 1-{})", day, month, max_days)
+            }
             AgentBirthError::InvalidHour(h) => write!(f, "invalid hour: {} (must be 0-23)", h),
             AgentBirthError::InvalidMinute(m) => write!(f, "invalid minute: {} (must be 0-59)", m),
             AgentBirthError::InvalidSecond(s) => write!(f, "invalid second: {} (must be 0-59)", s),
@@ -93,9 +110,10 @@ impl AgentBirth {
             return Err(AgentBirthError::InvalidMonth(month));
         }
 
-        // Validate day (1-31)
-        if !(1..=31).contains(&day) {
-            return Err(AgentBirthError::InvalidDay(day));
+        // Validate day (calendar-aware)
+        let max_days = days_in_month(year, month);
+        if day < 1 || day > max_days {
+            return Err(AgentBirthError::InvalidDay { day, month, max_days });
         }
 
         // Validate hour (0-23)
@@ -264,13 +282,75 @@ mod tests {
     #[test]
     fn test_agent_birth_invalid_day_zero() {
         let result = AgentBirth::new(2024, 1, 0, 0, 0, 0);
-        assert!(matches!(result, Err(AgentBirthError::InvalidDay(0))));
+        assert!(matches!(
+            result,
+            Err(AgentBirthError::InvalidDay { day: 0, month: 1, max_days: 31 })
+        ));
     }
 
     #[test]
     fn test_agent_birth_invalid_day_high() {
         let result = AgentBirth::new(2024, 1, 32, 0, 0, 0);
-        assert!(matches!(result, Err(AgentBirthError::InvalidDay(32))));
+        assert!(matches!(
+            result,
+            Err(AgentBirthError::InvalidDay { day: 32, month: 1, max_days: 31 })
+        ));
+    }
+
+    #[test]
+    fn test_agent_birth_feb_29_leap_year() {
+        // 2024 is a leap year
+        let result = AgentBirth::new(2024, 2, 29, 0, 0, 0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().day(), 29);
+    }
+
+    #[test]
+    fn test_agent_birth_feb_29_non_leap_year() {
+        // 2023 is not a leap year
+        let result = AgentBirth::new(2023, 2, 29, 0, 0, 0);
+        assert!(matches!(
+            result,
+            Err(AgentBirthError::InvalidDay { day: 29, month: 2, max_days: 28 })
+        ));
+    }
+
+    #[test]
+    fn test_agent_birth_feb_28_non_leap_year() {
+        // Feb 28 should always be valid
+        let result = AgentBirth::new(2023, 2, 28, 0, 0, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_agent_birth_april_31() {
+        // April has 30 days
+        let result = AgentBirth::new(2024, 4, 31, 0, 0, 0);
+        assert!(matches!(
+            result,
+            Err(AgentBirthError::InvalidDay { day: 31, month: 4, max_days: 30 })
+        ));
+    }
+
+    #[test]
+    fn test_agent_birth_april_30() {
+        // April 30 is valid
+        let result = AgentBirth::new(2024, 4, 30, 0, 0, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_leap_year_century_rule() {
+        // 2000 is a leap year (divisible by 400)
+        let result = AgentBirth::new(2000, 2, 29, 0, 0, 0);
+        assert!(result.is_ok());
+
+        // 2100 is NOT a leap year (divisible by 100 but not 400)
+        let result = AgentBirth::new(2100, 2, 29, 0, 0, 0);
+        assert!(matches!(
+            result,
+            Err(AgentBirthError::InvalidDay { day: 29, month: 2, max_days: 28 })
+        ));
     }
 
     #[test]
