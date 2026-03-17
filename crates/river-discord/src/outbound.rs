@@ -302,7 +302,7 @@ async fn handle_send(
 
         // Add the thread to channel state so we listen to it
         state.channels.add(thread_id).await;
-        tracing::info!(thread_id = thread_id, "Created thread and added to listen set");
+        tracing::info!("Created thread and added to listen set");
     }
 
     tracing::info!("Sent message to Discord");
