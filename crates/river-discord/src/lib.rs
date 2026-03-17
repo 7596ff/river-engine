@@ -6,6 +6,7 @@ pub mod channels;
 pub mod config;
 pub mod gateway;
 pub mod handler;
+pub mod outbound;
 
 pub use channels::ChannelState;
 pub use config::{Args, DiscordConfig};
