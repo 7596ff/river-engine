@@ -266,10 +266,24 @@ Send a message to a channel/adapter.
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `adapter` | Yes | Adapter name (e.g., "discord") |
-| `channel` | Yes | Channel ID or name |
+| `channel` | Yes | Channel ID |
 | `content` | Yes | Message content |
 | `reply_to` | No | Message ID to reply to |
-| `thread_id` | No | Thread ID for threaded replies |
+
+#### list_adapters
+List available communication adapters.
+
+#### read_channel
+Read recent messages from a channel.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `adapter` | Yes | Adapter name |
+| `channel` | Yes | Channel ID |
+| `limit` | No | Max messages to fetch (default: 20) |
+
+#### context_status
+Get current context window usage (tokens used, limit, percent).
 
 ---
 
