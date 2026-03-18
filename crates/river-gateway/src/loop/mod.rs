@@ -478,4 +478,37 @@ mod tests {
         let config = LoopConfig::default();
         assert_eq!(config.model_timeout, Duration::from_secs(120));
     }
+
+    #[test]
+    fn test_loop_config_custom() {
+        let config = LoopConfig {
+            workspace: PathBuf::from("/home/agent/workspace"),
+            default_heartbeat_minutes: 30,
+            context_limit: 128000,
+            model_timeout: Duration::from_secs(300),
+            max_tool_calls_per_generation: 100,
+        };
+        assert_eq!(config.workspace, PathBuf::from("/home/agent/workspace"));
+        assert_eq!(config.default_heartbeat_minutes, 30);
+        assert_eq!(config.context_limit, 128000);
+        assert_eq!(config.model_timeout, Duration::from_secs(300));
+        assert_eq!(config.max_tool_calls_per_generation, 100);
+    }
+
+    #[test]
+    fn test_loop_config_clone() {
+        let config = LoopConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.context_limit, cloned.context_limit);
+        assert_eq!(config.workspace, cloned.workspace);
+    }
+
+    #[test]
+    fn test_loop_config_debug() {
+        let config = LoopConfig::default();
+        let debug = format!("{:?}", config);
+        assert!(debug.contains("LoopConfig"));
+        assert!(debug.contains("workspace"));
+        assert!(debug.contains("context_limit"));
+    }
 }

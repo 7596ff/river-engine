@@ -53,6 +53,24 @@ impl LoopState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Author;
+    use river_core::Priority;
+
+    fn test_message(content: &str) -> IncomingMessage {
+        IncomingMessage {
+            adapter: "test".to_string(),
+            event_type: "message".to_string(),
+            channel: "general".to_string(),
+            author: Author {
+                id: "user1".to_string(),
+                name: "Test User".to_string(),
+            },
+            content: content.to_string(),
+            message_id: None,
+            metadata: None,
+            priority: Priority::Interactive,
+        }
+    }
 
     #[test]
     fn test_should_queue_messages() {
@@ -60,6 +78,15 @@ mod tests {
         assert!(!LoopState::Settling.should_queue_messages());
         assert!(LoopState::Thinking.should_queue_messages());
         assert!(LoopState::Acting.should_queue_messages());
+    }
+
+    #[test]
+    fn test_should_queue_messages_waking() {
+        let waking = LoopState::Waking {
+            trigger: WakeTrigger::Heartbeat,
+        };
+        // Waking state should not queue - messages should be processed
+        assert!(!waking.should_queue_messages());
     }
 
     #[test]
@@ -72,5 +99,77 @@ mod tests {
     #[test]
     fn test_default_state_is_sleeping() {
         assert!(LoopState::default().is_sleeping());
+    }
+
+    #[test]
+    fn test_loop_event_message() {
+        let msg = test_message("hello");
+        let event = LoopEvent::Message(msg.clone());
+        match event {
+            LoopEvent::Message(m) => {
+                assert_eq!(m.content, "hello");
+                assert_eq!(m.author.name, "Test User");
+            }
+            _ => panic!("Expected Message event"),
+        }
+    }
+
+    #[test]
+    fn test_loop_event_heartbeat() {
+        let event = LoopEvent::Heartbeat;
+        assert!(matches!(event, LoopEvent::Heartbeat));
+    }
+
+    #[test]
+    fn test_loop_event_shutdown() {
+        let event = LoopEvent::Shutdown;
+        assert!(matches!(event, LoopEvent::Shutdown));
+    }
+
+    #[test]
+    fn test_wake_trigger_message() {
+        let msg = test_message("wake up!");
+        let trigger = WakeTrigger::Message(msg);
+        match trigger {
+            WakeTrigger::Message(m) => {
+                assert_eq!(m.content, "wake up!");
+            }
+            _ => panic!("Expected Message trigger"),
+        }
+    }
+
+    #[test]
+    fn test_wake_trigger_heartbeat() {
+        let trigger = WakeTrigger::Heartbeat;
+        assert!(matches!(trigger, WakeTrigger::Heartbeat));
+    }
+
+    #[test]
+    fn test_loop_state_waking_with_message_trigger() {
+        let msg = test_message("test");
+        let state = LoopState::Waking {
+            trigger: WakeTrigger::Message(msg),
+        };
+        assert!(!state.is_sleeping());
+        assert!(!state.should_queue_messages());
+    }
+
+    #[test]
+    fn test_all_states_have_defined_behavior() {
+        // Verify every state variant has explicit should_queue_messages behavior
+        let states = vec![
+            LoopState::Sleeping,
+            LoopState::Waking { trigger: WakeTrigger::Heartbeat },
+            LoopState::Thinking,
+            LoopState::Acting,
+            LoopState::Settling,
+        ];
+
+        let queue_states: Vec<bool> = states.iter()
+            .map(|s| s.should_queue_messages())
+            .collect();
+
+        // Only Thinking and Acting should queue
+        assert_eq!(queue_states, vec![false, false, true, true, false]);
     }
 }

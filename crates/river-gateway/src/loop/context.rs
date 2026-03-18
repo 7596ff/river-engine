@@ -235,6 +235,25 @@ impl Default for ContextBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Author;
+    use crate::tools::{ToolCallResponse, ToolResult};
+    use river_core::Priority;
+
+    fn test_message(content: &str, channel: &str, author: &str) -> IncomingMessage {
+        IncomingMessage {
+            adapter: "test".to_string(),
+            event_type: "message".to_string(),
+            channel: channel.to_string(),
+            author: Author {
+                id: "user1".to_string(),
+                name: author.to_string(),
+            },
+            content: content.to_string(),
+            message_id: None,
+            metadata: None,
+            priority: Priority::Interactive,
+        }
+    }
 
     #[test]
     fn test_chat_message_system() {
@@ -260,12 +279,51 @@ mod tests {
     }
 
     #[test]
+    fn test_chat_message_assistant() {
+        let msg = ChatMessage::assistant(Some("Hello".to_string()), None);
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.content, Some("Hello".to_string()));
+        assert!(msg.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_chat_message_assistant_with_tool_calls() {
+        let tool_calls = vec![ToolCallRequest {
+            id: "call_1".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "read".to_string(),
+                arguments: "{\"path\": \"test.txt\"}".to_string(),
+            },
+        }];
+        let msg = ChatMessage::assistant(None, Some(tool_calls.clone()));
+        assert_eq!(msg.role, "assistant");
+        assert!(msg.content.is_none());
+        assert!(msg.tool_calls.is_some());
+        assert_eq!(msg.tool_calls.unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_context_builder_clear() {
         let mut builder = ContextBuilder::new();
         builder.add_message(ChatMessage::system("test"));
         assert_eq!(builder.messages().len(), 1);
         builder.clear();
         assert!(builder.messages().is_empty());
+    }
+
+    #[test]
+    fn test_context_builder_set_tools() {
+        let mut builder = ContextBuilder::new();
+        assert!(builder.tools().is_empty());
+
+        let tools = vec![ToolSchema {
+            name: "test".to_string(),
+            description: "A test tool".to_string(),
+            parameters: serde_json::json!({}),
+        }];
+        builder.set_tools(tools);
+        assert_eq!(builder.tools().len(), 1);
     }
 
     #[test]
@@ -276,5 +334,214 @@ mod tests {
         assert!(json.contains("\"content\":\"test\""));
         // Optional None fields should be skipped
         assert!(!json.contains("tool_calls"));
+    }
+
+    #[test]
+    fn test_chat_message_tool_serialization() {
+        let msg = ChatMessage::tool("call_abc", "file contents here");
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"role\":\"tool\""));
+        assert!(json.contains("\"tool_call_id\":\"call_abc\""));
+        assert!(json.contains("\"content\":\"file contents here\""));
+    }
+
+    #[test]
+    fn test_format_trigger_heartbeat() {
+        let builder = ContextBuilder::new();
+        let msg = builder.format_trigger(&WakeTrigger::Heartbeat);
+        assert_eq!(msg.role, "system");
+        assert!(msg.content.as_ref().unwrap().contains("Heartbeat"));
+    }
+
+    #[test]
+    fn test_format_trigger_message() {
+        let builder = ContextBuilder::new();
+        let incoming = test_message("Hello!", "general", "Alice");
+        let msg = builder.format_trigger(&WakeTrigger::Message(incoming));
+        assert_eq!(msg.role, "user");
+        let content = msg.content.unwrap();
+        assert!(content.contains("[general]"));
+        assert!(content.contains("Alice"));
+        assert!(content.contains("Hello!"));
+    }
+
+    #[test]
+    fn test_add_tool_results_basic() {
+        let mut builder = ContextBuilder::new();
+        let context_status = ContextStatus {
+            used: 1000,
+            limit: 65536,
+        };
+        let results = vec![ToolCallResponse {
+            tool_call_id: "call_1".to_string(),
+            result: Ok(ToolResult::success("Success!")),
+            context_status: context_status.clone(),
+        }];
+
+        builder.add_tool_results(results, vec![], context_status);
+
+        // Should have 2 messages: tool result + context status
+        assert_eq!(builder.messages().len(), 2);
+        assert_eq!(builder.messages()[0].role, "tool");
+        assert_eq!(builder.messages()[0].content, Some("Success!".to_string()));
+        assert_eq!(builder.messages()[1].role, "system");
+        assert!(builder.messages()[1].content.as_ref().unwrap().contains("Context:"));
+    }
+
+    #[test]
+    fn test_add_tool_results_with_error() {
+        let mut builder = ContextBuilder::new();
+        let context_status = ContextStatus {
+            used: 500,
+            limit: 65536,
+        };
+        let results = vec![ToolCallResponse {
+            tool_call_id: "call_err".to_string(),
+            result: Err("File not found".to_string()),
+            context_status: context_status.clone(),
+        }];
+
+        builder.add_tool_results(results, vec![], context_status);
+
+        assert_eq!(builder.messages()[0].role, "tool");
+        let content = builder.messages()[0].content.as_ref().unwrap();
+        assert!(content.contains("Error:"));
+        assert!(content.contains("File not found"));
+    }
+
+    #[test]
+    fn test_add_tool_results_with_incoming_messages() {
+        let mut builder = ContextBuilder::new();
+        let context_status = ContextStatus {
+            used: 2000,
+            limit: 65536,
+        };
+        let results = vec![ToolCallResponse {
+            tool_call_id: "call_1".to_string(),
+            result: Ok(ToolResult::success("Done")),
+            context_status: context_status.clone(),
+        }];
+        let incoming = vec![
+            test_message("Hey!", "dm", "Bob"),
+            test_message("Urgent!", "alerts", "System"),
+        ];
+
+        builder.add_tool_results(results, incoming, context_status);
+
+        // Should have 3 messages: tool result + context status + incoming messages
+        assert_eq!(builder.messages().len(), 3);
+
+        // Check incoming messages notification
+        let incoming_msg = &builder.messages()[2];
+        assert_eq!(incoming_msg.role, "system");
+        let content = incoming_msg.content.as_ref().unwrap();
+        assert!(content.contains("Messages received during tool execution"));
+        assert!(content.contains("[dm] Bob: Hey!"));
+        assert!(content.contains("[alerts] System: Urgent!"));
+    }
+
+    #[test]
+    fn test_add_assistant_response() {
+        let mut builder = ContextBuilder::new();
+        builder.add_assistant_response(Some("Hello!".to_string()), None);
+
+        assert_eq!(builder.messages().len(), 1);
+        assert_eq!(builder.messages()[0].role, "assistant");
+        assert_eq!(builder.messages()[0].content, Some("Hello!".to_string()));
+    }
+
+    #[test]
+    fn test_add_assistant_response_with_tool_calls() {
+        let mut builder = ContextBuilder::new();
+        let tool_calls = vec![ToolCallRequest {
+            id: "call_xyz".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "write".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }];
+        builder.add_assistant_response(None, Some(tool_calls));
+
+        assert_eq!(builder.messages().len(), 1);
+        let msg = &builder.messages()[0];
+        assert!(msg.content.is_none());
+        assert!(msg.tool_calls.is_some());
+        assert_eq!(msg.tool_calls.as_ref().unwrap()[0].id, "call_xyz");
+    }
+
+    #[test]
+    fn test_context_builder_default() {
+        let builder = ContextBuilder::default();
+        assert!(builder.messages().is_empty());
+        assert!(builder.tools().is_empty());
+    }
+
+    #[test]
+    fn test_tool_call_request_serialization() {
+        let tc = ToolCallRequest {
+            id: "call_123".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "read".to_string(),
+                arguments: "{\"path\": \"test.txt\"}".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&tc).unwrap();
+        assert!(json.contains("\"id\":\"call_123\""));
+        assert!(json.contains("\"type\":\"function\""));
+        assert!(json.contains("\"name\":\"read\""));
+    }
+
+    #[test]
+    fn test_context_status_display_in_results() {
+        let mut builder = ContextBuilder::new();
+        let context_status = ContextStatus {
+            used: 32768,
+            limit: 65536,
+        };
+
+        builder.add_tool_results(vec![], vec![], context_status);
+
+        let status_msg = &builder.messages()[0];
+        let content = status_msg.content.as_ref().unwrap();
+        // Should show percentage
+        assert!(content.contains("50.0%") || content.contains("50%"));
+    }
+
+    #[test]
+    fn test_multiple_tool_results() {
+        let mut builder = ContextBuilder::new();
+        let context_status = ContextStatus {
+            used: 1000,
+            limit: 65536,
+        };
+        let results = vec![
+            ToolCallResponse {
+                tool_call_id: "call_1".to_string(),
+                result: Ok(ToolResult::success("First result")),
+                context_status: context_status.clone(),
+            },
+            ToolCallResponse {
+                tool_call_id: "call_2".to_string(),
+                result: Ok(ToolResult::success("Second result")),
+                context_status: context_status.clone(),
+            },
+            ToolCallResponse {
+                tool_call_id: "call_3".to_string(),
+                result: Err("Third failed".to_string()),
+                context_status: context_status.clone(),
+            },
+        ];
+
+        builder.add_tool_results(results, vec![], context_status);
+
+        // 3 tool results + 1 context status
+        assert_eq!(builder.messages().len(), 4);
+
+        assert_eq!(builder.messages()[0].tool_call_id, Some("call_1".to_string()));
+        assert_eq!(builder.messages()[1].tool_call_id, Some("call_2".to_string()));
+        assert_eq!(builder.messages()[2].tool_call_id, Some("call_3".to_string()));
+        assert!(builder.messages()[2].content.as_ref().unwrap().contains("Error"));
     }
 }
