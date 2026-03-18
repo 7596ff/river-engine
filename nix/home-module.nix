@@ -5,9 +5,11 @@
 let
   cfg = config.services.river;
   riverLib = import ./lib.nix { inherit lib; };
-  packages = import ./packages.nix {
+
+  # packages must be computed lazily (inside config) since it depends on cfg
+  mkPackages = cudaSupport: import ./packages.nix {
     inherit pkgs;
-    cudaSupport = cfg.orchestrator.cudaSupport || cfg.embedding.cudaSupport;
+    inherit cudaSupport;
   };
 
   commonServiceConfig = {
@@ -34,7 +36,9 @@ in {
 
   config = lib.mkMerge [
     # Orchestrator service
-    (lib.mkIf cfg.orchestrator.enable {
+    (lib.mkIf cfg.orchestrator.enable (let
+      packages = mkPackages cfg.orchestrator.cudaSupport;
+    in {
       systemd.user.services.river-orchestrator = {
         Unit = {
           Description = "River Engine Orchestrator";
@@ -53,10 +57,12 @@ in {
           WantedBy = [ "default.target" ];
         };
       };
-    })
+    }))
 
     # Embedding service
-    (lib.mkIf cfg.embedding.enable {
+    (lib.mkIf cfg.embedding.enable (let
+      packages = mkPackages cfg.embedding.cudaSupport;
+    in {
       systemd.user.services.river-embedding = {
         Unit = {
           Description = "River Engine Embedding Server";
@@ -66,12 +72,7 @@ in {
         Service = commonServiceConfig // {
           ExecStart = riverLib.mkEmbeddingCommand {
             cfg = cfg.embedding;
-            packages = packages // {
-              llama-cpp = (import ./packages.nix {
-                inherit pkgs;
-                cudaSupport = cfg.embedding.cudaSupport;
-              }).llama-cpp;
-            };
+            inherit packages;
           };
         };
 
@@ -79,7 +80,7 @@ in {
           WantedBy = [ "default.target" ];
         };
       };
-    })
+    }))
 
     # Redis as user service
     (lib.mkIf cfg.redis.enable {
@@ -101,7 +102,9 @@ in {
     })
 
     # Agent services
-    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable {
+    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable (let
+      packages = mkPackages false;  # Agents don't need CUDA
+    in {
       # Gateway service
       systemd.user.services."river-${name}-gateway" = {
         Unit = {
@@ -142,6 +145,6 @@ in {
           WantedBy = [ "default.target" ];
         };
       };
-    }) cfg.agents))
+    })) cfg.agents))
   ];
 }

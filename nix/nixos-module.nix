@@ -5,9 +5,11 @@
 let
   cfg = config.services.river;
   riverLib = import ./lib.nix { inherit lib; };
-  packages = import ./packages.nix {
+
+  # packages must be computed lazily (inside config) since it depends on cfg
+  mkPackages = cudaSupport: import ./packages.nix {
     inherit pkgs;
-    cudaSupport = cfg.orchestrator.cudaSupport || cfg.embedding.cudaSupport;
+    inherit cudaSupport;
   };
 
   commonServiceConfig = {
@@ -34,7 +36,9 @@ in {
 
   config = lib.mkMerge [
     # Orchestrator service
-    (lib.mkIf cfg.orchestrator.enable {
+    (lib.mkIf cfg.orchestrator.enable (let
+      packages = mkPackages cfg.orchestrator.cudaSupport;
+    in {
       systemd.services.river-orchestrator = {
         description = "River Engine Orchestrator";
         wantedBy = [ "multi-user.target" ];
@@ -51,10 +55,12 @@ in {
 
         environment = cfg.orchestrator.environment;
       };
-    })
+    }))
 
     # Embedding service
-    (lib.mkIf cfg.embedding.enable {
+    (lib.mkIf cfg.embedding.enable (let
+      packages = mkPackages cfg.embedding.cudaSupport;
+    in {
       systemd.services.river-embedding = {
         description = "River Engine Embedding Server";
         wantedBy = [ "multi-user.target" ];
@@ -64,16 +70,11 @@ in {
           DynamicUser = true;
           ExecStart = riverLib.mkEmbeddingCommand {
             cfg = cfg.embedding;
-            packages = packages // {
-              llama-cpp = (import ./packages.nix {
-                inherit pkgs;
-                cudaSupport = cfg.embedding.cudaSupport;
-              }).llama-cpp;
-            };
+            inherit packages;
           };
         };
       };
-    })
+    }))
 
     # Redis via NixOS module
     (lib.mkIf cfg.redis.enable {
@@ -84,7 +85,9 @@ in {
     })
 
     # Agent services
-    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable {
+    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable (let
+      packages = mkPackages false;  # Agents don't need CUDA
+    in {
       # Gateway service
       systemd.services."river-${name}-gateway" = {
         description = "River Gateway - ${name}";
@@ -130,6 +133,6 @@ in {
           };
         };
       };
-    }) cfg.agents))
+    })) cfg.agents))
   ];
 }
