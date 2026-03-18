@@ -59,13 +59,14 @@ An orchestration layer should exist that allows multiple agents running on one m
 **The Rule:** One workspace directory = one agent instance.
 
 Each workspace contains:
-- `SOUL.md`, `IDENTITY.md`, `USER.md` - who they are
-- `HEARTBEAT.md`, `RULES.md`, `TOOLS.md` - how they operate
-- `memory/` - daily logs, long-term memory
-- `thinking/` - private reflection
-- `scripts/` - agent-specific automation
+- `AGENTS.md` - agent capabilities and behavior guidelines
+- `IDENTITY.md` - who they are, personality, background
+- `RULES.md` - operational constraints and boundaries
+- `thinking/` - private reflection and state continuity
 
 **Why:** Agents aren't just model weights + prompts. They're accumulated experience, preferences, relationships. The workspace is their home.
+
+**Note:** Long-term memory is stored in SQLite (semantic embeddings), not filesystem. The `thinking/current-state.md` file provides continuity across context rotations.
 
 ---
 
