@@ -147,12 +147,40 @@ in {
       configFile = pkgs.writeText "litellm-config.yaml" (riverLib.mkLitellmConfig { inherit cfg; });
       python = pkgs.python3.withPackages (ps: with ps; [
         litellm
-        backoff
-        uvicorn
+        # Web framework
         fastapi
+        starlette
+        uvicorn
+        uvloop
         gunicorn
+        # HTTP clients
+        httpx
+        aiohttp
+        anyio
+        websockets
+        # AI providers
+        openai
+        anthropic
+        tiktoken
+        tokenizers
+        # Data & serialization
         orjson
         pyyaml
+        pydantic
+        jinja2
+        # Auth & crypto
+        pyjwt
+        cryptography
+        # Utilities
+        backoff
+        tenacity
+        apscheduler
+        python-dotenv
+        python-multipart
+        click
+        rich
+        # Monitoring
+        prometheus-client
       ]);
     in {
       systemd.user.services.river-litellm = {
