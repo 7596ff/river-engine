@@ -52,6 +52,13 @@ pub struct IncomingMessage {
     pub content: String,
     pub message_id: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    /// Priority level (defaults to Interactive for user messages)
+    #[serde(default = "default_priority")]
+    pub priority: river_core::Priority,
+}
+
+fn default_priority() -> river_core::Priority {
+    river_core::Priority::Interactive
 }
 
 #[derive(Debug, Clone, Deserialize)]
