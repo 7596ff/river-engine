@@ -72,6 +72,7 @@ in {
     orchestrator = riverLib.orchestratorOptions;
     embedding = riverLib.embeddingOptions;
     redis = riverLib.redisOptions;
+    litellm = riverLib.litellmOptions;
 
     agents = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
@@ -133,6 +134,29 @@ in {
       services.redis.servers.river = {
         enable = true;
         port = cfg.port;
+      };
+    }))
+
+    # LiteLLM proxy service
+    (lib.mkIf config.services.river.litellm.enable (let
+      cfg = config.services.river.litellm;
+      configFile = pkgs.writeText "litellm-config.yaml" (riverLib.mkLitellmConfig { inherit cfg; });
+      litellm = pkgs.python3Packages.litellm;
+    in {
+      systemd.services.river-litellm = {
+        description = "River LiteLLM Proxy";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
+
+        serviceConfig = commonServiceConfig // {
+          DynamicUser = true;
+          ExecStart = lib.concatStringsSep " " ([
+            "${litellm}/bin/litellm"
+            "--config" (toString configFile)
+            "--port" (toString cfg.port)
+          ] ++ cfg.extraArgs);
+          EnvironmentFile = toString cfg.apiKeyFile;
+        };
       };
     }))
 

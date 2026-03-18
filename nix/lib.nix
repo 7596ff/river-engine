@@ -46,6 +46,24 @@ in {
     port = mkOption { type = types.port; default = 6379; description = "Port for Redis server."; };
   };
 
+  # LiteLLM proxy options
+  litellmOptions = {
+    enable = mkEnableOption "LiteLLM proxy for external models";
+    port = mkOption { type = types.port; default = 4000; description = "Port for LiteLLM API."; };
+    apiKeyFile = mkOption { type = types.path; description = "Path to file containing ANTHROPIC_API_KEY."; };
+    models = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          name = mkOption { type = types.str; description = "Model name alias."; };
+          litellmModel = mkOption { type = types.str; description = "LiteLLM model identifier (e.g., claude-sonnet-4-20250514)."; };
+        };
+      });
+      default = [{ name = "claude-sonnet"; litellmModel = "claude-sonnet-4-20250514"; }];
+      description = "Models to expose via LiteLLM.";
+    };
+    extraArgs = mkOption { type = types.listOf types.str; default = []; description = "Extra arguments for litellm."; };
+  };
+
   # Discord adapter options
   discordOptions = {
     enable = mkEnableOption "Discord adapter";
@@ -138,4 +156,16 @@ in {
   ] ++ lib.optionals (cfg.stateFile != null) [
     "--state-file" (toString cfg.stateFile)
   ]);
+
+  # Generate LiteLLM config YAML
+  mkLitellmConfig = { cfg }: let
+    modelList = map (m: {
+      model_name = m.name;
+      litellm_params = {
+        model = m.litellmModel;
+      };
+    }) cfg.models;
+  in builtins.toJSON {
+    model_list = modelList;
+  };
 }
