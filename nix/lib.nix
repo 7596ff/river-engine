@@ -6,6 +6,14 @@ let
   inherit (lib) mkOption mkEnableOption types;
 
 in {
+  # Package source options
+  packageOptions = {
+    src = mkOption {
+      type = types.path;
+      description = "Path to river-engine source directory.";
+    };
+  };
+
   # Orchestrator options
   orchestratorOptions = {
     enable = mkEnableOption "River orchestrator";

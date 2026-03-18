@@ -5,8 +5,8 @@
 let
   riverLib = import ./lib.nix { inherit lib; };
   mkPackages = cudaSupport: import ./packages.nix {
-    inherit pkgs;
-    inherit cudaSupport;
+    inherit pkgs cudaSupport;
+    src = config.services.river.package.src;
   };
   commonServiceConfig = {
     Restart = "on-failure";
@@ -55,6 +55,7 @@ let
 
 in {
   options.services.river = {
+    package = riverLib.packageOptions;
     orchestrator = riverLib.orchestratorOptions;
     embedding = riverLib.embeddingOptions;
     redis = riverLib.redisOptions;

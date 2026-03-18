@@ -7,8 +7,8 @@ let
 
   # packages must be computed lazily (inside config) since it depends on config
   mkPackages = cudaSupport: import ./packages.nix {
-    inherit pkgs;
-    inherit cudaSupport;
+    inherit pkgs cudaSupport;
+    src = config.services.river.package.src;
   };
 
   commonServiceConfig = {
@@ -68,6 +68,7 @@ let
 
 in {
   options.services.river = {
+    package = riverLib.packageOptions;
     orchestrator = riverLib.orchestratorOptions;
     embedding = riverLib.embeddingOptions;
     redis = riverLib.redisOptions;
