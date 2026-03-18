@@ -5,9 +5,9 @@ pub mod queue;
 pub mod context;
 pub mod model;
 
-pub use state::{LoopEvent, LoopState, WakeTrigger};
+pub use state::{LoopEvent, LoopState, WakeTrigger, ToolCallRequest, FunctionCall};
 pub use queue::MessageQueue;
-pub use context::{ChatMessage, ContextBuilder, ToolCallRequest, FunctionCall};
+pub use context::{ChatMessage, ContextBuilder};
 pub use model::{ModelClient, ModelResponse, Usage};
 
 use crate::db::{Database, Message, MessageRole};
@@ -60,7 +60,6 @@ pub struct AgentLoop {
     heartbeat_scheduler: Arc<HeartbeatScheduler>,
     context_rotation: Arc<ContextRotation>,
     config: LoopConfig,
-    pending_tool_calls: Vec<ToolCallRequest>,
     shutdown_requested: bool,
     git: GitOps,
     /// System notifications to surface on next wake (git conflicts, etc.)
@@ -91,7 +90,6 @@ impl AgentLoop {
             snowflake_gen,
             heartbeat_scheduler,
             context_rotation,
-            pending_tool_calls: Vec::new(),
             shutdown_requested: false,
             git,
             config,
@@ -124,7 +122,7 @@ impl AgentLoop {
                 LoopState::Thinking => {
                     self.think_phase().await;
                 }
-                LoopState::Acting => {
+                LoopState::Acting { .. } => {
                     self.act_phase().await;
                 }
                 LoopState::Settling => {
@@ -267,13 +265,22 @@ impl AgentLoop {
             self.state = LoopState::Settling;
         } else {
             // Has tool calls - execute them
-            self.pending_tool_calls = response.tool_calls;
-            self.state = LoopState::Acting;
+            self.state = LoopState::Acting {
+                pending: response.tool_calls,
+            };
         }
     }
 
     async fn act_phase(&mut self) {
-        let tool_calls = std::mem::take(&mut self.pending_tool_calls);
+        // Extract pending tool calls from state
+        let tool_calls = match std::mem::replace(&mut self.state, LoopState::Thinking) {
+            LoopState::Acting { pending } => pending,
+            _ => {
+                tracing::error!("Invalid state in act_phase");
+                self.state = LoopState::Settling;
+                return;
+            }
+        };
         tracing::debug!("Executing {} tool calls", tool_calls.len());
 
         // Convert to executor format and execute

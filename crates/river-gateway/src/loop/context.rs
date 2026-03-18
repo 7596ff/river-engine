@@ -2,7 +2,7 @@
 
 use crate::api::IncomingMessage;
 use crate::tools::{ToolCallResponse, ToolSchema};
-use crate::r#loop::state::WakeTrigger;
+use crate::r#loop::state::{ToolCallRequest, WakeTrigger};
 use river_core::ContextStatus;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -19,20 +19,6 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-}
-
-/// Tool call as returned by the model
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRequest {
-    pub id: String,
-    pub r#type: String,
-    pub function: FunctionCall,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionCall {
-    pub name: String,
-    pub arguments: String,
 }
 
 impl ChatMessage {
@@ -236,6 +222,7 @@ impl Default for ContextBuilder {
 mod tests {
     use super::*;
     use crate::api::Author;
+    use crate::r#loop::state::FunctionCall;
     use crate::tools::{ToolCallResponse, ToolResult};
     use river_core::Priority;
 

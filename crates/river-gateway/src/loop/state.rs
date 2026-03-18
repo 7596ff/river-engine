@@ -1,6 +1,21 @@
 //! Loop state machine types
 
 use crate::api::IncomingMessage;
+use serde::{Deserialize, Serialize};
+
+/// Tool call as returned by the model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallRequest {
+    pub id: String,
+    pub r#type: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
 
 /// Events that can wake or signal the loop
 #[derive(Debug, Clone)]
@@ -33,7 +48,7 @@ pub enum LoopState {
     /// Model is generating
     Thinking,
     /// Executing tool calls
-    Acting,
+    Acting { pending: Vec<ToolCallRequest> },
     /// Cycle complete, committing state
     Settling,
 }
@@ -41,7 +56,7 @@ pub enum LoopState {
 impl LoopState {
     /// Check if loop is in a phase where messages should be queued
     pub fn should_queue_messages(&self) -> bool {
-        matches!(self, LoopState::Thinking | LoopState::Acting)
+        matches!(self, LoopState::Thinking | LoopState::Acting { .. })
     }
 
     /// Check if loop is sleeping
@@ -77,7 +92,7 @@ mod tests {
         assert!(!LoopState::Sleeping.should_queue_messages());
         assert!(!LoopState::Settling.should_queue_messages());
         assert!(LoopState::Thinking.should_queue_messages());
-        assert!(LoopState::Acting.should_queue_messages());
+        assert!(LoopState::Acting { pending: vec![] }.should_queue_messages());
     }
 
     #[test]
@@ -93,7 +108,7 @@ mod tests {
     fn test_is_sleeping() {
         assert!(LoopState::Sleeping.is_sleeping());
         assert!(!LoopState::Thinking.is_sleeping());
-        assert!(!LoopState::Acting.is_sleeping());
+        assert!(!LoopState::Acting { pending: vec![] }.is_sleeping());
     }
 
     #[test]
@@ -161,7 +176,7 @@ mod tests {
             LoopState::Sleeping,
             LoopState::Waking { trigger: WakeTrigger::Heartbeat },
             LoopState::Thinking,
-            LoopState::Acting,
+            LoopState::Acting { pending: vec![] },
             LoopState::Settling,
         ];
 
