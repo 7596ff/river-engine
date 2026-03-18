@@ -177,6 +177,8 @@ in {
         rich
         # Monitoring
         prometheus-client
+        # SSO
+        fastapi-sso
       ]);
     in {
       systemd.services.river-litellm = {

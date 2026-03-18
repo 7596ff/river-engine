@@ -30,10 +30,11 @@ impl ModelClient {
         messages: &[ChatMessage],
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, RiverError> {
+        let openai_tools: Vec<OpenAITool> = tools.iter().map(OpenAITool::from_schema).collect();
         let request = ChatCompletionRequest {
             model: &self.model,
             messages,
-            tools: if tools.is_empty() { None } else { Some(tools) },
+            tools: if tools.is_empty() { None } else { Some(openai_tools) },
         };
 
         let response = self
@@ -72,12 +73,28 @@ impl ModelClient {
     }
 }
 
+/// OpenAI tool format wrapper
+#[derive(Serialize)]
+struct OpenAITool<'a> {
+    r#type: &'static str,
+    function: &'a ToolSchema,
+}
+
+impl<'a> OpenAITool<'a> {
+    fn from_schema(schema: &'a ToolSchema) -> Self {
+        Self {
+            r#type: "function",
+            function: schema,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ChatCompletionRequest<'a> {
     model: &'a str,
     messages: &'a [ChatMessage],
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<&'a [ToolSchema]>,
+    tools: Option<Vec<OpenAITool<'a>>>,
 }
 
 #[derive(Deserialize)]
