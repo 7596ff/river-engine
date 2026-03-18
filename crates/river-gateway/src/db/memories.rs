@@ -185,6 +185,27 @@ impl Database {
             .map_err(|e| RiverError::database(e.to_string()))
     }
 
+    /// Get the birth memory (first memory, source = "system:birth")
+    /// Returns the memory if it exists, which encodes the AgentBirth in its Snowflake ID
+    pub fn get_birth_memory(&self) -> RiverResult<Option<Memory>> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT id, content, embedding, source, timestamp, expires_at, metadata
+                 FROM memories WHERE source = 'system:birth' LIMIT 1",
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        match rows.next().map_err(|e| RiverError::database(e.to_string()))? {
+            Some(row) => Ok(Some(Memory::from_row(row).map_err(|e| RiverError::database(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
     /// Get memories by IDs
     pub fn get_memories_by_ids(&self, ids: &[Snowflake]) -> RiverResult<Vec<Memory>> {
         if ids.is_empty() {

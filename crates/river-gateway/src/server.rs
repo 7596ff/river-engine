@@ -23,8 +23,6 @@ use crate::tools::{
     // Logging tools
     LogReadTool,
 };
-use chrono::{Datelike, Timelike};
-use river_core::AgentBirth;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -73,16 +71,15 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         None
     };
 
-    // Create agent birth (current time)
-    let now = chrono::Utc::now();
-    let agent_birth = AgentBirth::new(
-        now.year() as u16,
-        now.month() as u8,
-        now.day() as u8,
-        now.hour() as u8,
-        now.minute() as u8,
-        now.second() as u8,
-    )?;
+    // Load agent birth from database (must have been created via `river-gateway birth`)
+    let birth_memory = db.get_birth_memory()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Agent not birthed. Run `river-gateway birth --data-dir {:?} --name <name>` first.",
+            config.data_dir
+        )
+    })?;
+    let agent_birth = birth_memory.id.birth();
+    tracing::info!("Agent birth: {} (from memory: \"{}\")", agent_birth, birth_memory.content);
 
     // Create gateway config
     let agent_name = config.agent_name.clone();
