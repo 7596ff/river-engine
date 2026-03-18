@@ -1,27 +1,31 @@
 //! River Engine Migration Tool
 //!
 //! This tool helps agents migrate into the River Engine system by:
-//! - Creating a properly initialized database
+//! - Creating a properly initialized database with birth memory
 //! - Importing conversation history from various formats
 //! - Setting up agent identity and sessions
 //! - Importing memories (text only - embeddings generated separately)
 //!
+//! The birth memory ("i am <name>") is created first, encoding the AgentBirth
+//! timestamp in its Snowflake ID. This is required for the gateway to start.
+//!
 //! # Usage
 //!
 //! ```bash
-//! # Initialize a new agent database
-//! river-migrate init --agent-name my-agent --output ./river.db
+//! # Initialize a new agent database with birth
+//! river-migrate init --agent-name my-agent --output ./data/river.db --birth 2024-01-15T10:30:00Z
 //!
 //! # Import conversation history from JSON
-//! river-migrate import-messages --db ./river.db --input conversations.json
+//! river-migrate import-messages --db ./data/river.db --input conversations.json
 //!
 //! # Import memories from JSON
-//! river-migrate import-memories --db ./river.db --input memories.json
+//! river-migrate import-memories --db ./data/river.db --input memories.json
 //!
-//! # Full migration in one command
+//! # Full migration in one command (birth is required)
 //! river-migrate migrate \
 //!     --agent-name my-agent \
-//!     --output ./river.db \
+//!     --output ./data/river.db \
+//!     --birth 2024-01-15T10:30:00Z \
 //!     --messages conversations.json \
 //!     --memories memories.json
 //! ```
@@ -131,6 +135,11 @@ enum Commands {
         /// Output database path
         #[arg(long, short)]
         output: PathBuf,
+
+        /// Agent birth time (ISO 8601 format, e.g., 2024-01-15T10:30:00Z)
+        /// Required for migration to establish agent identity
+        #[arg(long)]
+        birth: String,
 
         /// Messages JSON file (optional)
         #[arg(long)]
@@ -267,10 +276,11 @@ fn main() -> Result<()> {
         Commands::Migrate {
             agent_name,
             output,
+            birth,
             messages,
             memories,
             session,
-        } => cmd_migrate(&agent_name, &output, messages, memories, &session),
+        } => cmd_migrate(&agent_name, &output, &birth, messages, memories, &session),
 
         Commands::ExportTemplates { output_dir } => cmd_export_templates(&output_dir),
 
@@ -305,16 +315,40 @@ fn cmd_init(agent_name: &str, output: &PathBuf, birth: Option<&str>) -> Result<(
     let conn = Connection::open(output)?;
     run_migrations(&conn)?;
 
+    // Create snowflake generator with the birth
+    let snowflake_gen = SnowflakeGenerator::new(agent_birth);
+
+    // Create the birth memory - this is the agent's first memory
+    // The AgentBirth is encoded in the Snowflake ID
+    let birth_memory_id = snowflake_gen.next_id(SnowflakeType::Embedding);
+    let now_ts = Utc::now().timestamp();
+    let placeholder_embedding: Vec<u8> = vec![0u8; 384 * 4]; // 384 f32s as bytes
+
+    conn.execute(
+        "INSERT INTO memories (id, content, embedding, source, timestamp, expires_at, metadata)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+        rusqlite::params![
+            birth_memory_id.to_bytes(),
+            format!("i am {}", agent_name),
+            placeholder_embedding,
+            "system:birth",
+            now_ts,
+            serde_json::json!({
+                "birth": format!("{}", agent_birth),
+                "name": agent_name
+            }).to_string()
+        ],
+    )?;
+
     // Create initial session
-    let now = Utc::now().timestamp();
     conn.execute(
         "INSERT INTO sessions (id, agent_name, created_at, last_active, context_tokens, metadata)
          VALUES (?1, ?2, ?3, ?4, 0, ?5)",
         rusqlite::params![
             "main",
             agent_name,
-            now,
-            now,
+            now_ts,
+            now_ts,
             serde_json::json!({
                 "agent_birth": format!("{}", agent_birth),
                 "created_by": "river-migrate"
@@ -331,11 +365,11 @@ fn cmd_init(agent_name: &str, output: &PathBuf, birth: Option<&str>) -> Result<(
     println!("Created database: {:?}", output);
     println!("Agent name: {}", agent_name);
     println!("Agent birth: {}", agent_birth);
+    println!("Birth memory: \"i am {}\" (ID: {})", agent_name, birth_memory_id);
     println!("\nNext steps:");
     println!("  1. Import messages: river-migrate import-messages --db {:?} --input messages.json", output);
     println!("  2. Import memories: river-migrate import-memories --db {:?} --input memories.json", output);
-    println!("  3. Copy to data dir: cp {:?} /var/lib/river/river.db", output);
-    println!("  4. Start gateway with: river-gateway --data-dir /var/lib/river --agent-name {}", agent_name);
+    println!("  3. Start gateway with: river-gateway --workspace <path> --data-dir {:?}", output.parent().unwrap_or(output));
 
     Ok(())
 }
@@ -495,12 +529,13 @@ fn cmd_import_memories(db: &PathBuf, input: &PathBuf) -> Result<()> {
 fn cmd_migrate(
     agent_name: &str,
     output: &PathBuf,
+    birth: &str,
     messages: Option<PathBuf>,
     memories: Option<PathBuf>,
     session: &str,
 ) -> Result<()> {
-    // Initialize
-    cmd_init(agent_name, output, None)?;
+    // Initialize with the specified birth
+    cmd_init(agent_name, output, Some(birth))?;
 
     // Import messages if provided
     if let Some(messages_path) = messages {
@@ -622,7 +657,8 @@ fn cmd_export_templates(output_dir: &PathBuf) -> Result<()> {
     println!("Created: {:?}", memories_path);
 
     println!("\nEdit these templates with your agent's data, then run:");
-    println!("  river-migrate migrate --agent-name <name> --output river.db \\");
+    println!("  river-migrate migrate --agent-name <name> --output ./data/river.db \\");
+    println!("      --birth 2024-01-15T10:30:00Z \\");
     println!("      --messages messages-template.json --memories memories-template.json");
 
     Ok(())
