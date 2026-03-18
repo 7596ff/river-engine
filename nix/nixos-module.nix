@@ -141,7 +141,15 @@ in {
     (lib.mkIf config.services.river.litellm.enable (let
       cfg = config.services.river.litellm;
       configFile = pkgs.writeText "litellm-config.yaml" (riverLib.mkLitellmConfig { inherit cfg; });
-      litellm = pkgs.python3Packages.litellm;
+      python = pkgs.python3.withPackages (ps: with ps; [
+        litellm
+        backoff
+        uvicorn
+        fastapi
+        gunicorn
+        orjson
+        pyyaml
+      ]);
     in {
       systemd.services.river-litellm = {
         description = "River LiteLLM Proxy";
@@ -151,7 +159,7 @@ in {
         serviceConfig = commonServiceConfig // {
           DynamicUser = true;
           ExecStart = lib.concatStringsSep " " ([
-            "${litellm}/bin/litellm"
+            "${python}/bin/litellm"
             "--config" (toString configFile)
             "--port" (toString cfg.port)
           ] ++ cfg.extraArgs);

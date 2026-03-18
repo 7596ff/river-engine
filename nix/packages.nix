@@ -7,8 +7,16 @@ let
     inherit cudaSupport;
   };
 
+  # Filter source to only include Rust build files
+  filteredSrc = pkgs.lib.sourceByRegex src [
+    "Cargo\.toml"
+    "Cargo\.lock"
+    "crates"
+    "crates/.*"
+  ];
+
   commonBuildInputs = with pkgs; [ openssl ];
-  commonNativeBuildInputs = with pkgs; [ pkg-config ];
+  commonNativeBuildInputs = with pkgs; [ pkg-config git ];
 
 in {
   inherit llama-cpp;
@@ -16,8 +24,8 @@ in {
   river-gateway = pkgs.rustPlatform.buildRustPackage {
     pname = "river-gateway";
     version = "0.1.0";
-    inherit src;
-    cargoLock.lockFile = "${src}/Cargo.lock";
+    src = filteredSrc;
+    cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-gateway" ];
     nativeBuildInputs = commonNativeBuildInputs;
     buildInputs = commonBuildInputs;
@@ -26,8 +34,8 @@ in {
   river-orchestrator = pkgs.rustPlatform.buildRustPackage {
     pname = "river-orchestrator";
     version = "0.1.0";
-    inherit src;
-    cargoLock.lockFile = "${src}/Cargo.lock";
+    src = filteredSrc;
+    cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-orchestrator" ];
     nativeBuildInputs = commonNativeBuildInputs;
     buildInputs = commonBuildInputs;
@@ -36,8 +44,8 @@ in {
   river-discord = pkgs.rustPlatform.buildRustPackage {
     pname = "river-discord";
     version = "0.1.0";
-    inherit src;
-    cargoLock.lockFile = "${src}/Cargo.lock";
+    src = filteredSrc;
+    cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-discord" ];
     nativeBuildInputs = commonNativeBuildInputs;
     buildInputs = commonBuildInputs;
