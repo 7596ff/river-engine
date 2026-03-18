@@ -26,9 +26,10 @@ impl EventHandler {
         }
 
         let channel_id = msg.channel_id.get();
+        let is_dm = msg.guild_id.is_none();
 
-        // Check if we're listening to this channel
-        if !self.channels.contains(channel_id).await {
+        // Allow DMs, or check if we're listening to this guild channel
+        if !is_dm && !self.channels.contains(channel_id).await {
             return;
         }
 
@@ -62,9 +63,10 @@ impl EventHandler {
     /// Handle a reaction add event
     pub async fn handle_reaction(&self, reaction: Box<ReactionAdd>) {
         let channel_id = reaction.channel_id.get();
+        let is_dm = reaction.guild_id.is_none();
 
-        // Check if we're listening to this channel
-        if !self.channels.contains(channel_id).await {
+        // Allow DMs, or check if we're listening to this guild channel
+        if !is_dm && !self.channels.contains(channel_id).await {
             return;
         }
 
