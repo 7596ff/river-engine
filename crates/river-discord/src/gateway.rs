@@ -40,7 +40,8 @@ pub struct IncomingEvent {
 #[derive(Debug, Deserialize)]
 pub struct IncomingResponse {
     pub status: String,
-    pub channel: String,
+    #[serde(default)]
+    pub channel: Option<String>,
 }
 
 /// HTTP client for river-gateway
