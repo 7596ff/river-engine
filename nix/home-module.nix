@@ -3,18 +3,54 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.river;
   riverLib = import ./lib.nix { inherit lib; };
-
-  # packages must be computed lazily (inside config) since it depends on cfg
   mkPackages = cudaSupport: import ./packages.nix {
     inherit pkgs;
     inherit cudaSupport;
   };
-
   commonServiceConfig = {
     Restart = "on-failure";
     RestartSec = 5;
+  };
+
+  # Agent service generator - called lazily per agent
+  mkAgentServices = name: agentCfg: let
+    packages = mkPackages false;
+  in lib.optionalAttrs agentCfg.enable {
+    "river-${name}-gateway" = {
+      Unit = {
+        Description = "River Gateway - ${name}";
+        After = [ "network.target" ];
+      };
+      Service = commonServiceConfig // {
+        ExecStart = riverLib.mkGatewayCommand {
+          cfg = agentCfg;
+          inherit packages;
+        };
+        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
+      };
+      Install = {
+        WantedBy = [ "default.target" ];
+      };
+    };
+  } // lib.optionalAttrs (agentCfg.enable && agentCfg.discord.enable) {
+    "river-${name}-discord" = {
+      Unit = {
+        Description = "River Discord Adapter - ${name}";
+        After = [ "river-${name}-gateway.service" ];
+        BindsTo = [ "river-${name}-gateway.service" ];
+      };
+      Service = commonServiceConfig // {
+        ExecStart = riverLib.mkDiscordCommand {
+          cfg = agentCfg.discord;
+          agentPort = agentCfg.port;
+          inherit packages;
+        };
+      };
+      Install = {
+        WantedBy = [ "default.target" ];
+      };
+    };
   };
 
 in {
@@ -36,8 +72,9 @@ in {
 
   config = lib.mkMerge [
     # Orchestrator service
-    (lib.mkIf cfg.orchestrator.enable (let
-      packages = mkPackages cfg.orchestrator.cudaSupport;
+    (lib.mkIf config.services.river.orchestrator.enable (let
+      cfg = config.services.river.orchestrator;
+      packages = mkPackages cfg.cudaSupport;
     in {
       systemd.user.services.river-orchestrator = {
         Unit = {
@@ -47,10 +84,9 @@ in {
 
         Service = commonServiceConfig // {
           ExecStart = riverLib.mkOrchestratorCommand {
-            cfg = cfg.orchestrator;
-            inherit packages;
+            inherit cfg packages;
           };
-          Environment = lib.mapAttrsToList (k: v: "${k}=${v}") cfg.orchestrator.environment;
+          Environment = lib.mapAttrsToList (k: v: "${k}=${v}") cfg.environment;
         };
 
         Install = {
@@ -60,8 +96,9 @@ in {
     }))
 
     # Embedding service
-    (lib.mkIf cfg.embedding.enable (let
-      packages = mkPackages cfg.embedding.cudaSupport;
+    (lib.mkIf config.services.river.embedding.enable (let
+      cfg = config.services.river.embedding;
+      packages = mkPackages cfg.cudaSupport;
     in {
       systemd.user.services.river-embedding = {
         Unit = {
@@ -71,8 +108,7 @@ in {
 
         Service = commonServiceConfig // {
           ExecStart = riverLib.mkEmbeddingCommand {
-            cfg = cfg.embedding;
-            inherit packages;
+            inherit cfg packages;
           };
         };
 
@@ -83,7 +119,9 @@ in {
     }))
 
     # Redis as user service
-    (lib.mkIf cfg.redis.enable {
+    (lib.mkIf config.services.river.redis.enable (let
+      cfg = config.services.river.redis;
+    in {
       systemd.user.services.river-redis = {
         Unit = {
           Description = "River Redis Server";
@@ -91,7 +129,7 @@ in {
         };
 
         Service = commonServiceConfig // {
-          ExecStart = "${pkgs.redis}/bin/redis-server --port ${toString cfg.redis.port} --dir %h/.local/share/river/redis";
+          ExecStart = "${pkgs.redis}/bin/redis-server --port ${toString cfg.port} --dir %h/.local/share/river/redis";
           ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.local/share/river/redis";
         };
 
@@ -99,52 +137,11 @@ in {
           WantedBy = [ "default.target" ];
         };
       };
-    })
+    }))
 
-    # Agent services
-    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable (let
-      packages = mkPackages false;  # Agents don't need CUDA
-    in {
-      # Gateway service
-      systemd.user.services."river-${name}-gateway" = {
-        Unit = {
-          Description = "River Gateway - ${name}";
-          After = [ "network.target" ];
-        };
-
-        Service = commonServiceConfig // {
-          ExecStart = riverLib.mkGatewayCommand {
-            cfg = agentCfg;
-            inherit packages;
-          };
-          Environment = lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
-        };
-
-        Install = {
-          WantedBy = [ "default.target" ];
-        };
-      };
-
-      # Discord service (if enabled)
-      systemd.user.services."river-${name}-discord" = lib.mkIf agentCfg.discord.enable {
-        Unit = {
-          Description = "River Discord Adapter - ${name}";
-          After = [ "river-${name}-gateway.service" ];
-          BindsTo = [ "river-${name}-gateway.service" ];
-        };
-
-        Service = commonServiceConfig // {
-          ExecStart = riverLib.mkDiscordCommand {
-            cfg = agentCfg.discord;
-            agentPort = agentCfg.port;
-            inherit packages;
-          };
-        };
-
-        Install = {
-          WantedBy = [ "default.target" ];
-        };
-      };
-    })) cfg.agents))
+    # Agent services - use mapAttrs for lazy evaluation
+    {
+      systemd.user.services = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentServices config.services.river.agents));
+    }
   ];
 }

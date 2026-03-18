@@ -3,10 +3,9 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.river;
   riverLib = import ./lib.nix { inherit lib; };
 
-  # packages must be computed lazily (inside config) since it depends on cfg
+  # packages must be computed lazily (inside config) since it depends on config
   mkPackages = cudaSupport: import ./packages.nix {
     inherit pkgs;
     inherit cudaSupport;
@@ -15,6 +14,56 @@ let
   commonServiceConfig = {
     Restart = "on-failure";
     RestartSec = 5;
+  };
+
+  # Agent service generators - called lazily per agent
+  mkAgentServices = name: agentCfg: let
+    packages = mkPackages false;
+  in lib.optionalAttrs agentCfg.enable {
+    "river-${name}-gateway" = {
+      description = "River Gateway - ${name}";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      serviceConfig = commonServiceConfig // {
+        DynamicUser = false;
+        User = "river-${name}";
+        Group = "river-${name}";
+        StateDirectory = "river-${name}";
+        ExecStart = riverLib.mkGatewayCommand {
+          cfg = agentCfg;
+          inherit packages;
+        };
+      };
+      environment = agentCfg.environment;
+    };
+  } // lib.optionalAttrs (agentCfg.enable && agentCfg.discord.enable) {
+    "river-${name}-discord" = {
+      description = "River Discord Adapter - ${name}";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "river-${name}-gateway.service" ];
+      bindsTo = [ "river-${name}-gateway.service" ];
+      serviceConfig = commonServiceConfig // {
+        User = "river-${name}";
+        Group = "river-${name}";
+        ExecStart = riverLib.mkDiscordCommand {
+          cfg = agentCfg.discord;
+          agentPort = agentCfg.port;
+          inherit packages;
+        };
+      };
+    };
+  };
+
+  mkAgentUsers = name: agentCfg: lib.optionalAttrs agentCfg.enable {
+    "river-${name}" = {
+      isSystemUser = true;
+      group = "river-${name}";
+      home = "/var/lib/river-${name}";
+    };
+  };
+
+  mkAgentGroups = name: agentCfg: lib.optionalAttrs agentCfg.enable {
+    "river-${name}" = {};
   };
 
 in {
@@ -36,8 +85,9 @@ in {
 
   config = lib.mkMerge [
     # Orchestrator service
-    (lib.mkIf cfg.orchestrator.enable (let
-      packages = mkPackages cfg.orchestrator.cudaSupport;
+    (lib.mkIf config.services.river.orchestrator.enable (let
+      cfg = config.services.river.orchestrator;
+      packages = mkPackages cfg.cudaSupport;
     in {
       systemd.services.river-orchestrator = {
         description = "River Engine Orchestrator";
@@ -48,18 +98,18 @@ in {
           DynamicUser = true;
           StateDirectory = "river-orchestrator";
           ExecStart = riverLib.mkOrchestratorCommand {
-            cfg = cfg.orchestrator;
-            inherit packages;
+            inherit cfg packages;
           };
         };
 
-        environment = cfg.orchestrator.environment;
+        environment = cfg.environment;
       };
     }))
 
     # Embedding service
-    (lib.mkIf cfg.embedding.enable (let
-      packages = mkPackages cfg.embedding.cudaSupport;
+    (lib.mkIf config.services.river.embedding.enable (let
+      cfg = config.services.river.embedding;
+      packages = mkPackages cfg.cudaSupport;
     in {
       systemd.services.river-embedding = {
         description = "River Engine Embedding Server";
@@ -69,70 +119,27 @@ in {
         serviceConfig = commonServiceConfig // {
           DynamicUser = true;
           ExecStart = riverLib.mkEmbeddingCommand {
-            cfg = cfg.embedding;
-            inherit packages;
+            inherit cfg packages;
           };
         };
       };
     }))
 
     # Redis via NixOS module
-    (lib.mkIf cfg.redis.enable {
+    (lib.mkIf config.services.river.redis.enable (let
+      cfg = config.services.river.redis;
+    in {
       services.redis.servers.river = {
         enable = true;
-        port = cfg.redis.port;
+        port = cfg.port;
       };
-    })
+    }))
 
-    # Agent services
-    (lib.mkMerge (lib.mapAttrsToList (name: agentCfg: lib.mkIf agentCfg.enable (let
-      packages = mkPackages false;  # Agents don't need CUDA
-    in {
-      # Gateway service
-      systemd.services."river-${name}-gateway" = {
-        description = "River Gateway - ${name}";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "network.target" ];
-
-        serviceConfig = commonServiceConfig // {
-          DynamicUser = false;
-          User = "river-${name}";
-          Group = "river-${name}";
-          StateDirectory = "river-${name}";
-          ExecStart = riverLib.mkGatewayCommand {
-            cfg = agentCfg;
-            inherit packages;
-          };
-        };
-
-        environment = agentCfg.environment;
-      };
-
-      # Create user for agent
-      users.users."river-${name}" = {
-        isSystemUser = true;
-        group = "river-${name}";
-        home = "/var/lib/river-${name}";
-      };
-      users.groups."river-${name}" = {};
-
-      # Discord service (if enabled)
-      systemd.services."river-${name}-discord" = lib.mkIf agentCfg.discord.enable {
-        description = "River Discord Adapter - ${name}";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "river-${name}-gateway.service" ];
-        bindsTo = [ "river-${name}-gateway.service" ];
-
-        serviceConfig = commonServiceConfig // {
-          User = "river-${name}";
-          Group = "river-${name}";
-          ExecStart = riverLib.mkDiscordCommand {
-            cfg = agentCfg.discord;
-            agentPort = agentCfg.port;
-            inherit packages;
-          };
-        };
-      };
-    })) cfg.agents))
+    # Agent services - use mapAttrs for lazy evaluation
+    {
+      systemd.services = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentServices config.services.river.agents));
+      users.users = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentUsers config.services.river.agents));
+      users.groups = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentGroups config.services.river.agents));
+    }
   ];
 }
