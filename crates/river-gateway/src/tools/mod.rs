@@ -10,6 +10,7 @@ mod web;
 mod model;
 mod scheduling;
 mod logging;
+mod subagent;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -26,3 +27,7 @@ pub use model::{
 };
 pub use scheduling::{ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool};
 pub use logging::LogReadTool;
+pub use subagent::{
+    SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
+    InternalSendTool, InternalReceiveTool, WaitForSubagentTool
+};

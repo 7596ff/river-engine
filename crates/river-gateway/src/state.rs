@@ -4,6 +4,7 @@ use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::r#loop::{LoopEvent, MessageQueue};
 use crate::redis::{RedisClient, RedisConfig};
+use crate::subagent::SubagentManager;
 use crate::tools::{ToolExecutor, ToolRegistry};
 use river_core::{AgentBirth, SnowflakeGenerator};
 use std::path::PathBuf;
@@ -22,6 +23,8 @@ pub struct AppState {
     pub message_queue: Arc<MessageQueue>,
     /// Bearer token for authentication (if configured)
     pub auth_token: Option<String>,
+    /// Subagent manager
+    pub subagent_manager: Arc<RwLock<SubagentManager>>,
 }
 
 /// Gateway configuration (runtime)
@@ -50,11 +53,13 @@ impl AppState {
         loop_tx: mpsc::Sender<LoopEvent>,
         message_queue: Arc<MessageQueue>,
         auth_token: Option<String>,
+        subagent_manager: Arc<RwLock<SubagentManager>>,
     ) -> Self {
+        let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
         let executor = ToolExecutor::new(registry, config.context_limit);
 
         Self {
-            snowflake_gen: Arc::new(SnowflakeGenerator::new(config.agent_birth)),
+            snowflake_gen,
             db,
             tool_executor: Arc::new(RwLock::new(executor)),
             embedding_client: embedding_client.map(Arc::new),
@@ -63,6 +68,7 @@ impl AppState {
             message_queue,
             config,
             auth_token,
+            subagent_manager,
         }
     }
 }
@@ -72,9 +78,11 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::tools::ToolRegistry;
+    use river_core::SnowflakeGenerator;
 
     #[tokio::test]
     async fn test_state_creation() {
+        let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
             data_dir: PathBuf::from("/tmp/test"),
@@ -83,7 +91,7 @@ mod tests {
             model_name: "test".to_string(),
             context_limit: 65536,
             heartbeat_minutes: 45,
-            agent_birth: AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap(),
+            agent_birth,
             agent_name: "test".to_string(),
             embedding: None,
             redis: None,
@@ -93,7 +101,19 @@ mod tests {
         let registry = ToolRegistry::new();
         let (loop_tx, _loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
-        let state = AppState::new(config, db, registry, None, None, loop_tx, message_queue, None);
+        let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
+        let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
+        let state = AppState::new(
+            config,
+            db,
+            registry,
+            None,
+            None,
+            loop_tx,
+            message_queue,
+            None,
+            subagent_manager,
+        );
 
         assert_eq!(state.config.port, 3000);
         assert_eq!(state.config.context_limit, 65536);

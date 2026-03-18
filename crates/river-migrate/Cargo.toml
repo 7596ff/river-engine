@@ -1,0 +1,22 @@
+[package]
+name = "river-migrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Migration tool for importing agent data into River Engine"
+
+[[bin]]
+name = "river-migrate"
+path = "src/main.rs"
+
+[dependencies]
+river-core = { path = "../river-core" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

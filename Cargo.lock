@@ -1691,6 +1691,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "river-migrate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "river-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "river-orchestrator"
 version = "0.1.0"
 dependencies = [

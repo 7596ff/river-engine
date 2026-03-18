@@ -6,9 +6,22 @@ use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
+use crate::subagent::SubagentManager;
 use crate::tools::{
     BashTool, EditTool, EmbedTool, GlobTool, GrepTool, MemoryDeleteTool, MemoryDeleteBySourceTool,
     MemorySearchTool, ReadTool, ToolRegistry, WriteTool,
+    SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
+    InternalSendTool, InternalReceiveTool, WaitForSubagentTool,
+    // Web tools
+    WebFetchTool, WebSearchTool,
+    // Communication tools
+    SendMessageTool, ListAdaptersTool, ReadChannelTool, AdapterRegistry,
+    // Model management tools
+    RequestModelTool, ReleaseModelTool, SwitchModelTool, ModelManagerConfig, ModelManagerState,
+    // Scheduling tools
+    ScheduleHeartbeatTool, RotateContextTool, HeartbeatScheduler, ContextRotation,
+    // Logging tools
+    LogReadTool,
 };
 use chrono::{Datelike, Timelike};
 use river_core::AgentBirth;
@@ -16,7 +29,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 /// Server configuration from CLI args
 pub struct ServerConfig {
@@ -97,6 +110,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let db_arc = Arc::new(std::sync::Mutex::new(db));
     let snowflake_gen = Arc::new(river_core::SnowflakeGenerator::new(gateway_config.agent_birth));
 
+    // Create subagent manager
+    let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen.clone())));
+
     // Create tool registry with core tools
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTool::new(&config.workspace)));
@@ -105,6 +121,57 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     registry.register(Box::new(GlobTool::new(&config.workspace)));
     registry.register(Box::new(GrepTool::new(&config.workspace)));
     registry.register(Box::new(BashTool::new(&config.workspace)));
+
+    // Register subagent tools
+    registry.register(Box::new(SpawnSubagentTool::new(
+        subagent_manager.clone(),
+        config.workspace.clone(),
+        gateway_config.model_url.clone(),
+        gateway_config.model_name.clone(),
+    )));
+    registry.register(Box::new(ListSubagentsTool::new(subagent_manager.clone())));
+    registry.register(Box::new(SubagentStatusTool::new(subagent_manager.clone())));
+    registry.register(Box::new(StopSubagentTool::new(subagent_manager.clone())));
+    registry.register(Box::new(InternalSendTool::new(subagent_manager.clone())));
+    registry.register(Box::new(InternalReceiveTool::new(subagent_manager.clone())));
+    registry.register(Box::new(WaitForSubagentTool::new(subagent_manager.clone())));
+    tracing::info!("Registered subagent tools (7 tools)");
+
+    // Register web tools
+    registry.register(Box::new(WebFetchTool::new(&config.workspace)));
+    registry.register(Box::new(WebSearchTool::new()));
+    tracing::info!("Registered web tools (webfetch, websearch)");
+
+    // Register logging tools
+    registry.register(Box::new(LogReadTool::new(Some(config.agent_name.clone()))));
+    tracing::info!("Registered logging tools (log_read)");
+
+    // Create and register scheduling tools
+    let heartbeat_scheduler = Arc::new(HeartbeatScheduler::new(gateway_config.heartbeat_minutes));
+    let context_rotation = Arc::new(ContextRotation::new());
+    registry.register(Box::new(ScheduleHeartbeatTool::new(heartbeat_scheduler.clone())));
+    registry.register(Box::new(RotateContextTool::new(context_rotation.clone())));
+    tracing::info!("Registered scheduling tools (schedule_heartbeat, rotate_context)");
+
+    // Create and register communication tools (adapter registry starts empty, adapters added via config)
+    let adapter_registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+    registry.register(Box::new(SendMessageTool::new(adapter_registry.clone())));
+    registry.register(Box::new(ListAdaptersTool::new(adapter_registry.clone())));
+    registry.register(Box::new(ReadChannelTool::new(adapter_registry.clone())));
+    tracing::info!("Registered communication tools (send_message, list_adapters, read_channel)");
+
+    // Create and register model management tools (only if orchestrator is configured)
+    if let Some(ref orchestrator_url) = config.orchestrator_url {
+        let model_config = ModelManagerConfig {
+            orchestrator_url: orchestrator_url.clone(),
+            timeout: Duration::from_secs(120),
+        };
+        let model_state = Arc::new(RwLock::new(ModelManagerState::default()));
+        registry.register(Box::new(RequestModelTool::new(model_config.clone(), model_state.clone())));
+        registry.register(Box::new(ReleaseModelTool::new(model_config, model_state.clone())));
+        registry.register(Box::new(SwitchModelTool::new(model_state)));
+        tracing::info!("Registered model management tools (request_model, release_model, switch_model)");
+    }
 
     // Register memory tools if embedding client is available
     if let Some(ref embed_client) = embedding_client {
@@ -183,6 +250,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         loop_tx,
         message_queue.clone(),
         auth_token,
+        subagent_manager,
     ));
 
     // Spawn the agent loop

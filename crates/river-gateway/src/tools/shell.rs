@@ -3,7 +3,6 @@
 use river_core::RiverError;
 use super::{Tool, ToolResult};
 use serde_json::{json, Value};
-use std::process::Command;
 use std::time::Duration;
 use std::path::PathBuf;
 
@@ -55,21 +54,37 @@ impl Tool for BashTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: command"))?;
 
-        // TODO: Use for async command execution with timeout support
-        let _timeout_ms = args.get("timeout")
+        let timeout_ms = args.get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .min(MAX_TIMEOUT_MS);
 
         let output_file = args.get("output_file").and_then(|v| v.as_str());
 
-        // Execute the command
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&self.workspace)
-            .output()
-            .map_err(|e| RiverError::tool(format!("Failed to execute command: {}", e)))?;
+        // Execute the command with timeout using tokio
+        let command = command.to_string();
+        let workspace = self.workspace.clone();
+        let timeout = Duration::from_millis(timeout_ms);
+
+        let output = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let child = tokio::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&command)
+                    .current_dir(&workspace)
+                    .output();
+
+                match tokio::time::timeout(timeout, child).await {
+                    Ok(result) => result.map_err(|e| {
+                        RiverError::tool(format!("Failed to execute command: {}", e))
+                    }),
+                    Err(_) => Err(RiverError::tool(format!(
+                        "Command timed out after {} ms",
+                        timeout_ms
+                    ))),
+                }
+            })
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -162,8 +177,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_bash_echo() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_echo() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -171,8 +186,8 @@ mod tests {
         assert!(result.output.contains("hello"));
     }
 
-    #[test]
-    fn test_bash_failure() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_failure() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -182,8 +197,8 @@ mod tests {
         assert!(err.to_string().contains("exit code: 1"));
     }
 
-    #[test]
-    fn test_bash_working_dir() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_working_dir() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -191,8 +206,8 @@ mod tests {
         assert!(result.output.contains(&dir.path().to_string_lossy().to_string()));
     }
 
-    #[test]
-    fn test_bash_output_to_file() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_output_to_file() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -206,8 +221,8 @@ mod tests {
         assert!(content.contains("test output"));
     }
 
-    #[test]
-    fn test_bash_output_file_path_validation() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_output_file_path_validation() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -220,8 +235,8 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("relative"));
     }
 
-    #[test]
-    fn test_bash_output_file_path_traversal() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_output_file_path_traversal() {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
@@ -232,5 +247,20 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("escapes workspace"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_bash_timeout() {
+        let dir = TempDir::new().unwrap();
+        let tool = BashTool::new(dir.path());
+
+        // Command that would take 10 seconds but timeout is 100ms
+        let result = tool.execute(json!({
+            "command": "sleep 10",
+            "timeout": 100
+        }));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
     }
 }

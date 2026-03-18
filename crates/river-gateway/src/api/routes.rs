@@ -122,15 +122,17 @@ mod tests {
     use crate::db::Database;
     use crate::r#loop::MessageQueue;
     use crate::state::GatewayConfig;
+    use crate::subagent::SubagentManager;
     use crate::tools::ToolRegistry;
     use axum::body::Body;
     use axum::http::Request;
-    use river_core::AgentBirth;
+    use river_core::{AgentBirth, SnowflakeGenerator};
     use std::path::PathBuf;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, RwLock};
     use tower::ServiceExt;
 
     fn test_state() -> (Arc<AppState>, mpsc::Receiver<LoopEvent>) {
+        let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
             data_dir: PathBuf::from("/tmp/test"),
@@ -139,7 +141,7 @@ mod tests {
             model_name: "test".to_string(),
             context_limit: 65536,
             heartbeat_minutes: 45,
-            agent_birth: AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap(),
+            agent_birth,
             agent_name: "test-agent".to_string(),
             embedding: None,
             redis: None,
@@ -149,8 +151,10 @@ mod tests {
         let registry = ToolRegistry::new();
         let (loop_tx, loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
+        let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
+        let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
         // No auth token for basic tests - tests that need auth should set it explicitly
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None)), loop_rx)
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager)), loop_rx)
     }
 
     #[tokio::test]
@@ -224,6 +228,7 @@ mod tests {
     }
 
     fn test_state_with_auth(token: &str) -> (Arc<AppState>, mpsc::Receiver<LoopEvent>) {
+        let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
             data_dir: PathBuf::from("/tmp/test"),
@@ -232,7 +237,7 @@ mod tests {
             model_name: "test".to_string(),
             context_limit: 65536,
             heartbeat_minutes: 45,
-            agent_birth: AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap(),
+            agent_birth,
             agent_name: "test-agent".to_string(),
             embedding: None,
             redis: None,
@@ -242,7 +247,9 @@ mod tests {
         let registry = ToolRegistry::new();
         let (loop_tx, loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()))), loop_rx)
+        let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
+        let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager)), loop_rx)
     }
 
     #[tokio::test]
