@@ -364,12 +364,20 @@ fn format_parameters(params: u64) -> String {
 mod tests {
     use super::*;
     use crate::config::OrchestratorConfig;
+    use crate::process::ProcessConfig;
+    use crate::resources::ResourceConfig;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
     fn test_state() -> Arc<OrchestratorState> {
-        Arc::new(OrchestratorState::new(OrchestratorConfig::default(), vec![]))
+        Arc::new(OrchestratorState::new(
+            OrchestratorConfig::default(),
+            vec![],
+            vec![],
+            ResourceConfig::default(),
+            ProcessConfig::default(),
+        ))
     }
 
     #[tokio::test]

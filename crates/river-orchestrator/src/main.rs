@@ -1,10 +1,9 @@
 use clap::Parser;
 use river_orchestrator::{
     api::create_router,
-    config::{ModelsFile, OrchestratorConfig},
+    config::OrchestratorConfig,
     discovery::ModelScanner,
     external::ExternalModelsFile,
-    models::{ModelInfo, ModelProvider},
     process::ProcessConfig,
     resources::ResourceConfig,
     OrchestratorState,
@@ -25,10 +24,6 @@ struct Args {
     /// Health threshold in seconds
     #[arg(long, default_value = "120")]
     health_threshold: u64,
-
-    /// Path to models config JSON file (legacy)
-    #[arg(long)]
-    models_config: Option<PathBuf>,
 
     /// Directories to scan for GGUF models (comma-separated)
     #[arg(long, value_delimiter = ',')]
@@ -82,107 +77,72 @@ async fn main() -> anyhow::Result<()> {
 
     let (port_start, port_end) = parse_port_range(&args.port_range);
 
-    // Check for advanced mode (model_dirs specified)
-    let use_advanced = !args.model_dirs.is_empty();
+    // Scan for local models
+    let scanner = ModelScanner::new(args.model_dirs.clone());
+    let local_models = scanner.scan();
+    tracing::info!("Discovered {} local models", local_models.len());
 
-    let state = if use_advanced {
-        tracing::info!("Advanced mode: scanning for GGUF models");
-
-        // Scan for local models
-        let scanner = ModelScanner::new(args.model_dirs.clone());
-        let local_models = scanner.scan();
-        tracing::info!("Discovered {} local models", local_models.len());
-
-        // Load external models
-        let external_models = if let Some(path) = &args.external_models {
-            tracing::info!("Loading external models from {:?}", path);
-            let content = std::fs::read_to_string(path)?;
-            let file: ExternalModelsFile = serde_json::from_str(&content)?;
-            file.external_models
-        } else {
-            Vec::new()
-        };
-        tracing::info!("Loaded {} external models", external_models.len());
-
-        let config = OrchestratorConfig {
-            port: args.port,
-            health_threshold_seconds: args.health_threshold,
-            models_config: args.models_config,
-            model_dirs: args.model_dirs,
-            external_models_config: args.external_models,
-            idle_timeout_seconds: args.idle_timeout,
-            llama_server_path: args.llama_server_path.clone(),
-            port_range_start: port_start,
-            port_range_end: port_end,
-            reserve_vram_mb: args.reserve_vram_mb,
-            reserve_ram_mb: args.reserve_ram_mb,
-        };
-
-        let resource_config = ResourceConfig {
-            reserve_vram_bytes: args.reserve_vram_mb * 1024 * 1024,
-            reserve_ram_bytes: args.reserve_ram_mb * 1024 * 1024,
-        };
-
-        let process_config = ProcessConfig {
-            llama_server_path: args.llama_server_path,
-            port_range_start: port_start,
-            port_range_end: port_end,
-            default_ctx_size: 8192,
-            health_check_timeout: Duration::from_secs(30),
-        };
-
-        Arc::new(OrchestratorState::new_advanced(
-            config,
-            local_models,
-            external_models,
-            resource_config,
-            process_config,
-        ))
+    // Load external models
+    let external_models = if let Some(path) = &args.external_models {
+        tracing::info!("Loading external models from {:?}", path);
+        let content = std::fs::read_to_string(path)?;
+        let file: ExternalModelsFile = serde_json::from_str(&content)?;
+        file.external_models
     } else {
-        // Legacy mode
-        let models = if let Some(path) = &args.models_config {
-            tracing::info!("Loading models from {:?}", path);
-            let content = std::fs::read_to_string(path)?;
-            let file: ModelsFile = serde_json::from_str(&content)?;
-            file.models
-                .into_iter()
-                .map(|m| ModelInfo::new(m.name, ModelProvider::from(m.provider.as_str())))
-                .collect()
-        } else {
-            tracing::info!("No models config provided, starting with empty registry");
-            vec![]
-        };
+        Vec::new()
+    };
+    tracing::info!("Loaded {} external models", external_models.len());
 
-        tracing::info!("Loaded {} models (legacy mode)", models.len());
-
-        let config = OrchestratorConfig {
-            port: args.port,
-            health_threshold_seconds: args.health_threshold,
-            models_config: args.models_config,
-            ..Default::default()
-        };
-
-        Arc::new(OrchestratorState::new(config, models))
+    let config = OrchestratorConfig {
+        port: args.port,
+        health_threshold_seconds: args.health_threshold,
+        model_dirs: args.model_dirs,
+        external_models_config: args.external_models,
+        idle_timeout_seconds: args.idle_timeout,
+        llama_server_path: args.llama_server_path.clone(),
+        port_range_start: port_start,
+        port_range_end: port_end,
+        reserve_vram_mb: args.reserve_vram_mb,
+        reserve_ram_mb: args.reserve_ram_mb,
     };
 
-    // Spawn background loops if in advanced mode
-    if use_advanced {
-        // Idle eviction loop
-        let state_clone = state.clone();
-        let idle_timeout = Duration::from_secs(args.idle_timeout);
-        tokio::spawn(async move {
-            idle_eviction_loop(state_clone, idle_timeout).await;
-        });
+    let resource_config = ResourceConfig {
+        reserve_vram_bytes: args.reserve_vram_mb * 1024 * 1024,
+        reserve_ram_bytes: args.reserve_ram_mb * 1024 * 1024,
+    };
 
-        // Health check loop
-        let process_manager = state.process_manager.clone();
-        tokio::spawn(async move {
-            river_orchestrator::process::health_check_loop(
-                process_manager,
-                Duration::from_secs(10),
-            ).await;
-        });
-    }
+    let process_config = ProcessConfig {
+        llama_server_path: args.llama_server_path,
+        port_range_start: port_start,
+        port_range_end: port_end,
+        default_ctx_size: 8192,
+        health_check_timeout: Duration::from_secs(30),
+    };
+
+    let state = Arc::new(OrchestratorState::new(
+        config,
+        local_models,
+        external_models,
+        resource_config,
+        process_config,
+    ));
+
+    // Spawn background loops
+    // Idle eviction loop
+    let state_clone = state.clone();
+    let idle_timeout = Duration::from_secs(args.idle_timeout);
+    tokio::spawn(async move {
+        idle_eviction_loop(state_clone, idle_timeout).await;
+    });
+
+    // Health check loop
+    let process_manager = state.process_manager.clone();
+    tokio::spawn(async move {
+        river_orchestrator::process::health_check_loop(
+            process_manager,
+            Duration::from_secs(10),
+        ).await;
+    });
 
     let app = create_router(state);
 

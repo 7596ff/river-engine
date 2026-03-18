@@ -3,7 +3,8 @@
 use river_orchestrator::{
     api::create_router,
     config::OrchestratorConfig,
-    models::{ModelInfo, ModelProvider},
+    process::ProcessConfig,
+    resources::ResourceConfig,
     OrchestratorState,
 };
 use axum::body::Body;
@@ -13,13 +14,13 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn test_full_workflow() {
-    // Create orchestrator with a model
-    let models = vec![
-        ModelInfo::new("test-model".to_string(), ModelProvider::Local),
-    ];
+    // Create orchestrator (no local models for basic integration test)
     let state = Arc::new(OrchestratorState::new(
         OrchestratorConfig::default(),
-        models,
+        vec![],
+        vec![],
+        ResourceConfig::default(),
+        ProcessConfig::default(),
     ));
     let app = create_router(state.clone());
 

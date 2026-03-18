@@ -14,9 +14,6 @@ pub struct OrchestratorConfig {
     #[serde(default = "default_health_threshold")]
     pub health_threshold_seconds: u64,
 
-    /// Path to models config file (optional, legacy)
-    pub models_config: Option<PathBuf>,
-
     /// Directories to scan for GGUF models
     #[serde(default)]
     pub model_dirs: Vec<PathBuf>,
@@ -85,7 +82,6 @@ impl Default for OrchestratorConfig {
         Self {
             port: default_port(),
             health_threshold_seconds: default_health_threshold(),
-            models_config: None,
             model_dirs: Vec::new(),
             external_models_config: None,
             idle_timeout_seconds: default_idle_timeout(),
@@ -96,19 +92,6 @@ impl Default for OrchestratorConfig {
             reserve_ram_mb: default_reserve_ram_mb(),
         }
     }
-}
-
-/// Model configuration entry (legacy)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelConfig {
-    pub name: String,
-    pub provider: String,
-}
-
-/// Models configuration file format (legacy)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelsFile {
-    pub models: Vec<ModelConfig>,
 }
 
 #[cfg(test)]
@@ -123,13 +106,5 @@ mod tests {
         assert_eq!(config.idle_timeout_seconds, 900);
         assert_eq!(config.port_range_start, 8080);
         assert_eq!(config.port_range_end, 8180);
-    }
-
-    #[test]
-    fn test_models_file_deserialize() {
-        let json = r#"{"models": [{"name": "qwen3-32b", "provider": "local"}]}"#;
-        let file: ModelsFile = serde_json::from_str(json).unwrap();
-        assert_eq!(file.models.len(), 1);
-        assert_eq!(file.models[0].name, "qwen3-32b");
     }
 }

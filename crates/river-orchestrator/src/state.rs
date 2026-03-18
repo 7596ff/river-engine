@@ -4,7 +4,6 @@ use crate::agents::{AgentInfo, AgentStatus};
 use crate::config::OrchestratorConfig;
 use crate::discovery::LocalModel;
 use crate::external::ExternalModel;
-use crate::models::ModelInfo;
 use crate::process::{ProcessConfig, ProcessManager};
 use crate::resources::{DeviceId, ResourceConfig, ResourceTracker, SystemMemory};
 use river_core::RiverError;
@@ -36,12 +35,8 @@ pub struct LocalModelEntry {
 
 /// Shared orchestrator state
 pub struct OrchestratorState {
-    // Existing fields
     pub agents: RwLock<HashMap<String, AgentInfo>>,
-    pub models: Vec<ModelInfo>,  // Legacy static models
     pub config: OrchestratorConfig,
-
-    // New fields for advanced orchestrator
     pub local_models: RwLock<HashMap<String, LocalModelEntry>>,
     pub external_models: Vec<ExternalModel>,
     pub resource_tracker: Arc<ResourceTracker>,
@@ -49,21 +44,8 @@ pub struct OrchestratorState {
 }
 
 impl OrchestratorState {
-    /// Create new orchestrator state (legacy)
-    pub fn new(config: OrchestratorConfig, models: Vec<ModelInfo>) -> Self {
-        Self {
-            agents: RwLock::new(HashMap::new()),
-            models,
-            config,
-            local_models: RwLock::new(HashMap::new()),
-            external_models: Vec::new(),
-            resource_tracker: Arc::new(ResourceTracker::new(ResourceConfig::default())),
-            process_manager: Arc::new(ProcessManager::new(ProcessConfig::default())),
-        }
-    }
-
-    /// Create new orchestrator state with advanced features
-    pub fn new_advanced(
+    /// Create new orchestrator state
+    pub fn new(
         config: OrchestratorConfig,
         local_models: Vec<LocalModel>,
         external_models: Vec<ExternalModel>,
@@ -85,7 +67,6 @@ impl OrchestratorState {
 
         Self {
             agents: RwLock::new(HashMap::new()),
-            models: Vec::new(),
             config,
             local_models: RwLock::new(local_entries),
             external_models,
@@ -410,23 +391,32 @@ pub enum ModelRequestResponse {
 mod tests {
     use super::*;
 
+    fn test_state() -> OrchestratorState {
+        OrchestratorState::new(
+            OrchestratorConfig::default(),
+            vec![],
+            vec![],
+            ResourceConfig::default(),
+            ProcessConfig::default(),
+        )
+    }
+
     #[test]
     fn test_state_creation() {
-        let config = OrchestratorConfig::default();
-        let state = OrchestratorState::new(config, vec![]);
+        let state = test_state();
         assert_eq!(state.config.port, 5000);
     }
 
     #[tokio::test]
     async fn test_state_heartbeat_creates_agent() {
-        let state = OrchestratorState::new(OrchestratorConfig::default(), vec![]);
+        let state = test_state();
         state.heartbeat("test".to_string(), "http://localhost:3000".to_string()).await;
         assert_eq!(state.agent_count().await, 1);
     }
 
     #[tokio::test]
     async fn test_state_heartbeat_updates_existing() {
-        let state = OrchestratorState::new(OrchestratorConfig::default(), vec![]);
+        let state = test_state();
         state.heartbeat("test".to_string(), "http://localhost:3000".to_string()).await;
         state.heartbeat("test".to_string(), "http://localhost:4000".to_string()).await;
 
@@ -437,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_state_agent_statuses() {
-        let state = OrchestratorState::new(OrchestratorConfig::default(), vec![]);
+        let state = test_state();
         state.heartbeat("agent1".to_string(), "http://localhost:3000".to_string()).await;
         state.heartbeat("agent2".to_string(), "http://localhost:3001".to_string()).await;
 
