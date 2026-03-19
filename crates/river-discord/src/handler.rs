@@ -38,6 +38,9 @@ impl EventHandler {
             adapter: "discord",
             event_type: "message".to_string(),
             channel: channel_id.to_string(),
+            channel_name: None, // TODO: Cache channel names from Discord
+            guild_id: msg.guild_id.map(|id| id.get().to_string()),
+            guild_name: None, // TODO: Cache guild names from Discord
             author: Author {
                 id: msg.author.id.get().to_string(),
                 name: msg.author.name.clone(),
@@ -94,6 +97,9 @@ impl EventHandler {
             adapter: "discord",
             event_type: "reaction_add".to_string(),
             channel: channel_id.to_string(),
+            channel_name: None, // TODO: Cache channel names from Discord
+            guild_id: reaction.guild_id.map(|id| id.get().to_string()),
+            guild_name: None, // TODO: Cache guild names from Discord
             author: Author {
                 id: user_id,
                 name: user_name,

@@ -30,6 +30,12 @@ pub struct IncomingEvent {
     pub adapter: &'static str,
     pub event_type: String,
     pub channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_name: Option<String>,
     pub author: Author,
     pub content: String,
     pub message_id: String,
@@ -142,6 +148,9 @@ mod tests {
             adapter: "discord",
             event_type: "message".to_string(),
             channel: "123456".to_string(),
+            channel_name: Some("general".to_string()),
+            guild_id: Some("guild1".to_string()),
+            guild_name: None,
             author: Author {
                 id: "user123".to_string(),
                 name: "TestUser".to_string(),
@@ -159,8 +168,10 @@ mod tests {
         assert!(json.contains("\"adapter\":\"discord\""));
         assert!(json.contains("\"event_type\":\"message\""));
         assert!(json.contains("\"guild_id\":\"guild1\""));
-        // thread_id should be skipped (None)
+        assert!(json.contains("\"channel_name\":\"general\""));
+        // thread_id and guild_name should be skipped (None)
         assert!(!json.contains("thread_id"));
+        assert!(!json.contains("guild_name"));
     }
 
     #[test]
