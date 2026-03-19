@@ -65,7 +65,8 @@ async fn sleep_phase(&mut self) {
 
    | Event | Action |
    |-------|--------|
-   | `LoopEvent::Message(msg)` | Transition to `Waking` with `WakeTrigger::Message` |
+   | `LoopEvent::Message(msg)` | Transition to `Waking` with `WakeTrigger::Message` (deprecated) |
+   | `LoopEvent::InboxUpdate(paths)` | Transition to `Waking` with `WakeTrigger::Inbox` |
    | `LoopEvent::Heartbeat` | Transition to `Waking` with `WakeTrigger::Heartbeat` |
    | `LoopEvent::Shutdown` | Set `shutdown_requested = true` |
    | Channel closed | Set `shutdown_requested = true` |
@@ -170,6 +171,13 @@ for msg in queued_messages {
 // Add wake trigger
 match &trigger {
     WakeTrigger::Message(msg) => self.context.add_message(ChatMessage::user(...)),
+    WakeTrigger::Inbox(paths) => {
+        // Notify agent of inbox files with new messages
+        let file_list: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        self.context.add_message(ChatMessage::system(format!(
+            "New messages in inbox files:\n{}", file_list.join("\n")
+        )));
+    }
     WakeTrigger::Heartbeat => self.context.add_message(ChatMessage::system(...)),
 }
 ```
@@ -496,9 +504,18 @@ if let Some(msg) = messages.into_iter().next() {
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
+│                         INBOX FILES                                      │
+│   workspace/inbox/{adapter}/{hierarchy}/{channel}.txt                   │
+│   - One message per line: [status] timestamp msgId <name:id> content    │
+│   - Agent reads with tools, marks [x] when processed                    │
+└─────────────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
 │                         EVENT CHANNEL                                    │
 │   mpsc::Receiver<LoopEvent>                                             │
-│   - LoopEvent::Message(IncomingMessage)                                 │
+│   - LoopEvent::InboxUpdate(Vec<PathBuf>)  ← files with new messages     │
+│   - LoopEvent::Message(IncomingMessage)   ← deprecated                  │
 │   - LoopEvent::Heartbeat                                                │
 │   - LoopEvent::Shutdown                                                 │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -589,7 +606,11 @@ pub enum LoopState {
 ### WakeTrigger
 ```rust
 pub enum WakeTrigger {
+    /// Direct message (DEPRECATED - use Inbox)
     Message(IncomingMessage),
+    /// Inbox files with new messages
+    Inbox(Vec<PathBuf>),
+    /// Scheduled heartbeat
     Heartbeat,
 }
 ```
@@ -597,8 +618,13 @@ pub enum WakeTrigger {
 ### LoopEvent
 ```rust
 pub enum LoopEvent {
+    /// Direct message (DEPRECATED - use InboxUpdate)
     Message(IncomingMessage),
+    /// New messages written to inbox files
+    InboxUpdate(Vec<PathBuf>),
+    /// Heartbeat timer fired
     Heartbeat,
+    /// Graceful shutdown requested
     Shutdown,
 }
 ```

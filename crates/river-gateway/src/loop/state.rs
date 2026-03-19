@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use crate::api::IncomingMessage;
 use serde::{Deserialize, Serialize};
 
 /// Tool call as returned by the model
@@ -22,8 +21,6 @@ pub struct FunctionCall {
 /// Events that can wake or signal the loop
 #[derive(Debug, Clone)]
 pub enum LoopEvent {
-    /// Message from communication adapter (DEPRECATED - use InboxUpdate)
-    Message(IncomingMessage),
     /// New messages written to inbox files
     InboxUpdate(Vec<PathBuf>),
     /// Heartbeat timer fired
@@ -35,8 +32,6 @@ pub enum LoopEvent {
 /// What caused the agent to wake
 #[derive(Debug, Clone)]
 pub enum WakeTrigger {
-    /// User or external message (DEPRECATED - use Inbox)
-    Message(IncomingMessage),
     /// New messages in inbox files
     Inbox(Vec<PathBuf>),
     /// Scheduled heartbeat
@@ -74,27 +69,6 @@ impl LoopState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Author;
-    use river_core::Priority;
-
-    fn test_message(content: &str) -> IncomingMessage {
-        IncomingMessage {
-            adapter: "test".to_string(),
-            event_type: "message".to_string(),
-            channel: "general".to_string(),
-            channel_name: None,
-            guild_id: None,
-            guild_name: None,
-            author: Author {
-                id: "user1".to_string(),
-                name: "Test User".to_string(),
-            },
-            content: content.to_string(),
-            message_id: None,
-            metadata: None,
-            priority: Priority::Interactive,
-        }
-    }
 
     #[test]
     fn test_should_queue_messages() {
@@ -126,19 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn test_loop_event_message() {
-        let msg = test_message("hello");
-        let event = LoopEvent::Message(msg.clone());
-        match event {
-            LoopEvent::Message(m) => {
-                assert_eq!(m.content, "hello");
-                assert_eq!(m.author.name, "Test User");
-            }
-            _ => panic!("Expected Message event"),
-        }
-    }
-
-    #[test]
     fn test_loop_event_heartbeat() {
         let event = LoopEvent::Heartbeat;
         assert!(matches!(event, LoopEvent::Heartbeat));
@@ -151,31 +112,9 @@ mod tests {
     }
 
     #[test]
-    fn test_wake_trigger_message() {
-        let msg = test_message("wake up!");
-        let trigger = WakeTrigger::Message(msg);
-        match trigger {
-            WakeTrigger::Message(m) => {
-                assert_eq!(m.content, "wake up!");
-            }
-            _ => panic!("Expected Message trigger"),
-        }
-    }
-
-    #[test]
     fn test_wake_trigger_heartbeat() {
         let trigger = WakeTrigger::Heartbeat;
         assert!(matches!(trigger, WakeTrigger::Heartbeat));
-    }
-
-    #[test]
-    fn test_loop_state_waking_with_message_trigger() {
-        let msg = test_message("test");
-        let state = LoopState::Waking {
-            trigger: WakeTrigger::Message(msg),
-        };
-        assert!(!state.is_sleeping());
-        assert!(!state.should_queue_messages());
     }
 
     #[test]

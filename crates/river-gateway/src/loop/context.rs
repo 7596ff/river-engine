@@ -161,10 +161,6 @@ impl ContextBuilder {
 
     fn format_trigger(&self, trigger: &WakeTrigger) -> ChatMessage {
         match trigger {
-            WakeTrigger::Message(msg) => ChatMessage::user(format!(
-                "[{}] {}: {}",
-                msg.channel, msg.author.name, msg.content
-            )),
             WakeTrigger::Inbox(paths) => {
                 let file_list: Vec<String> = paths
                     .iter()
@@ -354,15 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn test_format_trigger_message() {
+    fn test_format_trigger_inbox() {
         let builder = ContextBuilder::new();
-        let incoming = test_message("Hello!", "general", "Alice");
-        let msg = builder.format_trigger(&WakeTrigger::Message(incoming));
-        assert_eq!(msg.role, "user");
+        let paths = vec![std::path::PathBuf::from("/inbox/discord/123/456.txt")];
+        let msg = builder.format_trigger(&WakeTrigger::Inbox(paths));
+        assert_eq!(msg.role, "system");
         let content = msg.content.unwrap();
-        assert!(content.contains("[general]"));
-        assert!(content.contains("Alice"));
-        assert!(content.contains("Hello!"));
+        assert!(content.contains("inbox files"));
+        assert!(content.contains("/inbox/discord/123/456.txt"));
     }
 
     #[test]

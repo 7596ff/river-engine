@@ -261,12 +261,6 @@ impl AgentLoop {
         tokio::select! {
             event = self.event_rx.recv() => {
                 match event {
-                    Some(LoopEvent::Message(msg)) => {
-                        tracing::info!("Wake: message from {} in {}", msg.author.name, msg.channel);
-                        self.state = LoopState::Waking {
-                            trigger: WakeTrigger::Message(msg)
-                        };
-                    }
                     Some(LoopEvent::InboxUpdate(paths)) => {
                         tracing::info!("Wake: inbox update with {} files", paths.len());
                         self.state = LoopState::Waking {
@@ -383,20 +377,6 @@ impl AgentLoop {
 
             // Add wake trigger
             match &trigger {
-                WakeTrigger::Message(msg) => {
-                    let chat_msg = ChatMessage::user(format!(
-                        "[{}] {}: {}",
-                        msg.channel, msg.author.name, msg.content
-                    ));
-                    self.context.add_message(chat_msg.clone());
-
-                    // Persist to context file
-                    if let Some(ref file) = self.context_file {
-                        if let Err(e) = file.append(&chat_msg) {
-                            tracing::error!(error = %e, "Failed to append user message to context file");
-                        }
-                    }
-                }
                 WakeTrigger::Inbox(paths) => {
                     // Notify agent of inbox files with new messages - agent decides how to process
                     let file_list: Vec<String> = paths
@@ -789,17 +769,9 @@ impl AgentLoop {
             }
         }
 
-        // Check if messages arrived during settle
-        // Note: drain() is atomic with the queue, so we don't need a separate is_empty() check
-        let messages = self.message_queue.drain();
-        if let Some(msg) = messages.into_iter().next() {
-            tracing::info!("Message arrived during settle, immediate wake");
-            self.state = LoopState::Waking {
-                trigger: WakeTrigger::Message(msg),
-            };
-        } else {
-            self.state = LoopState::Sleeping;
-        }
+        // Messages now go to inbox files, so we just go to sleep.
+        // Any new messages will trigger InboxUpdate events.
+        self.state = LoopState::Sleeping;
     }
 }
 
