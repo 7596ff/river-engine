@@ -235,6 +235,9 @@ mod tests {
             adapter: "test".to_string(),
             event_type: "message".to_string(),
             channel: channel.to_string(),
+            channel_name: None,
+            guild_id: None,
+            guild_name: None,
             author: Author {
                 id: "user1".to_string(),
                 name: author.to_string(),

@@ -48,6 +48,12 @@ pub struct IncomingMessage {
     pub adapter: String,
     pub event_type: String,
     pub channel: String,
+    #[serde(default)]
+    pub channel_name: Option<String>,
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub guild_name: Option<String>,
     pub author: Author,
     pub content: String,
     pub message_id: Option<String>,
