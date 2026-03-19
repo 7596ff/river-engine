@@ -398,12 +398,17 @@ impl AgentLoop {
                     }
                 }
                 WakeTrigger::Inbox(paths) => {
-                    // Inbox messages are handled separately - just add a system notification
+                    // Notify agent of inbox files with new messages - agent decides how to process
+                    let file_list: Vec<String> = paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect();
                     let chat_msg = ChatMessage::system(format!(
-                        "New inbox messages: {} file(s) to process",
-                        paths.len()
+                        "New messages in inbox files:\n{}",
+                        file_list.join("\n")
                     ));
                     self.context.add_message(chat_msg);
+                    tracing::info!(files = ?file_list, "Notified agent of inbox updates");
                 }
                 WakeTrigger::Heartbeat => {
                     // Heartbeat messages are NOT persisted - they're transient system prompts
