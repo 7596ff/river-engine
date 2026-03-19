@@ -166,14 +166,12 @@ impl ContextBuilder {
                     .iter()
                     .map(|p| p.display().to_string())
                     .collect();
-                ChatMessage::system(format!(
+                ChatMessage::user(format!(
                     "New messages in inbox files:\n{}",
                     file_list.join("\n")
                 ))
             }
-            WakeTrigger::Heartbeat => ChatMessage::system(
-                "Heartbeat wake. No new messages. Check on your tasks and state."
-            ),
+            WakeTrigger::Heartbeat => ChatMessage::user(":heartbeat:"),
         }
     }
 
@@ -345,8 +343,8 @@ mod tests {
     fn test_format_trigger_heartbeat() {
         let builder = ContextBuilder::new();
         let msg = builder.format_trigger(&WakeTrigger::Heartbeat);
-        assert_eq!(msg.role, "system");
-        assert!(msg.content.as_ref().unwrap().contains("Heartbeat"));
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content.as_ref().unwrap(), ":heartbeat:");
     }
 
     #[test]
@@ -354,7 +352,7 @@ mod tests {
         let builder = ContextBuilder::new();
         let paths = vec![std::path::PathBuf::from("/inbox/discord/123/456.txt")];
         let msg = builder.format_trigger(&WakeTrigger::Inbox(paths));
-        assert_eq!(msg.role, "system");
+        assert_eq!(msg.role, "user");
         let content = msg.content.unwrap();
         assert!(content.contains("inbox files"));
         assert!(content.contains("/inbox/discord/123/456.txt"));

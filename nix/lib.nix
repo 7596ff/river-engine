@@ -64,6 +64,22 @@ in {
     extraArgs = mkOption { type = types.listOf types.str; default = []; description = "Extra arguments for litellm."; };
   };
 
+  # OpenRouter options (alternative to LiteLLM with better prompt caching support)
+  openrouterOptions = {
+    enable = mkEnableOption "OpenRouter API (supports automatic prompt caching)";
+    apiKeyFile = mkOption { type = types.path; description = "Path to file containing OPENROUTER_API_KEY."; };
+    baseUrl = mkOption { type = types.str; default = "https://openrouter.ai/api"; description = "OpenRouter API base URL."; };
+    model = mkOption { type = types.str; default = "anthropic/claude-sonnet-4"; description = "Model to use (e.g., anthropic/claude-sonnet-4)."; };
+  };
+
+  # Anthropic API options (direct API access with ephemeral caching)
+  anthropicOptions = {
+    enable = mkEnableOption "Anthropic API (direct Claude access with ephemeral caching)";
+    apiKeyFile = mkOption { type = types.path; description = "Path to file containing ANTHROPIC_API_KEY."; };
+    baseUrl = mkOption { type = types.str; default = "https://api.anthropic.com"; description = "Anthropic API base URL."; };
+    model = mkOption { type = types.str; default = "claude-sonnet-4-20250514"; description = "Model to use (e.g., claude-sonnet-4-20250514)."; };
+  };
+
   # Discord adapter options
   discordOptions = {
     enable = mkEnableOption "Discord adapter";
@@ -82,12 +98,14 @@ in {
     dataDir = mkOption { type = types.path; description = "Data directory for database."; };
     agentName = mkOption { type = types.str; default = name; description = "Agent name for Redis namespacing."; };
     port = mkOption { type = types.port; default = 3000; description = "Gateway port."; };
+    contextLimit = mkOption { type = types.int; default = 131072; description = "Context window size in tokens."; };
     modelUrl = mkOption { type = types.nullOr types.str; default = null; description = "Model server URL."; };
     modelName = mkOption { type = types.nullOr types.str; default = null; description = "Model name."; };
     orchestratorUrl = mkOption { type = types.nullOr types.str; default = null; description = "Orchestrator URL."; };
     embeddingUrl = mkOption { type = types.nullOr types.str; default = null; description = "Embedding server URL."; };
     redisUrl = mkOption { type = types.nullOr types.str; default = null; description = "Redis URL."; };
     authTokenFile = mkOption { type = types.nullOr types.path; default = null; description = "Path to file containing bearer token for authentication."; };
+    environmentFile = mkOption { type = types.nullOr types.path; default = null; description = "Path to environment file (KEY=value format) for API keys etc."; };
     adapters = mkOption {
       type = types.listOf (types.submodule {
         options = {
@@ -135,7 +153,9 @@ in {
 
   # Command builder: gateway
   # discordCfg is optional - if provided and enabled, auto-adds discord adapter
-  mkGatewayCommand = { cfg, packages, discordCfg ? null }: let
+  # openrouterCfg is optional - if provided and enabled, auto-derives model URL
+  # anthropicCfg is optional - if provided and enabled, auto-derives model URL (takes precedence)
+  mkGatewayCommand = { cfg, packages, discordCfg ? null, openrouterCfg ? null, anthropicCfg ? null }: let
     # Build adapter flags from explicit config
     explicitAdapters = map (a:
       "--adapter" + " " + a.name + ":" + a.outboundUrl +
@@ -148,16 +168,32 @@ in {
     ];
 
     adapterFlags = explicitAdapters ++ discordAdapter;
+
+    # Derive model URL: explicit > anthropic > openrouter > null
+    # Note: model.rs auto-detects provider based on URL (api.anthropic.com = Anthropic)
+    effectiveModelUrl =
+      if cfg.modelUrl != null then cfg.modelUrl
+      else if anthropicCfg != null && anthropicCfg.enable then anthropicCfg.baseUrl
+      else if openrouterCfg != null && openrouterCfg.enable then openrouterCfg.baseUrl
+      else null;
+
+    # Derive model name: explicit > anthropic > openrouter > null
+    effectiveModelName =
+      if cfg.modelName != null then cfg.modelName
+      else if anthropicCfg != null && anthropicCfg.enable then anthropicCfg.model
+      else if openrouterCfg != null && openrouterCfg.enable then openrouterCfg.model
+      else null;
   in lib.concatStringsSep " " ([
     "${packages.river-gateway}/bin/river-gateway"
     "--workspace" (toString cfg.workspace)
     "--data-dir" (toString cfg.dataDir)
     "--agent-name" cfg.agentName
     "--port" (toString cfg.port)
-  ] ++ lib.optionals (cfg.modelUrl != null) [
-    "--model-url" cfg.modelUrl
-  ] ++ lib.optionals (cfg.modelName != null) [
-    "--model-name" cfg.modelName
+    "--context-limit" (toString cfg.contextLimit)
+  ] ++ lib.optionals (effectiveModelUrl != null) [
+    "--model-url" effectiveModelUrl
+  ] ++ lib.optionals (effectiveModelName != null) [
+    "--model-name" effectiveModelName
   ] ++ lib.optionals (cfg.orchestratorUrl != null) [
     "--orchestrator-url" cfg.orchestratorUrl
   ] ++ lib.optionals (cfg.embeddingUrl != null) [
@@ -191,6 +227,12 @@ in {
       model_name = m.name;
       litellm_params = {
         model = m.litellmModel;
+        # Anthropic prompt caching: 4 breakpoint max, 20-block lookback from each
+        # System prompt + last message covers most conversations efficiently
+        cache_control_injection_points = [
+          { location = "message"; role = "system"; }  # Cache stable system prompt
+          { location = "message"; index = -1; }       # Last msg - 20-block lookback covers recent context
+        ];
       };
     }) cfg.models;
   in builtins.toJSON {

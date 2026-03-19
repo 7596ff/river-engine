@@ -23,7 +23,7 @@ in {
 
   river-gateway = pkgs.rustPlatform.buildRustPackage {
     pname = "river-gateway";
-    version = "0.1.0";
+    version = "0.1.3";
     src = filteredSrc;
     cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-gateway" ];
@@ -33,7 +33,7 @@ in {
 
   river-orchestrator = pkgs.rustPlatform.buildRustPackage {
     pname = "river-orchestrator";
-    version = "0.1.0";
+    version = "0.1.3";
     src = filteredSrc;
     cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-orchestrator" ];
@@ -43,7 +43,7 @@ in {
 
   river-discord = pkgs.rustPlatform.buildRustPackage {
     pname = "river-discord";
-    version = "0.1.0";
+    version = "0.1.3";
     src = filteredSrc;
     cargoLock.lockFile = "${filteredSrc}/Cargo.lock";
     cargoBuildFlags = [ "-p" "river-discord" ];

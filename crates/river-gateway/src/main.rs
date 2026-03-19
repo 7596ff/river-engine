@@ -52,6 +52,10 @@ struct Args {
     #[arg(long)]
     auth_token_file: Option<PathBuf>,
 
+    /// Context window size in tokens
+    #[arg(long, default_value = "131072")]
+    context_limit: u32,
+
     /// Communication adapter configuration (can be repeated)
     /// Format: name:outbound_url[:read_url]
     /// Example: --adapter discord:http://localhost:8081/outbound:http://localhost:8081/read
@@ -204,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
         redis_url: args.redis_url,
         orchestrator_url: args.orchestrator_url,
         auth_token_file: args.auth_token_file,
+        context_limit: args.context_limit,
         adapters: adapter_configs,
     };
 

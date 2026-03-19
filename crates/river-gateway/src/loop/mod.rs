@@ -383,7 +383,7 @@ impl AgentLoop {
                         .iter()
                         .map(|p| p.display().to_string())
                         .collect();
-                    let chat_msg = ChatMessage::system(format!(
+                    let chat_msg = ChatMessage::user(format!(
                         "New messages in inbox files:\n{}",
                         file_list.join("\n")
                     ));
@@ -391,10 +391,8 @@ impl AgentLoop {
                     tracing::info!(files = ?file_list, "Notified agent of inbox updates");
                 }
                 WakeTrigger::Heartbeat => {
-                    // Heartbeat messages are NOT persisted - they're transient system prompts
-                    self.context.add_message(ChatMessage::system(
-                        "Heartbeat wake. No new messages. Check on your tasks and state.".to_string()
-                    ));
+                    // Heartbeat messages are NOT persisted - they're transient user prompts
+                    self.context.add_message(ChatMessage::user(":heartbeat:"));
                 }
             }
         }

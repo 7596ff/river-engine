@@ -1,28 +1,31 @@
 //! SnowflakeGenerator - Thread-safe generator for unique Snowflake IDs.
 
 use super::{AgentBirth, Snowflake, SnowflakeType};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Maximum sequence value (20 bits).
 const MAX_SEQUENCE: u32 = 0xF_FFFF;
+
+/// Internal state protected by mutex.
+struct GeneratorState {
+    last_timestamp: u64,
+    sequence: u32,
+}
 
 /// Thread-safe generator for unique Snowflake IDs.
 ///
 /// The generator maintains:
 /// - The agent birth timestamp (used in all generated IDs)
 /// - The birth time in microseconds since Unix epoch (for calculating relative timestamps)
-/// - The last timestamp used (for detecting time rollover)
-/// - A sequence counter (incremented for each ID within the same microsecond)
+/// - The last timestamp and sequence counter (protected by mutex)
 pub struct SnowflakeGenerator {
     /// The agent birth timestamp.
     birth: AgentBirth,
     /// Birth time in microseconds since Unix epoch.
     birth_timestamp_micros: u64,
-    /// Last timestamp used (microseconds since birth).
-    last_timestamp: AtomicU64,
-    /// Sequence counter for the current timestamp.
-    sequence: AtomicU32,
+    /// Protected state for thread-safe access.
+    state: Mutex<GeneratorState>,
 }
 
 impl SnowflakeGenerator {
@@ -36,8 +39,10 @@ impl SnowflakeGenerator {
         Self {
             birth,
             birth_timestamp_micros,
-            last_timestamp: AtomicU64::new(0),
-            sequence: AtomicU32::new(0),
+            state: Mutex::new(GeneratorState {
+                last_timestamp: 0,
+                sequence: 0,
+            }),
         }
     }
 
@@ -105,50 +110,29 @@ impl SnowflakeGenerator {
     /// # Returns
     /// A new unique Snowflake ID
     pub fn next_id(&self, snowflake_type: SnowflakeType) -> Snowflake {
+        let mut state = self.state.lock().unwrap();
+
         loop {
             let current_ts = self.current_timestamp_micros();
-            let last_ts = self.last_timestamp.load(Ordering::Acquire);
 
-            if current_ts > last_ts {
-                // New timestamp - try to update and reset sequence
-                if self
-                    .last_timestamp
-                    .compare_exchange(last_ts, current_ts, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    // Successfully updated timestamp, reset sequence
-                    self.sequence.store(0, Ordering::Release);
-                    return Snowflake::new(current_ts, self.birth, snowflake_type, 0);
-                }
-                // Another thread beat us, retry
-                continue;
-            }
-
-            // Same or earlier timestamp - increment sequence
-            let seq = self.sequence.fetch_add(1, Ordering::AcqRel);
-
-            if seq < MAX_SEQUENCE {
-                // Use the last timestamp (which may be in the "future" relative to current time)
-                return Snowflake::new(last_ts, self.birth, snowflake_type, seq + 1);
-            }
-
-            // Sequence overflow - need to wait for next microsecond or use a new timestamp
-            // Spin until we get a new timestamp
-            if current_ts == last_ts {
-                // Busy wait for clock to advance
-                std::hint::spin_loop();
-                continue;
-            }
-
-            // Time has advanced, try to update timestamp
-            if self
-                .last_timestamp
-                .compare_exchange(last_ts, current_ts, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                self.sequence.store(0, Ordering::Release);
+            if current_ts > state.last_timestamp {
+                // New timestamp - reset sequence
+                state.last_timestamp = current_ts;
+                state.sequence = 0;
                 return Snowflake::new(current_ts, self.birth, snowflake_type, 0);
             }
+
+            // Same timestamp - increment sequence
+            if state.sequence < MAX_SEQUENCE {
+                state.sequence += 1;
+                return Snowflake::new(state.last_timestamp, self.birth, snowflake_type, state.sequence);
+            }
+
+            // Sequence overflow - wait for next microsecond
+            // Release lock briefly to allow other threads and reduce contention
+            drop(state);
+            std::hint::spin_loop();
+            state = self.state.lock().unwrap();
         }
     }
 

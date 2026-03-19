@@ -17,8 +17,13 @@ let
   };
 
   # Agent service generators - called lazily per agent
-  mkAgentServices = name: agentCfg: let
+  mkAgentServices = openrouterCfg: anthropicCfg: name: agentCfg: let
     packages = mkPackages false;
+    gatewayCmd = riverLib.mkGatewayCommand {
+      cfg = agentCfg;
+      discordCfg = agentCfg.discord;
+      inherit openrouterCfg anthropicCfg packages;
+    };
   in lib.optionalAttrs agentCfg.enable {
     "river-${name}-gateway" = {
       description = "River Gateway - ${name}";
@@ -29,11 +34,9 @@ let
         User = "river-${name}";
         Group = "river-${name}";
         StateDirectory = "river-${name}";
-        ExecStart = riverLib.mkGatewayCommand {
-          cfg = agentCfg;
-          discordCfg = agentCfg.discord;
-          inherit packages;
-        };
+        ExecStart = gatewayCmd;
+      } // lib.optionalAttrs (agentCfg.environmentFile != null) {
+        EnvironmentFile = toString agentCfg.environmentFile;
       };
       environment = agentCfg.environment;
     };
@@ -74,6 +77,8 @@ in {
     embedding = riverLib.embeddingOptions;
     redis = riverLib.redisOptions;
     litellm = riverLib.litellmOptions;
+    openrouter = riverLib.openrouterOptions;
+    anthropic = riverLib.anthropicOptions;
 
     agents = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
@@ -201,7 +206,7 @@ in {
 
     # Agent services - use mapAttrs for lazy evaluation
     {
-      systemd.services = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentServices config.services.river.agents));
+      systemd.services = lib.mkMerge (lib.attrValues (lib.mapAttrs (mkAgentServices config.services.river.openrouter config.services.river.anthropic) config.services.river.agents));
       users.users = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentUsers config.services.river.agents));
       users.groups = lib.mkMerge (lib.attrValues (lib.mapAttrs mkAgentGroups config.services.river.agents));
     }

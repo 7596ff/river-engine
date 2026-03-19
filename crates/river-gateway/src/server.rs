@@ -41,6 +41,7 @@ pub struct ServerConfig {
     pub redis_url: Option<String>,
     pub orchestrator_url: Option<String>,
     pub auth_token_file: Option<PathBuf>,
+    pub context_limit: u32,
     /// Communication adapters: (name, outbound_url, read_url)
     pub adapters: Vec<(String, String, Option<String>)>,
 }
@@ -91,7 +92,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         port: config.port,
         model_url: config.model_url.unwrap_or_else(|| "http://localhost:8080".to_string()),
         model_name: config.model_name.unwrap_or_else(|| "default".to_string()),
-        context_limit: 65536,
+        context_limit: config.context_limit as u64,
         heartbeat_minutes: 45,
         agent_birth,
         agent_name: agent_name.clone(),
