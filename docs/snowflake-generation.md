@@ -24,6 +24,7 @@ Defined in `crates/river-core/src/snowflake/types.rs`:
 | Session | 0x03 | Conversation sessions |
 | Subagent | 0x04 | Spawned subagents |
 | ToolCall | 0x05 | Tool invocations |
+| Context | 0x06 | Context windows for persistence |
 
 ## Generation Locations
 
@@ -129,7 +130,41 @@ pub fn register(
 
 ---
 
-### 6. Migration Tool - Database Initialization
+### 6. Context Initialization
+
+**File:** `crates/river-gateway/src/loop/mod.rs`
+
+**Purpose:** Creates snowflake IDs for context windows used in conversation persistence.
+
+```rust
+fn create_fresh_context(&mut self) -> RiverResult<()> {
+    let id = self.snowflake_gen.next_id(SnowflakeType::Context);
+    // ...
+}
+```
+
+**When:** At agent startup if no active context exists, or after context rotation
+
+---
+
+### 7. Context Archival
+
+**File:** `crates/river-gateway/src/loop/mod.rs`
+
+**Purpose:** Generates archive timestamp snowflake when rotating context.
+
+```rust
+fn archive_current_context(&mut self, summary: Option<&str>) -> RiverResult<()> {
+    let archived_at = self.snowflake_gen.next_id(SnowflakeType::Context);
+    // ...
+}
+```
+
+**When:** Manual rotation via `rotate_context` tool or auto-rotation at 90% capacity
+
+---
+
+### 8. Migration Tool - Database Initialization
 
 **File:** `crates/river-migrate/src/main.rs:323`
 
@@ -152,7 +187,7 @@ conn.execute(
 
 ---
 
-### 7. Migration Tool - Message Import
+### 9. Migration Tool - Message Import
 
 **File:** `crates/river-migrate/src/main.rs:409`
 
@@ -172,7 +207,7 @@ for msg in messages_input.messages {
 
 ---
 
-### 8. Migration Tool - Memory Import
+### 10. Migration Tool - Memory Import
 
 **File:** `crates/river-migrate/src/main.rs:483`
 
@@ -241,18 +276,18 @@ Each command creates its own generator from the stored agent birth.
 ## Diagram: Snowflake Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     SnowflakeGenerator                          │
-│                    (Arc<SnowflakeGenerator>)                    │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-        ┌──────────────────────┼──────────────────────┐
-        │                      │                      │
-        ▼                      ▼                      ▼
-┌───────────────┐    ┌─────────────────┐    ┌─────────────────────┐
-│   AgentLoop   │    │   EmbedTool     │    │  SubagentManager    │
-│               │    │                 │    │                     │
-│ Message IDs   │    │ Embedding IDs   │    │ Subagent IDs        │
-│ (0x01)        │    │ (0x02)          │    │ (0x04)              │
-└───────────────┘    └─────────────────┘    └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            SnowflakeGenerator                                │
+│                           (Arc<SnowflakeGenerator>)                          │
+└────────────────────────────────────┬────────────────────────────────────────┘
+                                     │
+        ┌────────────────────────────┼────────────────────────────┐
+        │                            │                            │
+        ▼                            ▼                            ▼
+┌───────────────────┐    ┌───────────────────┐    ┌───────────────────────┐
+│     AgentLoop     │    │     EmbedTool     │    │   SubagentManager     │
+│                   │    │                   │    │                       │
+│ Message IDs (0x01)│    │ Embedding IDs     │    │ Subagent IDs (0x04)   │
+│ Context IDs (0x06)│    │ (0x02)            │    │                       │
+└───────────────────┘    └───────────────────┘    └───────────────────────┘
 ```
