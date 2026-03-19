@@ -11,6 +11,7 @@ use std::fmt;
 /// - Session: 0x03
 /// - Subagent: 0x04
 /// - ToolCall: 0x05
+/// - Context: 0x06
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SnowflakeType {
@@ -24,6 +25,8 @@ pub enum SnowflakeType {
     Subagent = 0x04,
     /// A tool call invocation.
     ToolCall = 0x05,
+    /// A context window for conversation persistence.
+    Context = 0x06,
 }
 
 impl SnowflakeType {
@@ -42,6 +45,7 @@ impl SnowflakeType {
             0x03 => Some(SnowflakeType::Session),
             0x04 => Some(SnowflakeType::Subagent),
             0x05 => Some(SnowflakeType::ToolCall),
+            0x06 => Some(SnowflakeType::Context),
             _ => None,
         }
     }
@@ -54,6 +58,7 @@ impl SnowflakeType {
             SnowflakeType::Session,
             SnowflakeType::Subagent,
             SnowflakeType::ToolCall,
+            SnowflakeType::Context,
         ]
     }
 }
@@ -66,6 +71,7 @@ impl fmt::Display for SnowflakeType {
             SnowflakeType::Session => write!(f, "Session"),
             SnowflakeType::Subagent => write!(f, "Subagent"),
             SnowflakeType::ToolCall => write!(f, "ToolCall"),
+            SnowflakeType::Context => write!(f, "Context"),
         }
     }
 }
@@ -84,18 +90,26 @@ mod tests {
     }
 
     #[test]
+    fn test_snowflake_type_context() {
+        assert_eq!(SnowflakeType::Context.as_u8(), 0x06);
+        assert_eq!(SnowflakeType::from_u8(0x06), Some(SnowflakeType::Context));
+        assert_eq!(format!("{}", SnowflakeType::Context), "Context");
+    }
+
+    #[test]
     fn test_snowflake_type_from_u8_valid() {
         assert_eq!(SnowflakeType::from_u8(0x01), Some(SnowflakeType::Message));
         assert_eq!(SnowflakeType::from_u8(0x02), Some(SnowflakeType::Embedding));
         assert_eq!(SnowflakeType::from_u8(0x03), Some(SnowflakeType::Session));
         assert_eq!(SnowflakeType::from_u8(0x04), Some(SnowflakeType::Subagent));
         assert_eq!(SnowflakeType::from_u8(0x05), Some(SnowflakeType::ToolCall));
+        assert_eq!(SnowflakeType::from_u8(0x06), Some(SnowflakeType::Context));
     }
 
     #[test]
     fn test_snowflake_type_from_u8_invalid() {
         assert_eq!(SnowflakeType::from_u8(0x00), None);
-        assert_eq!(SnowflakeType::from_u8(0x06), None);
+        assert_eq!(SnowflakeType::from_u8(0x07), None);
         assert_eq!(SnowflakeType::from_u8(0xFF), None);
     }
 
@@ -115,6 +129,7 @@ mod tests {
         assert_eq!(format!("{}", SnowflakeType::Session), "Session");
         assert_eq!(format!("{}", SnowflakeType::Subagent), "Subagent");
         assert_eq!(format!("{}", SnowflakeType::ToolCall), "ToolCall");
+        assert_eq!(format!("{}", SnowflakeType::Context), "Context");
     }
 
     #[test]
@@ -129,11 +144,12 @@ mod tests {
     #[test]
     fn test_snowflake_type_all() {
         let all = SnowflakeType::all();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 6);
         assert!(all.contains(&SnowflakeType::Message));
         assert!(all.contains(&SnowflakeType::Embedding));
         assert!(all.contains(&SnowflakeType::Session));
         assert!(all.contains(&SnowflakeType::Subagent));
         assert!(all.contains(&SnowflakeType::ToolCall));
+        assert!(all.contains(&SnowflakeType::Context));
     }
 }
