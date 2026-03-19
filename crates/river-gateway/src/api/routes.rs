@@ -1,6 +1,6 @@
 //! HTTP API routes
 
-use crate::inbox::{format_inbox_line, build_discord_path, append_line};
+use crate::inbox::{format_inbox_line, build_discord_path, append_line, sanitize_name};
 use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use axum::{
@@ -131,11 +131,11 @@ async fn handle_incoming(
             msg.channel_name.as_deref().unwrap_or("unknown"),
         )
     } else {
-        // Generic path for other adapters
+        // Generic path for other adapters - sanitize to prevent directory traversal
         state.config.workspace
             .join("inbox")
-            .join(&msg.adapter)
-            .join(format!("{}.txt", msg.channel))
+            .join(sanitize_name(&msg.adapter))
+            .join(format!("{}.txt", sanitize_name(&msg.channel)))
     };
 
     // Format and write inbox line
