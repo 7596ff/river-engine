@@ -4,11 +4,13 @@ pub mod state;
 pub mod queue;
 pub mod context;
 pub mod model;
+pub mod persistence;
 
 pub use state::{LoopEvent, LoopState, WakeTrigger, ToolCallRequest, FunctionCall};
 pub use queue::MessageQueue;
 pub use context::{ChatMessage, ContextBuilder};
 pub use model::{ModelClient, ModelResponse, Usage};
+pub use persistence::ContextFile;
 
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
