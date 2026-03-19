@@ -65,7 +65,6 @@ async fn sleep_phase(&mut self) {
 
    | Event | Action |
    |-------|--------|
-   | `LoopEvent::Message(msg)` | Transition to `Waking` with `WakeTrigger::Message` (deprecated) |
    | `LoopEvent::InboxUpdate(paths)` | Transition to `Waking` with `WakeTrigger::Inbox` |
    | `LoopEvent::Heartbeat` | Transition to `Waking` with `WakeTrigger::Heartbeat` |
    | `LoopEvent::Shutdown` | Set `shutdown_requested = true` |
@@ -164,13 +163,8 @@ self.needs_context_reset = false;
 **Condition:** `self.needs_context_reset == false`
 
 ```rust
-// Just add new messages to existing context
-for msg in queued_messages {
-    self.context.add_message(ChatMessage::user(format!(...)));
-}
 // Add wake trigger
 match &trigger {
-    WakeTrigger::Message(msg) => self.context.add_message(ChatMessage::user(...)),
     WakeTrigger::Inbox(paths) => {
         // Notify agent of inbox files with new messages
         let file_list: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
@@ -606,8 +600,6 @@ pub enum LoopState {
 ### WakeTrigger
 ```rust
 pub enum WakeTrigger {
-    /// Direct message (DEPRECATED - use Inbox)
-    Message(IncomingMessage),
     /// Inbox files with new messages
     Inbox(Vec<PathBuf>),
     /// Scheduled heartbeat
@@ -618,8 +610,6 @@ pub enum WakeTrigger {
 ### LoopEvent
 ```rust
 pub enum LoopEvent {
-    /// Direct message (DEPRECATED - use InboxUpdate)
-    Message(IncomingMessage),
     /// New messages written to inbox files
     InboxUpdate(Vec<PathBuf>),
     /// Heartbeat timer fired
