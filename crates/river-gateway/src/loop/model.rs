@@ -233,19 +233,24 @@ impl ModelClient {
     }
 
     /// Convert internal messages to Anthropic format with cache_control
-    /// Only adds cache_control to the system prompt (stable across turns)
+    /// Adds cache_control to first system prompt and last non-tool message (max 2 breakpoints)
     fn convert_to_anthropic_messages(&self, messages: &[ChatMessage]) -> (Option<Vec<AnthropicContentBlock>>, Vec<AnthropicMessage>) {
         let mut system_content: Option<Vec<AnthropicContentBlock>> = None;
         let mut anthropic_messages: Vec<AnthropicMessage> = Vec::new();
 
-        for msg in messages.iter() {
+        // Find the last non-tool message index for caching
+        let last_cacheable_idx = messages.iter().rposition(|m| m.role != "tool" && m.role != "system");
+
+        for (i, msg) in messages.iter().enumerate() {
+            let should_cache = Some(i) == last_cacheable_idx;
+
             if msg.role == "system" {
-                // System messages go into the system field with cache_control (stable across turns)
+                // System messages go into the system field - cache the first one only
                 if let Some(content) = &msg.content {
+                    let is_first_system = system_content.is_none();
                     let block = AnthropicContentBlock::Text {
                         text: content.clone(),
-                        // Only cache the system prompt - it's stable across turns
-                        cache_control: Some(CacheControl { r#type: "ephemeral" }),
+                        cache_control: if is_first_system { Some(CacheControl { r#type: "ephemeral" }) } else { None },
                     };
                     system_content.get_or_insert_with(Vec::new).push(block);
                 }
@@ -256,7 +261,7 @@ impl ModelClient {
                     if !text.is_empty() {
                         content.push(AnthropicContentBlock::Text {
                             text: text.clone(),
-                            cache_control: None,
+                            cache_control: if should_cache { Some(CacheControl { r#type: "ephemeral" }) } else { None },
                         });
                     }
                 }
@@ -291,13 +296,13 @@ impl ModelClient {
                     }],
                 });
             } else {
-                // User messages - no cache_control (conversation varies)
+                // User messages
                 if let Some(text) = &msg.content {
                     anthropic_messages.push(AnthropicMessage {
                         role: "user".to_string(),
                         content: vec![AnthropicContentBlock::Text {
                             text: text.clone(),
-                            cache_control: None,
+                            cache_control: if should_cache { Some(CacheControl { r#type: "ephemeral" }) } else { None },
                         }],
                     });
                 }
