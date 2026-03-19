@@ -1,5 +1,6 @@
 //! HTTP API routes
 
+use crate::inbox::{format_inbox_line, build_discord_path, append_line};
 use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use axum::{
@@ -8,6 +9,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -119,21 +121,57 @@ async fn handle_incoming(
     }
     tracing::debug!("Authentication passed");
 
-    // Send to the loop
-    tracing::debug!("Sending message to agent loop channel");
-    if state.loop_tx.send(LoopEvent::Message(msg.clone())).await.is_err() {
-        tracing::error!("Failed to send message to loop - channel closed");
+    // Build inbox path based on adapter
+    let inbox_path = if msg.adapter == "discord" {
+        build_discord_path(
+            &state.config.workspace,
+            msg.guild_id.as_deref(),
+            msg.guild_name.as_deref(),
+            &msg.channel,
+            msg.channel_name.as_deref().unwrap_or("unknown"),
+        )
+    } else {
+        // Generic path for other adapters
+        state.config.workspace
+            .join("inbox")
+            .join(&msg.adapter)
+            .join(format!("{}.txt", msg.channel))
+    };
+
+    // Format and write inbox line
+    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let message_id = msg.message_id.as_deref().unwrap_or("unknown");
+    let line = format_inbox_line(
+        &timestamp,
+        message_id,
+        &msg.author.name,
+        &msg.author.id,
+        &msg.content,
+    );
+
+    if let Err(e) = append_line(&inbox_path, &line) {
+        tracing::error!(error = %e, path = %inbox_path.display(), "Failed to write to inbox");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    tracing::debug!(path = %inbox_path.display(), "Message written to inbox");
+
+    // Send inbox update to the loop
+    if state.loop_tx.send(LoopEvent::InboxUpdate(vec![inbox_path.clone()])).await.is_err() {
+        tracing::error!("Failed to send inbox update to loop - channel closed");
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     tracing::info!(
         channel = %msg.channel,
         author = %msg.author.name,
-        "Message delivered to agent loop"
+        inbox_path = %inbox_path.display(),
+        "Message delivered to inbox"
     );
 
     Ok(Json(serde_json::json!({
-        "status": "delivered"
+        "status": "delivered",
+        "inbox_path": inbox_path.to_string_lossy()
     })))
 }
 
