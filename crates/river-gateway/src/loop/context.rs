@@ -165,6 +165,10 @@ impl ContextBuilder {
                 "[{}] {}: {}",
                 msg.channel, msg.author.name, msg.content
             )),
+            WakeTrigger::Inbox(paths) => ChatMessage::system(format!(
+                "New inbox messages: {} file(s) to process",
+                paths.len()
+            )),
             WakeTrigger::Heartbeat => ChatMessage::system(
                 "Heartbeat wake. No new messages. Check on your tasks and state."
             ),

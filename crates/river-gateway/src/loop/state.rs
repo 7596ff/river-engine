@@ -1,5 +1,7 @@
 //! Loop state machine types
 
+use std::path::PathBuf;
+
 use crate::api::IncomingMessage;
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +22,10 @@ pub struct FunctionCall {
 /// Events that can wake or signal the loop
 #[derive(Debug, Clone)]
 pub enum LoopEvent {
-    /// Message from communication adapter
+    /// Message from communication adapter (DEPRECATED - use InboxUpdate)
     Message(IncomingMessage),
+    /// New messages written to inbox files
+    InboxUpdate(Vec<PathBuf>),
     /// Heartbeat timer fired
     Heartbeat,
     /// Graceful shutdown requested
@@ -31,8 +35,10 @@ pub enum LoopEvent {
 /// What caused the agent to wake
 #[derive(Debug, Clone)]
 pub enum WakeTrigger {
-    /// User or external message
+    /// User or external message (DEPRECATED - use Inbox)
     Message(IncomingMessage),
+    /// New messages in inbox files
+    Inbox(Vec<PathBuf>),
     /// Scheduled heartbeat
     Heartbeat,
 }
@@ -175,6 +181,7 @@ mod tests {
         let states = vec![
             LoopState::Sleeping,
             LoopState::Waking { trigger: WakeTrigger::Heartbeat },
+            LoopState::Waking { trigger: WakeTrigger::Inbox(vec![]) },
             LoopState::Thinking,
             LoopState::Acting { pending: vec![] },
             LoopState::Settling,
@@ -185,6 +192,41 @@ mod tests {
             .collect();
 
         // Only Thinking and Acting should queue
-        assert_eq!(queue_states, vec![false, false, true, true, false]);
+        assert_eq!(queue_states, vec![false, false, false, true, true, false]);
+    }
+
+    #[test]
+    fn test_loop_event_inbox_update() {
+        let paths = vec![PathBuf::from("/inbox/discord/123/456.txt")];
+        let event = LoopEvent::InboxUpdate(paths.clone());
+        match event {
+            LoopEvent::InboxUpdate(p) => {
+                assert_eq!(p.len(), 1);
+                assert_eq!(p[0], PathBuf::from("/inbox/discord/123/456.txt"));
+            }
+            _ => panic!("Expected InboxUpdate event"),
+        }
+    }
+
+    #[test]
+    fn test_wake_trigger_inbox() {
+        let paths = vec![PathBuf::from("/inbox/test.txt")];
+        let trigger = WakeTrigger::Inbox(paths);
+        match trigger {
+            WakeTrigger::Inbox(p) => {
+                assert_eq!(p.len(), 1);
+            }
+            _ => panic!("Expected Inbox trigger"),
+        }
+    }
+
+    #[test]
+    fn test_waking_with_inbox_trigger() {
+        let paths = vec![PathBuf::from("/inbox/test.txt")];
+        let state = LoopState::Waking {
+            trigger: WakeTrigger::Inbox(paths),
+        };
+        assert!(!state.is_sleeping());
+        assert!(!state.should_queue_messages());
     }
 }

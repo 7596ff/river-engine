@@ -267,6 +267,12 @@ impl AgentLoop {
                             trigger: WakeTrigger::Message(msg)
                         };
                     }
+                    Some(LoopEvent::InboxUpdate(paths)) => {
+                        tracing::info!("Wake: inbox update with {} files", paths.len());
+                        self.state = LoopState::Waking {
+                            trigger: WakeTrigger::Inbox(paths)
+                        };
+                    }
                     Some(LoopEvent::Heartbeat) => {
                         tracing::info!("Wake: heartbeat");
                         self.state = LoopState::Waking {
@@ -390,6 +396,14 @@ impl AgentLoop {
                             tracing::error!(error = %e, "Failed to append user message to context file");
                         }
                     }
+                }
+                WakeTrigger::Inbox(paths) => {
+                    // Inbox messages are handled separately - just add a system notification
+                    let chat_msg = ChatMessage::system(format!(
+                        "New inbox messages: {} file(s) to process",
+                        paths.len()
+                    ));
+                    self.context.add_message(chat_msg);
                 }
                 WakeTrigger::Heartbeat => {
                     // Heartbeat messages are NOT persisted - they're transient system prompts
