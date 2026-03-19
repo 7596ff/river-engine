@@ -16,7 +16,7 @@ use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
-use river_core::{SnowflakeGenerator, SnowflakeType};
+use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -71,6 +71,12 @@ pub struct AgentLoop {
     pending_notifications: Vec<String>,
     /// Whether context needs to be rebuilt from scratch (first wake or after rotation)
     needs_context_reset: bool,
+    /// Current context ID (snowflake)
+    context_id: Option<Snowflake>,
+    /// Context file for persistence
+    context_file: Option<ContextFile>,
+    /// Last known prompt token count
+    last_prompt_tokens: u64,
 }
 
 impl AgentLoop {
@@ -102,6 +108,9 @@ impl AgentLoop {
             config,
             pending_notifications: Vec::new(),
             needs_context_reset: true, // First wake needs full context build
+            context_id: None,
+            context_file: None,
+            last_prompt_tokens: 0,
         }
     }
 
@@ -115,6 +124,89 @@ impl AgentLoop {
         self.context_rotation.clone()
     }
 
+    /// Initialize context persistence on startup
+    fn initialize_context(&mut self) -> RiverResult<()> {
+        let db = self.db.lock().map_err(|_| RiverError::database("Lock poisoned"))?;
+        let latest = db.get_latest_context()?;
+        drop(db);
+
+        match latest {
+            Some(ctx) if ctx.is_active() => {
+                if ContextFile::exists(&self.config.workspace) {
+                    tracing::info!(context_id = %ctx.id, "Resuming active context from file");
+                    self.context_id = Some(ctx.id);
+                    self.context_file = Some(ContextFile::open(&self.config.workspace)?);
+                } else {
+                    tracing::warn!(context_id = %ctx.id, "Active context but file missing - creating empty");
+                    self.context_id = Some(ctx.id);
+                    self.context_file = Some(ContextFile::create(&self.config.workspace)?);
+                }
+            }
+            _ => {
+                self.create_fresh_context()?;
+            }
+        }
+
+        if self.context_id.is_none() && ContextFile::exists(&self.config.workspace) {
+            tracing::warn!("Deleting orphan context file");
+            ContextFile::delete(&self.config.workspace)?;
+        }
+
+        Ok(())
+    }
+
+    /// Create a fresh context with an empty file
+    fn create_fresh_context(&mut self) -> RiverResult<()> {
+        let id = self.snowflake_gen.next_id(SnowflakeType::Context);
+
+        let db = self.db.lock().map_err(|_| RiverError::database("Lock poisoned"))?;
+        db.insert_context(id)?;
+        drop(db);
+
+        self.context_id = Some(id);
+        self.context_file = Some(ContextFile::create(&self.config.workspace)?);
+
+        tracing::info!(context_id = %id, "Created fresh context");
+        Ok(())
+    }
+
+    /// Create a new context with a summary as the initial system message
+    fn create_context_with_summary(&mut self, summary: &str) -> RiverResult<()> {
+        let id = self.snowflake_gen.next_id(SnowflakeType::Context);
+
+        let db = self.db.lock().map_err(|_| RiverError::database("Lock poisoned"))?;
+        db.insert_context(id)?;
+        drop(db);
+
+        self.context_id = Some(id);
+        self.context_file = Some(ContextFile::create_with_summary(&self.config.workspace, summary)?);
+
+        tracing::info!(context_id = %id, "Created context with summary");
+        Ok(())
+    }
+
+    /// Archive the current context to the database
+    fn archive_current_context(&mut self, summary: Option<&str>) -> RiverResult<()> {
+        let context_id = self.context_id.ok_or_else(|| RiverError::session("No active context"))?;
+        let context_file = self.context_file.as_ref().ok_or_else(|| RiverError::session("No context file"))?;
+
+        let blob = context_file.read_raw()?;
+        let archived_at = self.snowflake_gen.next_id(SnowflakeType::Context);
+
+        let db = self.db.lock().map_err(|_| RiverError::database("Lock poisoned"))?;
+        db.archive_context(context_id, archived_at, self.last_prompt_tokens as i64, summary, &blob)?;
+        drop(db);
+
+        tracing::info!(
+            context_id = %context_id,
+            token_count = self.last_prompt_tokens,
+            has_summary = summary.is_some(),
+            "Archived context"
+        );
+
+        Ok(())
+    }
+
     /// Run the continuous loop
     pub async fn run(&mut self) {
         tracing::info!(
@@ -123,6 +215,11 @@ impl AgentLoop {
             model_timeout_secs = self.config.model_timeout.as_secs(),
             "Agent loop started"
         );
+
+        // Initialize context persistence
+        if let Err(e) = self.initialize_context() {
+            tracing::error!(error = %e, "Failed to initialize context - continuing without persistence");
+        }
 
         loop {
             tracing::debug!(state = ?self.state, "Loop iteration");
@@ -218,11 +315,38 @@ impl AgentLoop {
             self.context.assemble(
                 &self.config.workspace,
                 trigger,
-                queued_messages,
+                queued_messages.clone(),
             ).await;
 
-            // Load conversation history from database for continuity
-            self.load_conversation_history();
+            // Load context from file if exists (for resuming after restart)
+            if let Some(ref file) = self.context_file {
+                match file.load() {
+                    Ok(messages) => {
+                        let count = messages.len();
+                        for msg in messages {
+                            self.context.add_message(msg);
+                        }
+                        tracing::info!(message_count = count, "Loaded context from file");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to load context file");
+                    }
+                }
+            }
+
+            // Persist any queued messages that arrived before we woke
+            for msg in queued_messages {
+                let chat_msg = ChatMessage::user(format!(
+                    "[{}] {}: {}",
+                    msg.channel, msg.author.name, msg.content
+                ));
+                // Already added via assemble(), just persist to file
+                if let Some(ref file) = self.context_file {
+                    if let Err(e) = file.append(&chat_msg) {
+                        tracing::error!(error = %e, "Failed to append queued message to context file");
+                    }
+                }
+            }
 
             // Reset the executor's context tracking
             {
@@ -237,26 +361,52 @@ impl AgentLoop {
 
             // Add queued messages first
             for msg in queued_messages {
-                self.context.add_message(ChatMessage::user(format!(
+                let chat_msg = ChatMessage::user(format!(
                     "[{}] {}: {}",
                     msg.channel, msg.author.name, msg.content
-                )));
+                ));
+                self.context.add_message(chat_msg.clone());
+
+                // Persist to context file
+                if let Some(ref file) = self.context_file {
+                    if let Err(e) = file.append(&chat_msg) {
+                        tracing::error!(error = %e, "Failed to append queued message to context file");
+                    }
+                }
             }
 
             // Add wake trigger
             match &trigger {
                 WakeTrigger::Message(msg) => {
-                    self.context.add_message(ChatMessage::user(format!(
+                    let chat_msg = ChatMessage::user(format!(
                         "[{}] {}: {}",
                         msg.channel, msg.author.name, msg.content
-                    )));
+                    ));
+                    self.context.add_message(chat_msg.clone());
+
+                    // Persist to context file
+                    if let Some(ref file) = self.context_file {
+                        if let Err(e) = file.append(&chat_msg) {
+                            tracing::error!(error = %e, "Failed to append user message to context file");
+                        }
+                    }
                 }
                 WakeTrigger::Heartbeat => {
+                    // Heartbeat messages are NOT persisted - they're transient system prompts
                     self.context.add_message(ChatMessage::system(
                         "Heartbeat wake. No new messages. Check on your tasks and state.".to_string()
                     ));
                 }
             }
+        }
+
+        // Inject 80% context warning if needed
+        let context_percent = (self.last_prompt_tokens as f64 / self.config.context_limit as f64) * 100.0;
+        if context_percent >= 80.0 && context_percent < 90.0 {
+            self.context.add_message(ChatMessage::system(format!(
+                "WARNING: Context at {:.1}%. Consider summarizing and calling rotate_context soon.",
+                context_percent
+            )));
         }
 
         // Add any pending system notifications (git conflicts, etc.)
@@ -313,6 +463,16 @@ impl AgentLoop {
             "Model response received"
         );
 
+        // Track token count for persistence
+        self.last_prompt_tokens = response.usage.prompt_tokens as u64;
+
+        // Check for 90% auto-rotation
+        let context_percent = (self.last_prompt_tokens as f64 / self.config.context_limit as f64) * 100.0;
+        if context_percent >= 90.0 {
+            tracing::warn!(percent = format!("{:.1}", context_percent), "Context at 90%+ - triggering auto-rotation");
+            self.context_rotation.request_auto();
+        }
+
         // Add assistant message to context
         self.context.add_assistant_response(
             response.content.clone(),
@@ -322,6 +482,17 @@ impl AgentLoop {
                 Some(response.tool_calls.clone())
             },
         );
+
+        // Append assistant message to context file
+        if let Some(ref file) = self.context_file {
+            let msg = ChatMessage::assistant(
+                response.content.clone(),
+                if response.tool_calls.is_empty() { None } else { Some(response.tool_calls.clone()) },
+            );
+            if let Err(e) = file.append(&msg) {
+                tracing::error!(error = %e, "Failed to append assistant message to context file");
+            }
+        }
 
         // Update context usage tracking
         {
@@ -438,108 +609,44 @@ impl AgentLoop {
             executor.context_status()
         };
 
+        // Append tool results to context file
+        for result in &results {
+            let content = match &result.result {
+                Ok(r) => r.output.clone(),
+                Err(e) => format!("Error: {}", e),
+            };
+
+            if let Some(ref file) = self.context_file {
+                let chat_msg = ChatMessage::tool(&result.tool_call_id, content);
+                if let Err(e) = file.append(&chat_msg) {
+                    tracing::error!(error = %e, "Failed to append tool result to context file");
+                }
+            }
+        }
+
         // Add tool results and incoming messages to context
         self.context.add_tool_results(results, incoming_messages, context_status.clone());
 
-        // Check if context rotation was requested manually
-        if let Some(summary_opt) = self.context_rotation.take_request() {
-            match &summary_opt {
-                Some(summary) => {
-                    tracing::info!("Context rotation requested with summary: {}", summary);
-                }
-                None => {
-                    tracing::info!("Context rotation requested (auto-rotation, no summary)");
-                }
+        // Check if context rotation was requested or auto-triggered
+        if self.context_rotation.is_requested() || context_status.is_near_limit() {
+            if context_status.is_near_limit() && !self.context_rotation.is_requested() {
+                // Automatic rotation at 90% per spec Section 3.7
+                // Penalty: Agent must recover state from workspace files and memory search
+                tracing::warn!(
+                    "AUTOMATIC CONTEXT ROTATION: {:.1}% of limit reached ({}k/{}k tokens). \
+                    Session will reset. Agent must recover from workspace/memory.",
+                    context_status.percent(),
+                    context_status.used / 1000,
+                    context_status.limit / 1000
+                );
+                self.context_rotation.request_auto();
             }
-            // Mark for context reset on next wake
-            self.needs_context_reset = true;
-            self.state = LoopState::Settling;
-        } else if context_status.is_near_limit() {
-            // Automatic rotation at 90% per spec Section 3.7
-            // Penalty: Agent must recover state from workspace files and memory search
-            tracing::warn!(
-                "AUTOMATIC CONTEXT ROTATION: {:.1}% of limit reached ({}k/{}k tokens). \
-                Session will reset. Agent must recover from workspace/memory.",
-                context_status.percent(),
-                context_status.used / 1000,
-                context_status.limit / 1000
-            );
-            // Mark for context reset on next wake
-            self.needs_context_reset = true;
+            // Rotation will be handled in settle_phase
             self.state = LoopState::Settling;
         } else {
             // Back to thinking
             self.state = LoopState::Thinking;
         }
-    }
-
-    /// Load recent conversation history from database into context
-    fn load_conversation_history(&mut self) {
-        if self.config.history_message_limit == 0 {
-            return;
-        }
-
-        let messages = {
-            let db = match self.db.lock() {
-                Ok(db) => db,
-                Err(e) => {
-                    tracing::error!("Failed to acquire database lock for history: {}", e);
-                    return;
-                }
-            };
-
-            match db.get_session_messages(PRIMARY_SESSION_ID, self.config.history_message_limit) {
-                Ok(msgs) => msgs,
-                Err(e) => {
-                    tracing::warn!("Failed to load conversation history: {}", e);
-                    return;
-                }
-            }
-        };
-
-        if messages.is_empty() {
-            tracing::debug!("No conversation history to load");
-            return;
-        }
-
-        tracing::info!("Loading {} messages from conversation history", messages.len());
-
-        // Add a marker for history section
-        self.context.add_message(ChatMessage::system(
-            "--- Previous conversation history ---".to_string()
-        ));
-
-        // Convert database messages to chat messages
-        for msg in messages {
-            let chat_msg = match msg.role {
-                MessageRole::User => {
-                    ChatMessage::user(msg.content.unwrap_or_default())
-                }
-                MessageRole::Assistant => {
-                    // Reconstruct tool_calls if present
-                    let tool_calls = msg.tool_calls.as_ref().and_then(|tc_json| {
-                        serde_json::from_str(tc_json).ok()
-                    });
-                    ChatMessage::assistant(msg.content, tool_calls)
-                }
-                MessageRole::Tool => {
-                    ChatMessage::tool(
-                        msg.tool_call_id.unwrap_or_default(),
-                        msg.content.unwrap_or_default()
-                    )
-                }
-                MessageRole::System => {
-                    // Skip system messages from history - they're context-specific
-                    continue;
-                }
-            };
-            self.context.add_message(chat_msg);
-        }
-
-        // Add end marker
-        self.context.add_message(ChatMessage::system(
-            "--- End of conversation history ---".to_string()
-        ));
     }
 
     /// Persist conversation messages to database
@@ -603,6 +710,29 @@ impl AgentLoop {
 
     async fn settle_phase(&mut self) {
         tracing::debug!("Settling...");
+
+        // Handle context rotation if requested
+        if let Some(summary_opt) = self.context_rotation.take_request() {
+            tracing::info!(has_summary = summary_opt.is_some(), "Processing context rotation");
+
+            if let Err(e) = self.archive_current_context(summary_opt.as_deref()) {
+                tracing::error!(error = %e, "Failed to archive context");
+            } else {
+                let result = if let Some(ref s) = summary_opt {
+                    self.create_context_with_summary(s)
+                } else {
+                    tracing::warn!("Auto-rotation with no summary - continuity lost");
+                    self.create_fresh_context()
+                };
+
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "Failed to create new context");
+                }
+
+                self.needs_context_reset = true;
+                self.last_prompt_tokens = 0;
+            }
+        }
 
         // Persist conversation messages to database
         self.persist_messages();
