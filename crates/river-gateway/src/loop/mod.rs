@@ -442,11 +442,14 @@ impl AgentLoop {
         self.context.add_tool_results(results, incoming_messages, context_status.clone());
 
         // Check if context rotation was requested manually
-        if let Some(reason) = self.context_rotation.take_request() {
-            if reason.is_empty() {
-                tracing::info!("Context rotation requested (no reason given)");
-            } else {
-                tracing::info!("Context rotation requested: {}", reason);
+        if let Some(summary_opt) = self.context_rotation.take_request() {
+            match &summary_opt {
+                Some(summary) => {
+                    tracing::info!("Context rotation requested with summary: {}", summary);
+                }
+                None => {
+                    tracing::info!("Context rotation requested (auto-rotation, no summary)");
+                }
             }
             // Mark for context reset on next wake
             self.needs_context_reset = true;

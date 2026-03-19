@@ -141,37 +141,45 @@ impl Tool for ScheduleHeartbeatTool {
 pub struct ContextRotation {
     /// Whether rotation has been requested
     requested: AtomicBool,
-    /// Reason for the rotation (for logging)
-    reason: RwLock<Option<String>>,
+    /// Summary for the rotation (None for auto-rotation)
+    summary: RwLock<Option<String>>,
 }
 
 impl ContextRotation {
     pub fn new() -> Self {
         Self {
             requested: AtomicBool::new(false),
-            reason: RwLock::new(None),
+            summary: RwLock::new(None),
         }
     }
 
-    /// Request a context rotation
-    pub fn request(&self, reason: Option<String>) {
+    /// Request a context rotation with summary
+    pub fn request(&self, summary: String) {
         self.requested.store(true, Ordering::SeqCst);
-        // Store reason asynchronously - use blocking for sync context
-        if let Ok(mut r) = self.reason.try_write() {
-            *r = reason;
+        if let Ok(mut s) = self.summary.try_write() {
+            *s = Some(summary);
         }
     }
 
-    /// Check if rotation is requested and clear the flag
-    /// Returns Some(reason) if rotation was requested (reason may be empty string)
-    pub fn take_request(&self) -> Option<String> {
+    /// Request auto-rotation (no summary)
+    pub fn request_auto(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        if let Ok(mut s) = self.summary.try_write() {
+            *s = None;
+        }
+    }
+
+    /// Check if rotation is requested and take the summary
+    /// Returns Some(Option<String>) if rotation was requested
+    /// - Some(Some(summary)) = manual rotation with summary
+    /// - Some(None) = auto-rotation without summary
+    /// - None = no rotation requested
+    pub fn take_request(&self) -> Option<Option<String>> {
         if self.requested.swap(false, Ordering::SeqCst) {
-            // Rotation was requested - get reason or default to empty string
-            self.reason
+            self.summary
                 .try_write()
                 .ok()
-                .and_then(|mut r| r.take())
-                .or_else(|| Some(String::new()))
+                .map(|mut s| s.take())
         } else {
             None
         }
@@ -206,40 +214,37 @@ impl Tool for RotateContextTool {
     }
 
     fn description(&self) -> &str {
-        "Manually trigger context rotation. Call this after saving your state to thinking/current-state.md"
+        "Rotate context with a summary. The summary becomes a system message in the new context, preserving continuity."
     }
 
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "reason": {
+                "summary": {
                     "type": "string",
-                    "description": "Reason for rotation (optional, for logging)"
+                    "description": "Summary of current context to carry forward. This becomes a system message in the new context."
                 }
             },
-            "required": []
+            "required": ["summary"]
         })
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        let reason = args["reason"].as_str().map(|s| s.to_string());
+        let summary = args["summary"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing required 'summary' parameter"))?
+            .to_string();
 
-        self.rotation.request(reason.clone());
+        if summary.trim().is_empty() {
+            return Err(RiverError::tool("Summary cannot be empty"));
+        }
 
-        let output = if let Some(r) = reason {
-            format!(
-                "Context rotation requested. Reason: {}. \
-                Ensure you have saved your state to thinking/current-state.md before this cycle ends.",
-                r
-            )
-        } else {
-            "Context rotation requested. \
-            Ensure you have saved your state to thinking/current-state.md before this cycle ends."
-                .to_string()
-        };
+        self.rotation.request(summary);
 
-        Ok(ToolResult::success(output))
+        Ok(ToolResult::success(
+            "Context rotation requested. Your summary will be preserved in the new context."
+        ))
     }
 }
 
@@ -312,65 +317,57 @@ mod tests {
     }
 
     #[test]
-    fn test_context_rotation_default() {
+    fn test_context_rotation_with_summary() {
         let rotation = ContextRotation::new();
-        assert!(!rotation.is_requested());
-    }
+        rotation.request("Test summary".to_string());
 
-    #[test]
-    fn test_context_rotation_request() {
-        let rotation = ContextRotation::new();
-        rotation.request(Some("Testing".to_string()));
         assert!(rotation.is_requested());
-    }
 
-    #[test]
-    fn test_context_rotation_take_request() {
-        let rotation = ContextRotation::new();
-        rotation.request(Some("Testing".to_string()));
-
-        let reason = rotation.take_request();
-        assert!(reason.is_some());
-        assert_eq!(reason.unwrap(), "Testing");
+        let result = rotation.take_request();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), Some("Test summary".to_string()));
         assert!(!rotation.is_requested());
     }
 
     #[test]
-    fn test_context_rotation_take_request_empty() {
+    fn test_context_rotation_auto() {
         let rotation = ContextRotation::new();
-        let reason = rotation.take_request();
-        assert!(reason.is_none());
-    }
+        rotation.request_auto();
 
-    #[test]
-    fn test_context_rotation_take_request_no_reason() {
-        let rotation = ContextRotation::new();
-        rotation.request(None);
+        assert!(rotation.is_requested());
 
-        let reason = rotation.take_request();
-        assert!(reason.is_some());
-        assert_eq!(reason.unwrap(), ""); // Empty string when no reason given
+        let result = rotation.take_request();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), None);
         assert!(!rotation.is_requested());
     }
 
     #[test]
-    fn test_rotate_context_tool() {
+    fn test_context_rotation_not_requested() {
+        let rotation = ContextRotation::new();
+        let result = rotation.take_request();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_rotate_context_tool_requires_summary() {
         let rotation = Arc::new(ContextRotation::new());
         let tool = RotateContextTool::new(rotation.clone());
 
-        assert_eq!(tool.name(), "rotate_context");
-
-        let result = tool.execute(serde_json::json!({"reason": "Test rotation"}));
-        assert!(result.is_ok());
-        assert!(rotation.is_requested());
-    }
-
-    #[test]
-    fn test_rotate_context_tool_no_reason() {
-        let rotation = Arc::new(ContextRotation::new());
-        let tool = RotateContextTool::new(rotation.clone());
-
+        // Missing summary should fail
         let result = tool.execute(serde_json::json!({}));
+        assert!(result.is_err());
+
+        // Empty summary should fail
+        let result = tool.execute(serde_json::json!({"summary": ""}));
+        assert!(result.is_err());
+
+        // Whitespace-only summary should fail
+        let result = tool.execute(serde_json::json!({"summary": "   "}));
+        assert!(result.is_err());
+
+        // Valid summary should succeed
+        let result = tool.execute(serde_json::json!({"summary": "Test summary"}));
         assert!(result.is_ok());
         assert!(rotation.is_requested());
     }
