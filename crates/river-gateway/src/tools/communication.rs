@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 /// Adapter endpoint configuration
 #[derive(Debug, Clone)]
@@ -98,16 +99,39 @@ impl Tool for SendMessageTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        info!(
+            args = %serde_json::to_string(&args).unwrap_or_default(),
+            "SendMessageTool::execute called"
+        );
+
         let adapter = args["adapter"]
             .as_str()
-            .ok_or_else(|| RiverError::tool("Missing 'adapter' parameter"))?;
+            .ok_or_else(|| {
+                error!("SendMessageTool: Missing 'adapter' parameter");
+                RiverError::tool("Missing 'adapter' parameter")
+            })?;
         let channel = args["channel"]
             .as_str()
-            .ok_or_else(|| RiverError::tool("Missing 'channel' parameter"))?;
+            .ok_or_else(|| {
+                error!("SendMessageTool: Missing 'channel' parameter");
+                RiverError::tool("Missing 'channel' parameter")
+            })?;
         let content = args["content"]
             .as_str()
-            .ok_or_else(|| RiverError::tool("Missing 'content' parameter"))?;
+            .ok_or_else(|| {
+                error!("SendMessageTool: Missing 'content' parameter");
+                RiverError::tool("Missing 'content' parameter")
+            })?;
         let reply_to = args["reply_to"].as_str();
+
+        info!(
+            adapter = %adapter,
+            channel = %channel,
+            content_len = content.len(),
+            content_preview = %content.chars().take(100).collect::<String>(),
+            reply_to = ?reply_to,
+            "SendMessageTool: Sending message"
+        );
 
         // Block on async operation
         let registry = self.registry.clone();
@@ -121,9 +145,21 @@ impl Tool for SendMessageTool {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = registry.read().await;
+                debug!(
+                    available_adapters = ?registry.names(),
+                    "SendMessageTool: Looking up adapter in registry"
+                );
+
                 let config = registry
                     .get(&adapter)
-                    .ok_or_else(|| RiverError::tool(format!("Unknown adapter: {}", adapter)))?;
+                    .ok_or_else(|| {
+                        error!(
+                            adapter = %adapter,
+                            available = ?registry.names(),
+                            "SendMessageTool: Unknown adapter"
+                        );
+                        RiverError::tool(format!("Unknown adapter: {}", adapter))
+                    })?;
 
                 let payload = serde_json::json!({
                     "channel": channel,
@@ -131,21 +167,48 @@ impl Tool for SendMessageTool {
                     "reply_to": reply_to,
                 });
 
+                info!(
+                    url = %config.outbound_url,
+                    payload = %serde_json::to_string(&payload).unwrap_or_default(),
+                    "SendMessageTool: Sending HTTP request to adapter"
+                );
+
                 let response = http_client
                     .post(&config.outbound_url)
                     .json(&payload)
                     .send()
                     .await
-                    .map_err(|e| RiverError::tool(format!("Failed to send message: {}", e)))?;
+                    .map_err(|e| {
+                        error!(
+                            error = %e,
+                            url = %config.outbound_url,
+                            "SendMessageTool: HTTP request failed"
+                        );
+                        RiverError::tool(format!("Failed to send message: {}", e))
+                    })?;
 
-                if response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "SendMessageTool: Received HTTP response");
+
+                if status.is_success() {
+                    info!(
+                        adapter = %adapter,
+                        channel = %channel,
+                        "SendMessageTool: Message sent successfully"
+                    );
                     Ok(ToolResult::success(format!(
                         "Message sent to {} via {}",
                         channel, adapter
                     )))
                 } else {
-                    let status = response.status();
                     let body = response.text().await.unwrap_or_default();
+                    error!(
+                        status = %status,
+                        body = %body,
+                        adapter = %adapter,
+                        channel = %channel,
+                        "SendMessageTool: Adapter returned error"
+                    );
                     Err(RiverError::tool(format!(
                         "Adapter returned error {}: {}",
                         status, body
@@ -187,6 +250,8 @@ impl Tool for ListAdaptersTool {
     }
 
     fn execute(&self, _args: Value) -> Result<ToolResult, RiverError> {
+        info!("ListAdaptersTool::execute called");
+
         let registry = self.registry.clone();
 
         let result = tokio::task::block_in_place(|| {
@@ -200,6 +265,12 @@ impl Tool for ListAdaptersTool {
                         "outbound_url": a.outbound_url
                     }))
                     .collect();
+
+                info!(
+                    adapter_count = adapters.len(),
+                    adapter_names = ?registry.names(),
+                    "ListAdaptersTool: Returning adapter list"
+                );
 
                 Ok(ToolResult::success(serde_json::to_string_pretty(&serde_json::json!({
                     "adapters": adapters,
@@ -313,13 +384,31 @@ impl Tool for ReadChannelTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        info!(
+            args = %serde_json::to_string(&args).unwrap_or_default(),
+            "ReadChannelTool::execute called"
+        );
+
         let adapter = args["adapter"]
             .as_str()
-            .ok_or_else(|| RiverError::tool("Missing 'adapter' parameter"))?;
+            .ok_or_else(|| {
+                error!("ReadChannelTool: Missing 'adapter' parameter");
+                RiverError::tool("Missing 'adapter' parameter")
+            })?;
         let channel = args["channel"]
             .as_str()
-            .ok_or_else(|| RiverError::tool("Missing 'channel' parameter"))?;
+            .ok_or_else(|| {
+                error!("ReadChannelTool: Missing 'channel' parameter");
+                RiverError::tool("Missing 'channel' parameter")
+            })?;
         let limit = args["limit"].as_u64().unwrap_or(20);
+
+        info!(
+            adapter = %adapter,
+            channel = %channel,
+            limit = limit,
+            "ReadChannelTool: Reading channel"
+        );
 
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
@@ -331,25 +420,55 @@ impl Tool for ReadChannelTool {
                 let registry = registry.read().await;
                 let config = registry
                     .get(&adapter)
-                    .ok_or_else(|| RiverError::tool(format!("Unknown adapter: {}", adapter)))?;
+                    .ok_or_else(|| {
+                        error!(
+                            adapter = %adapter,
+                            available = ?registry.names(),
+                            "ReadChannelTool: Unknown adapter"
+                        );
+                        RiverError::tool(format!("Unknown adapter: {}", adapter))
+                    })?;
 
                 let read_url = config.read_url.as_ref()
-                    .ok_or_else(|| RiverError::tool(format!(
-                        "Adapter '{}' does not support reading channel history",
-                        adapter
-                    )))?;
+                    .ok_or_else(|| {
+                        warn!(
+                            adapter = %adapter,
+                            "ReadChannelTool: Adapter does not support reading"
+                        );
+                        RiverError::tool(format!(
+                            "Adapter '{}' does not support reading channel history",
+                            adapter
+                        ))
+                    })?;
 
                 let url = format!("{}?channel={}&limit={}", read_url, channel, limit);
+                debug!(url = %url, "ReadChannelTool: Sending HTTP request");
 
                 let response = http_client
                     .get(&url)
                     .send()
                     .await
-                    .map_err(|e| RiverError::tool(format!("Failed to read channel: {}", e)))?;
+                    .map_err(|e| {
+                        error!(error = %e, url = %url, "ReadChannelTool: HTTP request failed");
+                        RiverError::tool(format!("Failed to read channel: {}", e))
+                    })?;
 
-                if response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "ReadChannelTool: Received HTTP response");
+
+                if status.is_success() {
                     let body = response.text().await
-                        .map_err(|e| RiverError::tool(format!("Failed to read response: {}", e)))?;
+                        .map_err(|e| {
+                            error!(error = %e, "ReadChannelTool: Failed to read response body");
+                            RiverError::tool(format!("Failed to read response: {}", e))
+                        })?;
+
+                    info!(
+                        adapter = %adapter,
+                        channel = %channel,
+                        body_len = body.len(),
+                        "ReadChannelTool: Channel read successfully"
+                    );
 
                     // Try to parse as JSON and format nicely
                     if let Ok(json) = serde_json::from_str::<Value>(&body) {
@@ -358,8 +477,14 @@ impl Tool for ReadChannelTool {
                         Ok(ToolResult::success(body))
                     }
                 } else {
-                    let status = response.status();
                     let body = response.text().await.unwrap_or_default();
+                    error!(
+                        status = %status,
+                        body = %body,
+                        adapter = %adapter,
+                        channel = %channel,
+                        "ReadChannelTool: Adapter returned error"
+                    );
                     Err(RiverError::tool(format!(
                         "Adapter returned error {}: {}",
                         status, body

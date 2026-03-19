@@ -41,6 +41,8 @@ pub struct ServerConfig {
     pub redis_url: Option<String>,
     pub orchestrator_url: Option<String>,
     pub auth_token_file: Option<PathBuf>,
+    /// Communication adapters: (name, outbound_url, read_url)
+    pub adapters: Vec<(String, String, Option<String>)>,
 }
 
 /// Initialize and run the gateway server
@@ -150,8 +152,33 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     registry.register(Box::new(RotateContextTool::new(context_rotation.clone())));
     tracing::info!("Registered scheduling tools (schedule_heartbeat, rotate_context)");
 
-    // Create and register communication tools (adapter registry starts empty, adapters added via config)
+    // Create and register communication tools with configured adapters
     let adapter_registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+
+    // Register adapters from config
+    {
+        use crate::tools::AdapterConfig;
+        let mut reg = adapter_registry.write().await;
+        for (name, outbound_url, read_url) in &config.adapters {
+            tracing::info!(
+                adapter_name = %name,
+                outbound_url = %outbound_url,
+                read_url = ?read_url,
+                "Registering communication adapter"
+            );
+            reg.register(AdapterConfig {
+                name: name.clone(),
+                outbound_url: outbound_url.clone(),
+                read_url: read_url.clone(),
+            });
+        }
+        if config.adapters.is_empty() {
+            tracing::warn!("No communication adapters configured - send_message will not work");
+        } else {
+            tracing::info!("Registered {} communication adapter(s)", config.adapters.len());
+        }
+    }
+
     registry.register(Box::new(SendMessageTool::new(adapter_registry.clone())));
     registry.register(Box::new(ListAdaptersTool::new(adapter_registry.clone())));
     registry.register(Box::new(ReadChannelTool::new(adapter_registry.clone())));
@@ -221,6 +248,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         context_limit: gateway_config.context_limit,
         model_timeout: Duration::from_secs(120),
         max_tool_calls_per_generation: 50,
+        history_message_limit: 50, // Load last 50 messages for continuity
     };
 
     // Load auth token if configured

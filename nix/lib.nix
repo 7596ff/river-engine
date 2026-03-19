@@ -87,6 +87,18 @@ in {
     orchestratorUrl = mkOption { type = types.nullOr types.str; default = null; description = "Orchestrator URL."; };
     embeddingUrl = mkOption { type = types.nullOr types.str; default = null; description = "Embedding server URL."; };
     redisUrl = mkOption { type = types.nullOr types.str; default = null; description = "Redis URL."; };
+    authTokenFile = mkOption { type = types.nullOr types.path; default = null; description = "Path to file containing bearer token for authentication."; };
+    adapters = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          name = mkOption { type = types.str; description = "Adapter name (e.g., 'discord', 'slack')."; };
+          outboundUrl = mkOption { type = types.str; description = "URL for sending messages."; };
+          readUrl = mkOption { type = types.nullOr types.str; default = null; description = "URL for reading channel history (optional)."; };
+        };
+      });
+      default = [];
+      description = "Communication adapters for send_message tool.";
+    };
     environment = mkOption { type = types.attrsOf types.str; default = {}; description = "Extra environment variables."; };
   };
 
@@ -122,7 +134,21 @@ in {
   ];
 
   # Command builder: gateway
-  mkGatewayCommand = { cfg, packages }: lib.concatStringsSep " " ([
+  # discordCfg is optional - if provided and enabled, auto-adds discord adapter
+  mkGatewayCommand = { cfg, packages, discordCfg ? null }: let
+    # Build adapter flags from explicit config
+    explicitAdapters = map (a:
+      "--adapter" + " " + a.name + ":" + a.outboundUrl +
+        (if a.readUrl != null then ":" + a.readUrl else "")
+    ) cfg.adapters;
+
+    # Auto-add discord adapter if discord is enabled
+    discordAdapter = lib.optionals (discordCfg != null && discordCfg.enable) [
+      "--adapter" "discord:http://localhost:${toString discordCfg.port}/send"
+    ];
+
+    adapterFlags = explicitAdapters ++ discordAdapter;
+  in lib.concatStringsSep " " ([
     "${packages.river-gateway}/bin/river-gateway"
     "--workspace" (toString cfg.workspace)
     "--data-dir" (toString cfg.dataDir)
@@ -138,7 +164,9 @@ in {
     "--embedding-url" cfg.embeddingUrl
   ] ++ lib.optionals (cfg.redisUrl != null) [
     "--redis-url" cfg.redisUrl
-  ]);
+  ] ++ lib.optionals (cfg.authTokenFile != null) [
+    "--auth-token-file" (toString cfg.authTokenFile)
+  ] ++ adapterFlags);
 
   # Command builder: discord
   mkDiscordCommand = { cfg, agentPort, packages }: let

@@ -51,6 +51,12 @@ struct Args {
     /// Path to file containing bearer token for authentication
     #[arg(long)]
     auth_token_file: Option<PathBuf>,
+
+    /// Communication adapter configuration (can be repeated)
+    /// Format: name:outbound_url[:read_url]
+    /// Example: --adapter discord:http://localhost:8081/outbound:http://localhost:8081/read
+    #[arg(long = "adapter", value_name = "CONFIG")]
+    adapters: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -151,6 +157,42 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Redis: {:?}", args.redis_url);
     }
 
+    // Parse adapter configurations
+    let mut adapter_configs = Vec::new();
+    for adapter_str in &args.adapters {
+        let parts: Vec<&str> = adapter_str.split(':').collect();
+        if parts.len() < 2 {
+            anyhow::bail!(
+                "Invalid adapter config '{}'. Format: name:outbound_url[:read_url]",
+                adapter_str
+            );
+        }
+
+        // Handle URLs with : in them (http://...)
+        // Format is: name:protocol://host:port/path[:protocol://host:port/path]
+        let name = parts[0].to_string();
+
+        // Find where outbound URL ends and read URL begins (if present)
+        // Look for the pattern where we have another http:// or https://
+        let rest = &adapter_str[name.len() + 1..]; // Skip "name:"
+        let (outbound_url, read_url) = if let Some(idx) = rest.find(":http://").or_else(|| rest.find(":https://")) {
+            let outbound = rest[..idx].to_string();
+            let read = rest[idx + 1..].to_string();
+            (outbound, Some(read))
+        } else {
+            (rest.to_string(), None)
+        };
+
+        tracing::info!(
+            name = %name,
+            outbound_url = %outbound_url,
+            read_url = ?read_url,
+            "Configured adapter"
+        );
+
+        adapter_configs.push((name, outbound_url, read_url));
+    }
+
     let config = ServerConfig {
         workspace,
         data_dir,
@@ -162,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         redis_url: args.redis_url,
         orchestrator_url: args.orchestrator_url,
         auth_token_file: args.auth_token_file,
+        adapters: adapter_configs,
     };
 
     run(config).await

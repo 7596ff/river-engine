@@ -89,20 +89,42 @@ async fn handle_incoming(
     headers: HeaderMap,
     Json(msg): Json<IncomingMessage>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Validate authentication
-    validate_auth(&headers, state.auth_token.as_deref())?;
-
     tracing::info!(
-        "Received message from {} in {}",
-        msg.author.name,
-        msg.channel
+        adapter = %msg.adapter,
+        event_type = %msg.event_type,
+        channel = %msg.channel,
+        author_id = %msg.author.id,
+        author_name = %msg.author.name,
+        content_len = msg.content.len(),
+        content_preview = %msg.content.chars().take(100).collect::<String>(),
+        message_id = ?msg.message_id,
+        priority = ?msg.priority,
+        "Received incoming message"
     );
 
+    // Validate authentication
+    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+        tracing::warn!(
+            status = %status,
+            has_auth_header = headers.get(AUTHORIZATION).is_some(),
+            "Authentication failed for incoming message"
+        );
+        return Err(status);
+    }
+    tracing::debug!("Authentication passed");
+
     // Send to the loop
-    if state.loop_tx.send(LoopEvent::Message(msg)).await.is_err() {
+    tracing::debug!("Sending message to agent loop channel");
+    if state.loop_tx.send(LoopEvent::Message(msg.clone())).await.is_err() {
         tracing::error!("Failed to send message to loop - channel closed");
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
+
+    tracing::info!(
+        channel = %msg.channel,
+        author = %msg.author.name,
+        "Message delivered to agent loop"
+    );
 
     Ok(Json(serde_json::json!({
         "status": "delivered"

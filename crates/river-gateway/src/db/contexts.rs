@@ -101,8 +101,8 @@ impl Database {
         id: Snowflake,
         archived_at: Snowflake,
         token_count: i64,
-        summary: String,
-        blob: Vec<u8>,
+        summary: Option<&str>,
+        blob: &[u8],
     ) -> RiverResult<()> {
         self.conn()
             .execute(
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_archive() {
+    fn test_archive_with_summary() {
         let (db, gen) = test_db_and_gen();
 
         let ctx_id = gen.next_id(SnowflakeType::Context);
@@ -159,10 +159,10 @@ mod tests {
 
         let archived_at = gen.next_id(SnowflakeType::Context);
         let token_count = 5000;
-        let summary = "Test summary".to_string();
-        let blob = b"JSONL content".to_vec();
+        let summary = "Test summary";
+        let blob = b"JSONL content";
 
-        db.archive_context(ctx_id, archived_at, token_count, summary.clone(), blob.clone())
+        db.archive_context(ctx_id, archived_at, token_count, Some(summary), blob)
             .unwrap();
 
         let retrieved = db.get_latest_context().unwrap().unwrap();
@@ -170,8 +170,27 @@ mod tests {
         assert!(!retrieved.is_active());
         assert_eq!(retrieved.archived_at, Some(archived_at));
         assert_eq!(retrieved.token_count, Some(token_count));
-        assert_eq!(retrieved.summary, Some(summary));
-        assert_eq!(retrieved.blob, Some(blob));
+        assert_eq!(retrieved.summary, Some(summary.to_string()));
+        assert_eq!(retrieved.blob, Some(blob.to_vec()));
+    }
+
+    #[test]
+    fn test_archive_without_summary() {
+        let (db, gen) = test_db_and_gen();
+
+        let ctx_id = gen.next_id(SnowflakeType::Context);
+        db.insert_context(ctx_id).unwrap();
+
+        let archived_at = gen.next_id(SnowflakeType::Context);
+        let blob = b"JSONL content";
+
+        db.archive_context(ctx_id, archived_at, 4000, None, blob)
+            .unwrap();
+
+        let retrieved = db.get_latest_context().unwrap().unwrap();
+        assert_eq!(retrieved.id, ctx_id);
+        assert!(!retrieved.is_active());
+        assert!(retrieved.summary.is_none());
     }
 
     #[test]

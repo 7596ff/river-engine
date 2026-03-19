@@ -25,6 +25,7 @@ let
       Service = commonServiceConfig // {
         ExecStart = riverLib.mkGatewayCommand {
           cfg = agentCfg;
+          discordCfg = agentCfg.discord;
           inherit packages;
         };
         Environment = lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;

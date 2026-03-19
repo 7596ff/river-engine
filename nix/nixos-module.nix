@@ -31,6 +31,7 @@ let
         StateDirectory = "river-${name}";
         ExecStart = riverLib.mkGatewayCommand {
           cfg = agentCfg;
+          discordCfg = agentCfg.discord;
           inherit packages;
         };
       };

@@ -30,6 +30,25 @@ impl ModelClient {
         messages: &[ChatMessage],
         tools: &[ToolSchema],
     ) -> Result<ModelResponse, RiverError> {
+        tracing::info!(
+            model = %self.model,
+            url = %self.url,
+            message_count = messages.len(),
+            tool_count = tools.len(),
+            "Calling model"
+        );
+
+        // Log last few messages for context
+        for (i, msg) in messages.iter().rev().take(3).enumerate() {
+            tracing::debug!(
+                index = messages.len() - 1 - i,
+                role = %msg.role,
+                content_preview = %msg.content.as_deref().unwrap_or("").chars().take(100).collect::<String>(),
+                has_tool_calls = msg.tool_calls.is_some(),
+                "Message in context"
+            );
+        }
+
         let openai_tools: Vec<OpenAITool> = tools.iter().map(OpenAITool::from_schema).collect();
         let request = ChatCompletionRequest {
             model: &self.model,
@@ -37,29 +56,87 @@ impl ModelClient {
             tools: if tools.is_empty() { None } else { Some(openai_tools) },
         };
 
+        tracing::debug!(
+            request_json = %serde_json::to_string(&request).unwrap_or_default().chars().take(1000).collect::<String>(),
+            "Sending request to model"
+        );
+
         let response = self
             .http
             .post(format!("{}/v1/chat/completions", self.url))
             .json(&request)
             .send()
             .await
-            .map_err(|e| RiverError::model(format!("HTTP error: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "HTTP request to model failed");
+                RiverError::model(format!("HTTP error: {}", e))
+            })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        tracing::debug!(status = %status, "Received response from model");
+
+        if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            tracing::error!(
+                status = %status,
+                body = %body,
+                "Model API returned error"
+            );
             return Err(RiverError::model(format!(
                 "API error {}: {}",
                 status, body
             )));
         }
 
-        let completion: ChatCompletionResponse = response
-            .json()
-            .await
-            .map_err(|e| RiverError::model(format!("JSON parse error: {}", e)))?;
+        let body = response.text().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to read response body");
+            RiverError::model(format!("Failed to read response: {}", e))
+        })?;
 
-        ModelResponse::from_completion(completion)
+        tracing::debug!(
+            body_preview = %body.chars().take(500).collect::<String>(),
+            body_len = body.len(),
+            "Response body received"
+        );
+
+        let completion: ChatCompletionResponse = serde_json::from_str(&body)
+            .map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    body = %body,
+                    "Failed to parse model response JSON"
+                );
+                RiverError::model(format!("JSON parse error: {}", e))
+            })?;
+
+        let result = ModelResponse::from_completion(completion)?;
+
+        tracing::info!(
+            usage_prompt = result.usage.prompt_tokens,
+            usage_completion = result.usage.completion_tokens,
+            usage_total = result.usage.total_tokens,
+            has_content = result.content.is_some(),
+            tool_call_count = result.tool_calls.len(),
+            "Model response parsed"
+        );
+
+        if let Some(ref content) = result.content {
+            tracing::debug!(
+                content_preview = %content.chars().take(200).collect::<String>(),
+                "Model content"
+            );
+        }
+
+        for tc in &result.tool_calls {
+            tracing::info!(
+                tool_call_id = %tc.id,
+                tool_name = %tc.function.name,
+                args_preview = %tc.function.arguments.chars().take(200).collect::<String>(),
+                "Model requested tool call"
+            );
+        }
+
+        Ok(result)
     }
 
     /// Get the model URL

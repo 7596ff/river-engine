@@ -33,6 +33,8 @@ pub struct LoopConfig {
     pub model_timeout: Duration,
     /// Maximum tool calls per generation (safety limit)
     pub max_tool_calls_per_generation: usize,
+    /// Number of recent messages to load for conversation history
+    pub history_message_limit: usize,
 }
 
 impl Default for LoopConfig {
@@ -43,6 +45,7 @@ impl Default for LoopConfig {
             context_limit: 65536,
             model_timeout: Duration::from_secs(120),
             max_tool_calls_per_generation: 50,
+            history_message_limit: 50, // Load last 50 messages for continuity
         }
     }
 }
@@ -64,6 +67,8 @@ pub struct AgentLoop {
     git: GitOps,
     /// System notifications to surface on next wake (git conflicts, etc.)
     pending_notifications: Vec<String>,
+    /// Whether context needs to be rebuilt from scratch (first wake or after rotation)
+    needs_context_reset: bool,
 }
 
 impl AgentLoop {
@@ -94,6 +99,7 @@ impl AgentLoop {
             git,
             config,
             pending_notifications: Vec::new(),
+            needs_context_reset: true, // First wake needs full context build
         }
     }
 
@@ -109,28 +115,40 @@ impl AgentLoop {
 
     /// Run the continuous loop
     pub async fn run(&mut self) {
-        tracing::info!("Agent loop started");
+        tracing::info!(
+            workspace = %self.config.workspace.display(),
+            context_limit = self.config.context_limit,
+            model_timeout_secs = self.config.model_timeout.as_secs(),
+            "Agent loop started"
+        );
 
         loop {
+            tracing::debug!(state = ?self.state, "Loop iteration");
             match &self.state {
                 LoopState::Sleeping => {
+                    tracing::trace!("Entering sleep phase");
                     self.sleep_phase().await;
                 }
                 LoopState::Waking { .. } => {
+                    tracing::trace!("Entering wake phase");
                     self.wake_phase().await;
                 }
                 LoopState::Thinking => {
+                    tracing::trace!("Entering think phase");
                     self.think_phase().await;
                 }
-                LoopState::Acting { .. } => {
+                LoopState::Acting { pending } => {
+                    tracing::trace!(pending_tool_calls = pending.len(), "Entering act phase");
                     self.act_phase().await;
                 }
                 LoopState::Settling => {
+                    tracing::trace!("Entering settle phase");
                     self.settle_phase().await;
                 }
             }
 
             if self.shutdown_requested && self.state.is_sleeping() {
+                tracing::info!("Shutdown requested and loop is sleeping, exiting");
                 break;
             }
         }
@@ -191,13 +209,53 @@ impl AgentLoop {
             tracing::info!("Processing {} queued messages", queued_messages.len());
         }
 
-        // Assemble context
-        self.context.clear();
-        self.context.assemble(
-            &self.config.workspace,
-            trigger,
-            queued_messages,
-        ).await;
+        // Only rebuild context from scratch on first wake or after rotation
+        if self.needs_context_reset {
+            tracing::info!("Building fresh context (first wake or post-rotation)");
+            self.context.clear();
+            self.context.assemble(
+                &self.config.workspace,
+                trigger,
+                queued_messages,
+            ).await;
+
+            // Load conversation history from database for continuity
+            self.load_conversation_history();
+
+            // Reset the executor's context tracking
+            {
+                let mut executor = self.tool_executor.write().await;
+                executor.reset_context();
+            }
+
+            self.needs_context_reset = false;
+        } else {
+            // Accumulating context - just add the new trigger and messages
+            tracing::debug!("Adding to existing context (accumulating)");
+
+            // Add queued messages first
+            for msg in queued_messages {
+                self.context.add_message(ChatMessage::user(format!(
+                    "[{}] {}: {}",
+                    msg.channel, msg.author.name, msg.content
+                )));
+            }
+
+            // Add wake trigger
+            match &trigger {
+                WakeTrigger::Message(msg) => {
+                    self.context.add_message(ChatMessage::user(format!(
+                        "[{}] {}: {}",
+                        msg.channel, msg.author.name, msg.content
+                    )));
+                }
+                WakeTrigger::Heartbeat => {
+                    self.context.add_message(ChatMessage::system(
+                        "Heartbeat wake. No new messages. Check on your tasks and state.".to_string()
+                    ));
+                }
+            }
+        }
 
         // Add any pending system notifications (git conflicts, etc.)
         if !self.pending_notifications.is_empty() {
@@ -213,7 +271,7 @@ impl AgentLoop {
             tracing::info!("Surfaced {} system notification(s) to agent", notifications.len());
         }
 
-        // Load tool schemas
+        // Load tool schemas (in case they changed)
         let executor = self.tool_executor.read().await;
         self.context.set_tools(executor.schemas());
 
@@ -221,7 +279,13 @@ impl AgentLoop {
     }
 
     async fn think_phase(&mut self) {
-        tracing::debug!("Calling model...");
+        let message_count = self.context.messages().len();
+        let tool_count = self.context.tools().len();
+        tracing::info!(
+            message_count = message_count,
+            tool_count = tool_count,
+            "Think phase: calling model"
+        );
 
         let response = match self.model_client.complete(
             self.context.messages(),
@@ -229,16 +293,22 @@ impl AgentLoop {
         ).await {
             Ok(resp) => resp,
             Err(e) => {
-                tracing::error!("Model call failed: {}", e);
+                tracing::error!(
+                    error = %e,
+                    "Model call failed - transitioning to Settling"
+                );
                 self.state = LoopState::Settling;
                 return;
             }
         };
 
-        tracing::debug!(
-            "Model response: {} tokens, {} tool calls",
-            response.usage.total_tokens,
-            response.tool_calls.len()
+        tracing::info!(
+            tokens_total = response.usage.total_tokens,
+            tokens_prompt = response.usage.prompt_tokens,
+            tokens_completion = response.usage.completion_tokens,
+            tool_calls = response.tool_calls.len(),
+            has_content = response.content.is_some(),
+            "Model response received"
         );
 
         // Add assistant message to context
@@ -255,16 +325,34 @@ impl AgentLoop {
         {
             let mut executor = self.tool_executor.write().await;
             executor.add_context(response.usage.total_tokens as u64);
+            let status = executor.context_status();
+            tracing::debug!(
+                context_used = status.used,
+                context_limit = status.limit,
+                context_percent = format!("{:.1}%", status.percent()),
+                "Context usage updated"
+            );
         }
 
         if response.tool_calls.is_empty() {
             // No tool calls - cycle complete
             if let Some(content) = &response.content {
-                tracing::debug!("Assistant said: {}", content);
+                tracing::info!(
+                    content_len = content.len(),
+                    content_preview = %content.chars().take(300).collect::<String>(),
+                    "Assistant response (no tool calls) - transitioning to Settling"
+                );
+            } else {
+                tracing::info!("No content and no tool calls - transitioning to Settling");
             }
             self.state = LoopState::Settling;
         } else {
             // Has tool calls - execute them
+            tracing::info!(
+                tool_call_count = response.tool_calls.len(),
+                tools = ?response.tool_calls.iter().map(|t| &t.function.name).collect::<Vec<_>>(),
+                "Transitioning to Acting phase"
+            );
             self.state = LoopState::Acting {
                 pending: response.tool_calls,
             };
@@ -276,24 +364,45 @@ impl AgentLoop {
         let tool_calls = match std::mem::replace(&mut self.state, LoopState::Thinking) {
             LoopState::Acting { pending } => pending,
             _ => {
-                tracing::error!("Invalid state in act_phase");
+                tracing::error!("Invalid state in act_phase - expected Acting");
                 self.state = LoopState::Settling;
                 return;
             }
         };
-        tracing::debug!("Executing {} tool calls", tool_calls.len());
+        tracing::info!(
+            tool_call_count = tool_calls.len(),
+            tools = ?tool_calls.iter().map(|t| &t.function.name).collect::<Vec<_>>(),
+            "Act phase: executing tool calls"
+        );
 
         // Convert to executor format and execute
         let mut results = Vec::new();
         {
             let mut executor = self.tool_executor.write().await;
-            for tc in &tool_calls {
+            for (i, tc) in tool_calls.iter().enumerate() {
+                tracing::info!(
+                    index = i,
+                    tool = %tc.function.name,
+                    call_id = %tc.id,
+                    args_raw = %tc.function.arguments,
+                    "Processing tool call"
+                );
+
                 let arguments = match serde_json::from_str(&tc.function.arguments) {
-                    Ok(args) => args,
+                    Ok(args) => {
+                        tracing::debug!(
+                            tool = %tc.function.name,
+                            args_parsed = %serde_json::to_string(&args).unwrap_or_default(),
+                            "Arguments parsed successfully"
+                        );
+                        args
+                    }
                     Err(e) => {
                         tracing::warn!(
-                            "Invalid JSON arguments for tool {}: {} - using empty object",
-                            tc.function.name, e
+                            tool = %tc.function.name,
+                            error = %e,
+                            args_raw = %tc.function.arguments,
+                            "Invalid JSON arguments - using empty object"
                         );
                         serde_json::Value::Object(serde_json::Map::new())
                     }
@@ -304,7 +413,13 @@ impl AgentLoop {
                     arguments,
                 };
                 let result = executor.execute(&call);
-                tracing::debug!("Tool {}: {:?}", tc.function.name, result.result.is_ok());
+                let success = result.result.is_ok();
+                tracing::info!(
+                    tool = %tc.function.name,
+                    call_id = %tc.id,
+                    success = success,
+                    "Tool execution complete"
+                );
                 results.push(result);
             }
         }
@@ -331,7 +446,8 @@ impl AgentLoop {
             } else {
                 tracing::info!("Context rotation requested: {}", reason);
             }
-            // Go to settling, which will clear context on next wake
+            // Mark for context reset on next wake
+            self.needs_context_reset = true;
             self.state = LoopState::Settling;
         } else if context_status.is_near_limit() {
             // Automatic rotation at 90% per spec Section 3.7
@@ -343,11 +459,82 @@ impl AgentLoop {
                 context_status.used / 1000,
                 context_status.limit / 1000
             );
+            // Mark for context reset on next wake
+            self.needs_context_reset = true;
             self.state = LoopState::Settling;
         } else {
             // Back to thinking
             self.state = LoopState::Thinking;
         }
+    }
+
+    /// Load recent conversation history from database into context
+    fn load_conversation_history(&mut self) {
+        if self.config.history_message_limit == 0 {
+            return;
+        }
+
+        let messages = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!("Failed to acquire database lock for history: {}", e);
+                    return;
+                }
+            };
+
+            match db.get_session_messages(PRIMARY_SESSION_ID, self.config.history_message_limit) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    tracing::warn!("Failed to load conversation history: {}", e);
+                    return;
+                }
+            }
+        };
+
+        if messages.is_empty() {
+            tracing::debug!("No conversation history to load");
+            return;
+        }
+
+        tracing::info!("Loading {} messages from conversation history", messages.len());
+
+        // Add a marker for history section
+        self.context.add_message(ChatMessage::system(
+            "--- Previous conversation history ---".to_string()
+        ));
+
+        // Convert database messages to chat messages
+        for msg in messages {
+            let chat_msg = match msg.role {
+                MessageRole::User => {
+                    ChatMessage::user(msg.content.unwrap_or_default())
+                }
+                MessageRole::Assistant => {
+                    // Reconstruct tool_calls if present
+                    let tool_calls = msg.tool_calls.as_ref().and_then(|tc_json| {
+                        serde_json::from_str(tc_json).ok()
+                    });
+                    ChatMessage::assistant(msg.content, tool_calls)
+                }
+                MessageRole::Tool => {
+                    ChatMessage::tool(
+                        msg.tool_call_id.unwrap_or_default(),
+                        msg.content.unwrap_or_default()
+                    )
+                }
+                MessageRole::System => {
+                    // Skip system messages from history - they're context-specific
+                    continue;
+                }
+            };
+            self.context.add_message(chat_msg);
+        }
+
+        // Add end marker
+        self.context.add_message(ChatMessage::system(
+            "--- End of conversation history ---".to_string()
+        ));
     }
 
     /// Persist conversation messages to database
@@ -494,12 +681,14 @@ mod tests {
             context_limit: 128000,
             model_timeout: Duration::from_secs(300),
             max_tool_calls_per_generation: 100,
+            history_message_limit: 100,
         };
         assert_eq!(config.workspace, PathBuf::from("/home/agent/workspace"));
         assert_eq!(config.default_heartbeat_minutes, 30);
         assert_eq!(config.context_limit, 128000);
         assert_eq!(config.model_timeout, Duration::from_secs(300));
         assert_eq!(config.max_tool_calls_per_generation, 100);
+        assert_eq!(config.history_message_limit, 100);
     }
 
     #[test]

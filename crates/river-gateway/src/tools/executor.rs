@@ -39,18 +39,50 @@ impl ToolExecutor {
 
     /// Execute a tool call
     pub fn execute(&mut self, call: &ToolCall) -> ToolCallResponse {
+        tracing::info!(
+            tool = %call.name,
+            call_id = %call.id,
+            args = %serde_json::to_string(&call.arguments).unwrap_or_default(),
+            "Executing tool"
+        );
+
         let result = match self.registry.get(&call.name) {
             Some(tool) => {
+                tracing::debug!(tool = %call.name, "Tool found in registry, executing...");
                 match tool.execute(call.arguments.clone()) {
                     Ok(tool_result) => {
                         // Rough estimate: ~4 characters per token (typical for English text)
-                        self.context_used += (tool_result.output.len() as u64) / 4;
+                        let output_len = tool_result.output.len();
+                        self.context_used += (output_len as u64) / 4;
+                        tracing::info!(
+                            tool = %call.name,
+                            call_id = %call.id,
+                            output_len = output_len,
+                            output_preview = %tool_result.output.chars().take(200).collect::<String>(),
+                            "Tool succeeded"
+                        );
                         Ok(tool_result)
                     }
-                    Err(e) => Err(e.to_string()),
+                    Err(e) => {
+                        tracing::error!(
+                            tool = %call.name,
+                            call_id = %call.id,
+                            error = %e,
+                            "Tool execution failed"
+                        );
+                        Err(e.to_string())
+                    }
                 }
             }
-            None => Err(format!("Unknown tool: {}", call.name)),
+            None => {
+                tracing::error!(
+                    tool = %call.name,
+                    call_id = %call.id,
+                    available_tools = ?self.registry.schemas().iter().map(|s| &s.name).collect::<Vec<_>>(),
+                    "Unknown tool requested"
+                );
+                Err(format!("Unknown tool: {}", call.name))
+            }
         };
 
         ToolCallResponse {

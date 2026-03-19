@@ -5,6 +5,7 @@ use super::{Tool, ToolResult};
 use serde_json::{json, Value};
 use std::time::Duration;
 use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 /// Default command timeout (2 minutes)
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -50,9 +51,17 @@ impl Tool for BashTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        info!(
+            workspace = %self.workspace.display(),
+            "BashTool::execute called"
+        );
+
         let command = args.get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| RiverError::tool("Missing required parameter: command"))?;
+            .ok_or_else(|| {
+                error!("BashTool: Missing required parameter 'command'");
+                RiverError::tool("Missing required parameter: command")
+            })?;
 
         let timeout_ms = args.get("timeout")
             .and_then(|v| v.as_u64())
@@ -61,6 +70,13 @@ impl Tool for BashTool {
 
         let output_file = args.get("output_file").and_then(|v| v.as_str());
 
+        info!(
+            command = %command,
+            timeout_ms = timeout_ms,
+            output_file = ?output_file,
+            "BashTool: Executing command"
+        );
+
         // Execute the command with timeout using tokio
         let command = command.to_string();
         let workspace = self.workspace.clone();
@@ -68,6 +84,7 @@ impl Tool for BashTool {
 
         let output = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
+                debug!(command = %command, "BashTool: Starting bash process");
                 let child = tokio::process::Command::new("bash")
                     .arg("-c")
                     .arg(&command)
@@ -76,12 +93,16 @@ impl Tool for BashTool {
 
                 match tokio::time::timeout(timeout, child).await {
                     Ok(result) => result.map_err(|e| {
+                        error!(error = %e, command = %command, "BashTool: Failed to execute command");
                         RiverError::tool(format!("Failed to execute command: {}", e))
                     }),
-                    Err(_) => Err(RiverError::tool(format!(
-                        "Command timed out after {} ms",
-                        timeout_ms
-                    ))),
+                    Err(_) => {
+                        warn!(command = %command, timeout_ms = timeout_ms, "BashTool: Command timed out");
+                        Err(RiverError::tool(format!(
+                            "Command timed out after {} ms",
+                            timeout_ms
+                        )))
+                    }
                 }
             })
         })?;
@@ -99,6 +120,22 @@ impl Tool for BashTool {
 
         let exit_code = output.status.code().unwrap_or(-1);
         let success = output.status.success();
+
+        info!(
+            exit_code = exit_code,
+            success = success,
+            stdout_len = stdout.len(),
+            stderr_len = stderr.len(),
+            stdout_preview = %stdout.chars().take(200).collect::<String>(),
+            "BashTool: Command completed"
+        );
+
+        if !stderr.is_empty() {
+            debug!(
+                stderr_preview = %stderr.chars().take(500).collect::<String>(),
+                "BashTool: Command had stderr output"
+            );
+        }
 
         // Handle output file if specified
         if let Some(out_path) = output_file {

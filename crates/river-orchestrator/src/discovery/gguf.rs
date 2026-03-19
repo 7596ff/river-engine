@@ -141,9 +141,21 @@ fn read_i32<R: Read>(reader: &mut R) -> Result<i32, RiverError> {
     Ok(i32::from_le_bytes(buf))
 }
 
+/// Maximum allowed string length in GGUF metadata (16 MB)
+const MAX_STRING_LENGTH: u64 = 16 * 1024 * 1024;
+
+/// Maximum number of metadata key-value pairs (sanity check)
+const MAX_METADATA_COUNT: u64 = 100_000;
+
 /// Read a string from the reader (length-prefixed)
 fn read_string<R: Read>(reader: &mut R) -> Result<String, RiverError> {
     let len = read_u64(reader)?;
+    if len > MAX_STRING_LENGTH {
+        return Err(RiverError::orchestrator(format!(
+            "String length {} exceeds maximum allowed ({})",
+            len, MAX_STRING_LENGTH
+        )));
+    }
     let mut buf = vec![0u8; len as usize];
     reader
         .read_exact(&mut buf)
@@ -260,6 +272,13 @@ pub fn parse_gguf(path: &PathBuf) -> Result<GgufMetadata, RiverError> {
     // Read tensor count and metadata count
     let _tensor_count = read_u64(&mut reader)?;
     let metadata_kv_count = read_u64(&mut reader)?;
+
+    if metadata_kv_count > MAX_METADATA_COUNT {
+        return Err(RiverError::orchestrator(format!(
+            "Metadata count {} exceeds maximum allowed ({})",
+            metadata_kv_count, MAX_METADATA_COUNT
+        )));
+    }
 
     // Parse metadata key-value pairs
     let mut name = String::from("unknown");
