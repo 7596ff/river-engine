@@ -13,6 +13,9 @@ let
     RestartSec = 5;
   };
 
+  # Default PATH for shell commands
+  defaultPath = lib.makeBinPath (with pkgs; [ bash coreutils curl pandoc ddgr git ]);
+
   # Agent service generator - called lazily per agent
   mkAgentServices = openrouterCfg: anthropicCfg: name: agentCfg: let
     packages = mkPackages false;
@@ -21,13 +24,6 @@ let
       discordCfg = agentCfg.discord;
       inherit openrouterCfg anthropicCfg packages;
     };
-    # Wrapper script that sources user's profile for full PATH
-    wrappedCmd = pkgs.writeShellScript "river-gateway-${name}" ''
-      # Source user profile for PATH and other environment
-      [ -f "$HOME/.profile" ] && . "$HOME/.profile"
-      [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ] && . "$HOME/.nix-profile/etc/profile.d/nix.sh"
-      exec ${gatewayCmd}
-    '';
   in lib.optionalAttrs agentCfg.enable {
     "river-${name}-gateway" = {
       Unit = {
@@ -35,8 +31,8 @@ let
         After = [ "network.target" ];
       };
       Service = commonServiceConfig // {
-        ExecStart = toString wrappedCmd;
-        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
+        ExecStart = gatewayCmd;
+        Environment = [ "HOME=%h" "PATH=${defaultPath}" ] ++ lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
       } // lib.optionalAttrs (agentCfg.environmentFile != null) {
         EnvironmentFile = toString agentCfg.environmentFile;
       };
@@ -50,6 +46,7 @@ let
         Description = "River Discord Adapter - ${name}";
         After = [ "river-${name}-gateway.service" ];
         BindsTo = [ "river-${name}-gateway.service" ];
+        PartOf = [ "river-${name}-gateway.service" ];
       };
       Service = commonServiceConfig // {
         ExecStart = riverLib.mkDiscordCommand {

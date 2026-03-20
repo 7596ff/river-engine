@@ -41,7 +41,7 @@ let
       } // lib.optionalAttrs (agentCfg.environmentFile != null) {
         EnvironmentFile = toString agentCfg.environmentFile;
       };
-      environment = { PATH = defaultPath; } // agentCfg.environment;
+      environment = { PATH = defaultPath; HOME = "/var/lib/river-${name}"; } // agentCfg.environment;
     };
   } // lib.optionalAttrs (agentCfg.enable && agentCfg.discord.enable) {
     "river-${name}-discord" = {
@@ -49,6 +49,7 @@ let
       wantedBy = [ "multi-user.target" ];
       after = [ "river-${name}-gateway.service" ];
       bindsTo = [ "river-${name}-gateway.service" ];
+      partOf = [ "river-${name}-gateway.service" ];
       serviceConfig = commonServiceConfig // {
         User = "river-${name}";
         Group = "river-${name}";
