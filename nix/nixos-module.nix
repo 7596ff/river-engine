@@ -16,6 +16,9 @@ let
     RestartSec = 5;
   };
 
+  # PATH for shell commands (bash, curl, etc.)
+  defaultPath = lib.makeBinPath (with pkgs; [ bash coreutils curl pandoc ddgr ]);
+
   # Agent service generators - called lazily per agent
   mkAgentServices = openrouterCfg: anthropicCfg: name: agentCfg: let
     packages = mkPackages false;
@@ -38,7 +41,7 @@ let
       } // lib.optionalAttrs (agentCfg.environmentFile != null) {
         EnvironmentFile = toString agentCfg.environmentFile;
       };
-      environment = agentCfg.environment;
+      environment = { PATH = defaultPath; } // agentCfg.environment;
     };
   } // lib.optionalAttrs (agentCfg.enable && agentCfg.discord.enable) {
     "river-${name}-discord" = {
