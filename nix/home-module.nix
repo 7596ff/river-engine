@@ -21,8 +21,13 @@ let
       discordCfg = agentCfg.discord;
       inherit openrouterCfg anthropicCfg packages;
     };
-    # PATH for shell commands (bash, curl, etc.)
-    defaultPath = lib.makeBinPath (with pkgs; [ bash coreutils curl pandoc ddgr ]);
+    # Wrapper script that sources user's profile for full PATH
+    wrappedCmd = pkgs.writeShellScript "river-gateway-${name}" ''
+      # Source user profile for PATH and other environment
+      [ -f "$HOME/.profile" ] && . "$HOME/.profile"
+      [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ] && . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+      exec ${gatewayCmd}
+    '';
   in lib.optionalAttrs agentCfg.enable {
     "river-${name}-gateway" = {
       Unit = {
@@ -30,8 +35,8 @@ let
         After = [ "network.target" ];
       };
       Service = commonServiceConfig // {
-        ExecStart = gatewayCmd;
-        Environment = [ "PATH=${defaultPath}" ] ++ lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
+        ExecStart = toString wrappedCmd;
+        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") agentCfg.environment;
       } // lib.optionalAttrs (agentCfg.environmentFile != null) {
         EnvironmentFile = toString agentCfg.environmentFile;
       };
