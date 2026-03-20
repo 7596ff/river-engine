@@ -20,11 +20,6 @@ impl EventHandler {
 
     /// Handle a message create event
     pub async fn handle_message(&self, msg: Box<MessageCreate>) {
-        // Ignore bot messages
-        if msg.author.bot {
-            return;
-        }
-
         let channel_id = msg.channel_id.get();
         let is_dm = msg.guild_id.is_none();
 
