@@ -430,6 +430,20 @@ impl AgentLoop {
     }
 
     async fn think_phase(&mut self) {
+        // Hard limit gate - force rotation if context is dangerously full
+        let context_percent = self.context_status().percent();
+        if context_percent >= 95.0 {
+            tracing::error!(
+                percent = format!("{:.1}", context_percent),
+                tokens = self.last_prompt_tokens,
+                limit = self.config.context_limit,
+                "Context at 95%+ - forcing immediate rotation, skipping model call"
+            );
+            self.context_rotation.request_auto();
+            self.state = LoopState::Settling;
+            return;
+        }
+
         let message_count = self.context.messages().len();
         let tool_count = self.context.tools().len();
         tracing::info!(
