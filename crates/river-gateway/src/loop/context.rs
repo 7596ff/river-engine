@@ -3,7 +3,6 @@
 use crate::api::IncomingMessage;
 use crate::tools::{ToolCallResponse, ToolSchema};
 use crate::r#loop::state::{ToolCallRequest, WakeTrigger};
-use river_core::ContextStatus;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -180,7 +179,6 @@ impl ContextBuilder {
         &mut self,
         results: Vec<ToolCallResponse>,
         incoming: Vec<IncomingMessage>,
-        context_status: ContextStatus,
     ) {
         // Add each tool result
         for result in results {
@@ -190,12 +188,6 @@ impl ContextBuilder {
             };
             self.messages.push(ChatMessage::tool(result.tool_call_id, content));
         }
-
-        // Add context status
-        self.messages.push(ChatMessage::system(format!(
-            "Context: {}/{} ({:.1}%)",
-            context_status.used, context_status.limit, context_status.percent()
-        )));
 
         // Add any incoming messages
         if !incoming.is_empty() {
@@ -361,40 +353,28 @@ mod tests {
     #[test]
     fn test_add_tool_results_basic() {
         let mut builder = ContextBuilder::new();
-        let context_status = ContextStatus {
-            used: 1000,
-            limit: 65536,
-        };
         let results = vec![ToolCallResponse {
             tool_call_id: "call_1".to_string(),
             result: Ok(ToolResult::success("Success!")),
-            context_status: context_status.clone(),
         }];
 
-        builder.add_tool_results(results, vec![], context_status);
+        builder.add_tool_results(results, vec![]);
 
-        // Should have 2 messages: tool result + context status
-        assert_eq!(builder.messages().len(), 2);
+        // Should have 1 message: tool result
+        assert_eq!(builder.messages().len(), 1);
         assert_eq!(builder.messages()[0].role, "tool");
         assert_eq!(builder.messages()[0].content, Some("Success!".to_string()));
-        assert_eq!(builder.messages()[1].role, "system");
-        assert!(builder.messages()[1].content.as_ref().unwrap().contains("Context:"));
     }
 
     #[test]
     fn test_add_tool_results_with_error() {
         let mut builder = ContextBuilder::new();
-        let context_status = ContextStatus {
-            used: 500,
-            limit: 65536,
-        };
         let results = vec![ToolCallResponse {
             tool_call_id: "call_err".to_string(),
             result: Err("File not found".to_string()),
-            context_status: context_status.clone(),
         }];
 
-        builder.add_tool_results(results, vec![], context_status);
+        builder.add_tool_results(results, vec![]);
 
         assert_eq!(builder.messages()[0].role, "tool");
         let content = builder.messages()[0].content.as_ref().unwrap();
@@ -405,27 +385,22 @@ mod tests {
     #[test]
     fn test_add_tool_results_with_incoming_messages() {
         let mut builder = ContextBuilder::new();
-        let context_status = ContextStatus {
-            used: 2000,
-            limit: 65536,
-        };
         let results = vec![ToolCallResponse {
             tool_call_id: "call_1".to_string(),
             result: Ok(ToolResult::success("Done")),
-            context_status: context_status.clone(),
         }];
         let incoming = vec![
             test_message("Hey!", "dm", "Bob"),
             test_message("Urgent!", "alerts", "System"),
         ];
 
-        builder.add_tool_results(results, incoming, context_status);
+        builder.add_tool_results(results, incoming);
 
-        // Should have 3 messages: tool result + context status + incoming messages
-        assert_eq!(builder.messages().len(), 3);
+        // Should have 2 messages: tool result + incoming messages
+        assert_eq!(builder.messages().len(), 2);
 
         // Check incoming messages notification
-        let incoming_msg = &builder.messages()[2];
+        let incoming_msg = &builder.messages()[1];
         assert_eq!(incoming_msg.role, "system");
         let content = incoming_msg.content.as_ref().unwrap();
         assert!(content.contains("Messages received during tool execution"));
@@ -487,50 +462,27 @@ mod tests {
     }
 
     #[test]
-    fn test_context_status_display_in_results() {
-        let mut builder = ContextBuilder::new();
-        let context_status = ContextStatus {
-            used: 32768,
-            limit: 65536,
-        };
-
-        builder.add_tool_results(vec![], vec![], context_status);
-
-        let status_msg = &builder.messages()[0];
-        let content = status_msg.content.as_ref().unwrap();
-        // Should show percentage
-        assert!(content.contains("50.0%") || content.contains("50%"));
-    }
-
-    #[test]
     fn test_multiple_tool_results() {
         let mut builder = ContextBuilder::new();
-        let context_status = ContextStatus {
-            used: 1000,
-            limit: 65536,
-        };
         let results = vec![
             ToolCallResponse {
                 tool_call_id: "call_1".to_string(),
                 result: Ok(ToolResult::success("First result")),
-                context_status: context_status.clone(),
             },
             ToolCallResponse {
                 tool_call_id: "call_2".to_string(),
                 result: Ok(ToolResult::success("Second result")),
-                context_status: context_status.clone(),
             },
             ToolCallResponse {
                 tool_call_id: "call_3".to_string(),
                 result: Err("Third failed".to_string()),
-                context_status: context_status.clone(),
             },
         ];
 
-        builder.add_tool_results(results, vec![], context_status);
+        builder.add_tool_results(results, vec![]);
 
-        // 3 tool results + 1 context status
-        assert_eq!(builder.messages().len(), 4);
+        // 3 tool results
+        assert_eq!(builder.messages().len(), 3);
 
         assert_eq!(builder.messages()[0].tool_call_id, Some("call_1".to_string()));
         assert_eq!(builder.messages()[1].tool_call_id, Some("call_2".to_string()));
