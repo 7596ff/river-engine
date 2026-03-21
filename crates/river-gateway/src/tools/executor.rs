@@ -18,7 +18,6 @@ pub struct ToolCall {
 pub struct ToolCallResponse {
     pub tool_call_id: String,
     pub result: Result<ToolResult, String>,  // String error for serialization
-    pub context_status: ContextStatus,
 }
 
 /// Executes tools and tracks context
@@ -88,7 +87,6 @@ impl ToolExecutor {
         ToolCallResponse {
             tool_call_id: call.id.clone(),
             result,
-            context_status: self.context_status(),
         }
     }
 
