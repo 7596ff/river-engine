@@ -7,9 +7,8 @@ use crate::tools::{Tool, ToolResult};
 use river_core::RiverError;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 /// Shared state for heartbeat scheduling
 ///
@@ -156,17 +155,15 @@ impl ContextRotation {
     /// Request a context rotation with summary
     pub fn request(&self, summary: String) {
         self.requested.store(true, Ordering::SeqCst);
-        if let Ok(mut s) = self.summary.try_write() {
-            *s = Some(summary);
-        }
+        let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+        *s = Some(summary);
     }
 
     /// Request auto-rotation (no summary)
     pub fn request_auto(&self) {
         self.requested.store(true, Ordering::SeqCst);
-        if let Ok(mut s) = self.summary.try_write() {
-            *s = None;
-        }
+        let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+        *s = None;
     }
 
     /// Check if rotation is requested and take the summary
@@ -176,10 +173,8 @@ impl ContextRotation {
     /// - None = no rotation requested
     pub fn take_request(&self) -> Option<Option<String>> {
         if self.requested.swap(false, Ordering::SeqCst) {
-            self.summary
-                .try_write()
-                .ok()
-                .map(|mut s| s.take())
+            let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+            Some(s.take())
         } else {
             None
         }
