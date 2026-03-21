@@ -1,6 +1,5 @@
 //! Tool executor with context tracking
 
-use river_core::ContextStatus;
 use super::{ToolRegistry, ToolResult, ToolSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,20 +19,14 @@ pub struct ToolCallResponse {
     pub result: Result<ToolResult, String>,  // String error for serialization
 }
 
-/// Executes tools and tracks context
+/// Executes tools
 pub struct ToolExecutor {
     registry: ToolRegistry,
-    context_used: u64,
-    context_limit: u64,
 }
 
 impl ToolExecutor {
-    pub fn new(registry: ToolRegistry, context_limit: u64) -> Self {
-        Self {
-            registry,
-            context_used: 0,
-            context_limit,
-        }
+    pub fn new(registry: ToolRegistry) -> Self {
+        Self { registry }
     }
 
     /// Execute a tool call
@@ -50,9 +43,7 @@ impl ToolExecutor {
                 tracing::debug!(tool = %call.name, "Tool found in registry, executing...");
                 match tool.execute(call.arguments.clone()) {
                     Ok(tool_result) => {
-                        // Rough estimate: ~4 characters per token (typical for English text)
                         let output_len = tool_result.output.len();
-                        self.context_used += (output_len as u64) / 4;
                         tracing::info!(
                             tool = %call.name,
                             call_id = %call.id,
@@ -95,32 +86,9 @@ impl ToolExecutor {
         calls.iter().map(|c| self.execute(c)).collect()
     }
 
-    /// Get current context status
-    pub fn context_status(&self) -> ContextStatus {
-        ContextStatus {
-            used: self.context_used,
-            limit: self.context_limit,
-        }
-    }
-
     /// Get all tool schemas
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.registry.schemas()
-    }
-
-    /// Update context usage
-    pub fn add_context(&mut self, tokens: u64) {
-        self.context_used += tokens;
-    }
-
-    /// Reset context (on rotation)
-    pub fn reset_context(&mut self) {
-        self.context_used = 0;
-    }
-
-    /// Check if context is getting full (>90%)
-    pub fn context_warning(&self) -> bool {
-        self.context_status().percent() >= 90.0
     }
 }
 
@@ -137,7 +105,7 @@ mod tests {
         registry.register(Box::new(ReadTool::new(dir.path())));
         registry.register(Box::new(WriteTool::new(dir.path())));
 
-        let mut executor = ToolExecutor::new(registry, 65536);
+        let mut executor = ToolExecutor::new(registry);
 
         // Write a file
         let write_call = ToolCall {
@@ -185,7 +153,7 @@ mod tests {
     #[test]
     fn test_unknown_tool() {
         let registry = ToolRegistry::new();
-        let mut executor = ToolExecutor::new(registry, 65536);
+        let mut executor = ToolExecutor::new(registry);
 
         let call = ToolCall {
             id: "call_1".to_string(),
