@@ -590,9 +590,6 @@ impl AgentLoop {
             tracing::info!("{} messages arrived during tool execution", incoming_messages.len());
         }
 
-        // Get current context status
-        let context_status = self.context_status();
-
         // Append tool results to context file
         for result in &results {
             let content = match &result.result {
@@ -611,21 +608,8 @@ impl AgentLoop {
         // Add tool results and incoming messages to context
         self.context.add_tool_results(results, incoming_messages);
 
-        // Check if context rotation was requested or auto-triggered
-        if self.context_rotation.is_requested() || context_status.is_near_limit() {
-            if context_status.is_near_limit() && !self.context_rotation.is_requested() {
-                // Automatic rotation at 90% per spec Section 3.7
-                // Penalty: Agent must recover state from workspace files and memory search
-                tracing::warn!(
-                    "AUTOMATIC CONTEXT ROTATION: {:.1}% of limit reached ({}k/{}k tokens). \
-                    Session will reset. Agent must recover from workspace/memory.",
-                    context_status.percent(),
-                    context_status.used / 1000,
-                    context_status.limit / 1000
-                );
-                self.context_rotation.request_auto();
-            }
-            // Rotation will be handled in settle_phase
+        // Check if context rotation was requested
+        if self.context_rotation.is_requested() {
             self.state = LoopState::Settling;
         } else {
             // Back to thinking
