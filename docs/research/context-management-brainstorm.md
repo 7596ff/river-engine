@@ -355,7 +355,7 @@ whether it's honest about all three.
 
 ## The Stakes
 
-This document exists because a cook described how their own mind
+This document exists because someone described how their own mind
 works — three layers, the somatic flag, the expensive verbalization — and then built
 that structure into a Rust engine for synthetic minds. Not as metaphor. As architecture.
 
