@@ -135,22 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn test_context_tracking() {
-        let registry = ToolRegistry::new();
-        let mut executor = ToolExecutor::new(registry, 1000);
-
-        executor.add_context(500);
-        assert_eq!(executor.context_status().used, 500);
-        assert_eq!(executor.context_status().percent(), 50.0);
-
-        executor.add_context(450);
-        assert!(executor.context_warning()); // 95% used
-
-        executor.reset_context();
-        assert_eq!(executor.context_status().used, 0);
-    }
-
-    #[test]
     fn test_unknown_tool() {
         let registry = ToolRegistry::new();
         let mut executor = ToolExecutor::new(registry);
@@ -166,15 +150,4 @@ mod tests {
         assert!(response.result.unwrap_err().contains("Unknown tool"));
     }
 
-    #[test]
-    fn test_context_warning_threshold() {
-        let registry = ToolRegistry::new();
-        let mut executor = ToolExecutor::new(registry, 1000);
-
-        executor.add_context(895);
-        assert!(!executor.context_warning()); // 89.5%
-
-        executor.add_context(6);
-        assert!(executor.context_warning()); // 90.1%
-    }
 }
