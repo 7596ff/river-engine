@@ -287,6 +287,8 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         state.tool_executor.clone(),
         db_arc,
         snowflake_gen,
+        heartbeat_scheduler,
+        context_rotation,
         loop_config,
     );
     tokio::spawn(async move {

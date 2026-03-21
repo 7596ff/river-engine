@@ -87,11 +87,11 @@ impl AgentLoop {
         tool_executor: Arc<RwLock<ToolExecutor>>,
         db: Arc<Mutex<Database>>,
         snowflake_gen: Arc<SnowflakeGenerator>,
+        heartbeat_scheduler: Arc<HeartbeatScheduler>,
+        context_rotation: Arc<ContextRotation>,
         config: LoopConfig,
     ) -> Self {
         let git = GitOps::new(&config.workspace);
-        let heartbeat_scheduler = Arc::new(HeartbeatScheduler::new(config.default_heartbeat_minutes));
-        let context_rotation = Arc::new(ContextRotation::new());
         Self {
             state: LoopState::Sleeping,
             event_rx,
