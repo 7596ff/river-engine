@@ -1,143 +1,134 @@
 # River Engine Roadmap
 
-> Brainstormed 2026-03-20, compiled by William
+> Last updated: 2026-03-21
 
-## Features Overview
+## Status Legend
 
-1. **Timezone support** — agent needs proper time awareness
-2. **Shell profile loading** — not loading user's shell profile correctly
-3. **Reduce Nix dependency / Docker support** — simplify deployment, keep composable
-4. **Voice chat** — natural next step for communication
-5. **Issue tracking** — internal issue tracking system
-6. **Module support** — modular architecture
-7. **Skill support** — skill system (like OpenClaw's)
-8. **MCP support** — Model Context Protocol integration
-9. **Embeddings** — embedding pipeline; in-progress with William/Thomas
-10. **Agent message history access** — agent doesn't have access to its messages yet
-11. **Adversarial mind / actor-spectator** — dialectical architecture, "I" and "You"
-12. **Study OpenClaw source** — learn from their architecture
-13. **Embedding strategy** — iterative approach, memory files as first test case
+- 🔴 **Not Started**
+- 🟡 **In Progress**
+- 🟢 **Complete**
+- ⚪ **Deferred**
 
 ---
 
-## Implementation Plan
+## Quick Wins
 
-### Phase 0: Quick Wins + Research
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Timezone support | 🔴 | Agent needs proper time awareness |
+| Shell profile loading | 🔴 | Not loading user's shell profile correctly |
+| Message history access | 🔴 | Agent can't access its own conversation history |
 
-Low-risk, high-value improvements plus research to inform later decisions.
+---
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 1 | Timezone support | Simple fix, improves agent awareness |
-| 2 | Shell profile loading | Basic fix, needed for proper command execution |
-| 10 | Agent message history access | Gives agent access to its own conversation history |
-| 12 | Study OpenClaw source | **Parallel research** — informs skill/module/MCP design |
+## Embeddings
 
-### Phase 1: Foundation
+**Status:** 🟡 In Progress
 
-Complete in-progress work and improve deployment.
-
-| # | Feature | Notes |
-|---|---------|-------|
-| 13 | Embedding strategy | **Declarative sync model** — see below |
-| 9 | Embeddings pipeline | sqlite-vec + sync service + external embed server |
-| 3 | Docker/Podman support | Parallel to above; keep Nix as option, add container support |
-
-#### Embedding Architecture (NixOS-style)
-
-**Core idea:** `embeddings/` folder is source of truth. Sync service maintains DB state.
+**Architecture:** Declarative sync (NixOS-style)
 
 ```
-embeddings/           →  Sync Service  →  sqlite-vec DB
-├── memory.md                            (chunks + vectors)
-├── notes/*.md
+workspace/embeddings/     Sync Service      sqlite-vec
+├── memory.md        ──→  (hash, diff,  ──→  (vectors)
+├── notes/*.md            chunk, embed)
 └── context/*.md
 ```
 
-**Components:**
-1. **sqlite-vec storage** — Vector search in SQLite, no external DB
-2. **Sync service** — Scans folder, hashes files, diffs against DB, adds/removes
-3. **Embed client** — Calls external server (Ollama, OpenAI, etc.) for vectors
-4. **Chunker** — Splits files into ~400 token pieces with overlap
+| Component | Status | Description |
+|-----------|--------|-------------|
+| sqlite-vec integration | 🔴 | Load extension, create virtual tables |
+| Chunker | 🔴 | Split markdown into ~400 token pieces |
+| Sync service | 🔴 | Scan folder, hash files, diff against DB |
+| Embed client | 🟢 | Exists: `EmbeddingClient` in river-gateway |
+| Search API | 🔴 | Query vectors with `vec_distance_cosine()` |
 
-**Sync triggers:** Startup, file watcher, manual API, periodic
+**Design:** See `docs/research/embedding-architecture.md`
 
-**Fallback:** If sqlite-vec unavailable, store vectors as JSON, compute similarity in Rust
+**Principle:** The `embeddings/` folder is the source of truth. The database is derived state.
 
-**Future:** Abstract `VectorStore` trait for Qdrant/Milvus when scale demands
+---
 
-See: `docs/research/embedding-architecture.md`
+## Deployment
 
-### Phase 2: Architecture
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Nix/NixOS | 🟢 | Current deployment method |
+| Docker/Podman | 🔴 | Reduce Nix dependency, broader compatibility |
 
-Build extensibility infrastructure.
+**Goal:** Both options, composable. Nix for declarative systems, Docker for everything else.
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 6 | Module support | Foundation for skills and extensibility |
-| 7 | Skill support | Depends on modules; informed by OpenClaw research |
-| 8 | MCP support | Can parallel with skills; standardized tool integration |
+---
 
-### Phase 3: Features
+## Architecture
 
-Build on the new architecture.
+| Feature | Status | Depends On | Notes |
+|---------|--------|------------|-------|
+| Module support | 🔴 | — | Foundation for extensibility |
+| Skill support | 🔴 | Modules | CLI tools + metadata (OpenClaw-style) |
+| MCP support | 🔴 | Modules | Model Context Protocol integration |
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 5 | Issue tracking | Can leverage modules/skills infrastructure |
-| 4 | Voice chat | New adapter type for communication |
+**Research:** See `docs/research/openclaw-*.md`
 
-### Phase 4: Advanced
+**Key insight from OpenClaw:** Skills are just CLI wrappers with `SKILL.md` metadata files. Simple and effective.
 
-Major architectural evolution.
+---
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 11 | Adversarial mind | Actor-spectator dialectical model; needs careful design |
+## Communication
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Discord adapter | 🟢 | Working |
+| Voice chat | 🔴 | New adapter type |
+| Issue tracking | 🔴 | Internal issue system for agent |
+
+---
+
+## Advanced
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Adversarial mind | ⚪ | Actor-spectator dialectical architecture |
+
+**Concept:** "I" and "You" — a spectator that observes and critiques the actor's work. Needs careful design. Deferred until foundation is solid.
+
+---
+
+## Research
+
+| Topic | Status | Output |
+|-------|--------|--------|
+| OpenClaw architecture | 🟢 | `docs/research/openclaw-architecture.md` |
+| OpenClaw features | 🟢 | `docs/research/openclaw-features.md` |
+| OpenClaw detailed | 🟢 | `docs/research/openclaw-features-detailed.md` |
+| Embedding architecture | 🟢 | `docs/research/embedding-architecture.md` |
 
 ---
 
 ## Dependencies
 
 ```
-┌─────────────────┐
-│ OpenClaw Study  │ ─────────────────────────────────────┐
-└────────┬────────┘                                      │
-         │ informs                                       │
-         ▼                                               ▼
-┌─────────────────┐     ┌─────────────────┐     ┌───────────────┐
-│ Module Support  │ ──▶ │  Skill Support  │     │  MCP Support  │
-└────────┬────────┘     └────────┬────────┘     └───────┬───────┘
-         │                       │                      │
-         └───────────┬───────────┴──────────────────────┘
-                     ▼
-              ┌──────────────┐
-              │ Issue Track  │
-              └──────────────┘
+                    ┌─────────────┐
+                    │   Modules   │
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │  Skills  │ │   MCP    │ │  Issues  │
+        └──────────┘ └──────────┘ └──────────┘
 
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Embed Strategy  │ ──▶ │  sqlite-vec     │ ──▶ │  Sync Service   │
-│ (declarative)   │     │  integration    │     │  + chunker      │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-
-┌─────────────────┐
-│ Adversarial Mind│  (standalone, needs solid foundation)
-└─────────────────┘
+        ┌──────────┐     ┌──────────┐     ┌──────────┐
+        │ sqlite-  │ ──▶ │  Sync    │ ──▶ │  Search  │
+        │   vec    │     │ Service  │     │   API    │
+        └──────────┘     └──────────┘     └──────────┘
 ```
 
 ---
 
 ## Open Questions
 
-1. ~~**OpenClaw research**~~ — ✅ Completed. See `docs/research/openclaw-*.md`
-2. ~~**Embeddings**~~ — ✅ Strategy defined: declarative sync + sqlite-vec
-3. **Adversarial mind** — Design upfront or evolve as we go?
-4. **Nix vs Docker** — Both-and? What's the primary deployment target?
-
-## Resolved
-
-- **OpenClaw research** — Extensive research completed. Key takeaways: skill system (CLI + metadata), tool policy pipeline, sqlite-vec for vectors, subagent hierarchy, channel adapter interface.
-- **Embedding strategy** — NixOS-style declarative sync. `embeddings/` folder = source of truth. Sync service maintains sqlite-vec state. External embed server for vector generation.
+1. **Adversarial mind** — Design upfront or evolve as we go?
+2. **Nix vs Docker** — Both-and? Primary deployment target?
 
 ---
 
@@ -145,4 +136,4 @@ Major architectural evolution.
 
 - "It's a both-end situation, doesn't have to be one or the other" — on Nix vs Docker
 - "We needed to figure out a strategy and we needed to fail first" — on embeddings
-- "Reading OpenClaw source and sniping most of the features. Well, the good ones." — on research approach
+- "Reading OpenClaw source and sniping most of the features. Well, the good ones."
