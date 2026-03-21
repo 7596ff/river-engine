@@ -163,6 +163,91 @@ What's new here:
 - **Move tracker** — generates structural summaries as conversation progresses
 - **Budget manager** — allocates tokens across layers
 
+## Spectator-Driven Compression
+
+> "The agent can't objectively summarize its own conversation."
+
+### The Problem with Self-Compression
+
+If the agent compresses its own history, it introduces bias:
+- It remembers what flatters its narrative
+- It over-weights what it found interesting vs. what actually mattered
+- It can't see its own blind spots, tangents, or failures clearly
+- It lacks the outside perspective on emotional dynamics ("user was frustrated here but didn't say so")
+
+### The Spectator as Compressor
+
+The adversarial mind / spectator already watches the conversation. Give it a second job: as messages age out of hot context, the spectator compresses them into warm context chunks.
+
+```
+Hot context (live)
+    │
+    │ messages age out
+    ▼
+Spectator compresses
+    │
+    │ summary chunks + annotations
+    ▼
+Vector store (warm/cold)
+```
+
+### What the Spectator Adds
+
+**Honest summarization:**
+- "You spent 20 messages on that tangent and it went nowhere"
+- "The actual decision happened in message 47, everything before was circling"
+- "You proposed X, user said no, you proposed X again with different words"
+
+**Emotional/relational metadata:**
+- "Pivot point — user pushed back hard here"
+- "Decision made under pressure, revisit later"
+- "User was frustrated but didn't say so directly"
+- "This was a genuine moment of connection, not just task completion"
+
+**Structural annotation:**
+- Tagging conversation moves (proposal, pushback, pivot, resolution)
+- Marking load-bearing exchanges vs. phatic noise
+- Identifying unresolved threads ("this was dropped, never came back to it")
+
+### Why This Fits the Architecture
+
+Maps to the "I and You" model from Cass's cognition design:
+- **Agent (I):** Forward momentum, verbalization, task focus. Sees the conversation from inside.
+- **Spectator (You):** Outside perspective, notices what the I can't see about itself. Sees the conversation from above.
+
+The agent asks "what did we talk about?" The spectator answers honestly — including the parts the agent would prefer to forget or gloss over.
+
+### Background Processing
+
+Key advantage: the spectator compresses asynchronously. It doesn't block the agent's turn.
+
+```
+Turn N:   Agent responds to user
+          Spectator (background): compresses messages from Turn N-20..N-10
+Turn N+1: Agent responds, warm context already includes compressed history
+```
+
+No latency hit on the agent's critical path. The warm context is pre-built and waiting when retrieval needs it.
+
+### Spectator Compression vs. Agent Retrieval
+
+| Step | Who | When |
+|------|-----|------|
+| Compress aging messages into summaries | Spectator | Background, async |
+| Annotate with emotional/structural metadata | Spectator | Background, async |
+| Embed compressed chunks into vector store | Sync service | Background, on change |
+| Query vector store for relevant context | Agent (or assembler) | Per-turn, synchronous |
+| Assemble final context window | Context assembler | Per-turn, synchronous |
+
+### Open Design Questions
+
+- **Does the spectator use the same LLM as the agent?** Could use a smaller/cheaper model for compression — it doesn't need to be brilliant, just honest.
+- **Can the agent dispute a spectator summary?** "That wasn't a tangent, that context was important." Tension between perspectives could be productive.
+- **How much annotation is too much?** Emotional metadata is valuable but could bias retrieval if over-tagged.
+- **Should the spectator also decide what to forget?** "This exchange has no future relevance" → don't even embed it.
+
+---
+
 ## Open Questions
 
 1. **Who does the compression?** The same LLM (expensive, accurate)? A smaller model? A rule-based summarizer? The embed server could potentially run a small summarization model too.
