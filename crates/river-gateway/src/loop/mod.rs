@@ -622,7 +622,7 @@ impl AgentLoop {
         }
 
         // Add tool results and incoming messages to context
-        self.context.add_tool_results(results, incoming_messages, context_status.clone());
+        self.context.add_tool_results(results, incoming_messages);
 
         // Check if context rotation was requested or auto-triggered
         if self.context_rotation.is_requested() || context_status.is_near_limit() {

@@ -340,9 +340,8 @@ impl SubagentRunner {
         }
 
         // Add results to context
-        let context_status = self.tool_executor.context_status();
         self.context
-            .add_tool_results(results, Vec::new(), context_status);
+            .add_tool_results(results, Vec::new());
 
         Ok(())
     }
