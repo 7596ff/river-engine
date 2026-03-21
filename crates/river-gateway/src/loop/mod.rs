@@ -16,7 +16,7 @@ use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
-use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType};
+use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType, ContextStatus};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -122,6 +122,14 @@ impl AgentLoop {
     /// Get a reference to the context rotation state for tools
     pub fn context_rotation(&self) -> Arc<ContextRotation> {
         self.context_rotation.clone()
+    }
+
+    /// Get current context status based on last known prompt tokens
+    fn context_status(&self) -> ContextStatus {
+        ContextStatus {
+            used: self.last_prompt_tokens,
+            limit: self.config.context_limit,
+        }
     }
 
     /// Initialize context persistence on startup
@@ -348,12 +356,6 @@ impl AgentLoop {
                 }
             }
 
-            // Reset the executor's context tracking
-            {
-                let mut executor = self.tool_executor.write().await;
-                executor.reset_context();
-            }
-
             self.needs_context_reset = false;
         } else {
             // Accumulating context - just add the new trigger and messages
@@ -491,18 +493,6 @@ impl AgentLoop {
             }
         }
 
-        // Update context usage tracking
-        {
-            let mut executor = self.tool_executor.write().await;
-            executor.add_context(response.usage.total_tokens as u64);
-            let status = executor.context_status();
-            tracing::debug!(
-                context_used = status.used,
-                context_limit = status.limit,
-                context_percent = format!("{:.1}%", status.percent()),
-                "Context usage updated"
-            );
-        }
 
         if response.tool_calls.is_empty() {
             // No tool calls - cycle complete
@@ -601,10 +591,7 @@ impl AgentLoop {
         }
 
         // Get current context status
-        let context_status = {
-            let executor = self.tool_executor.read().await;
-            executor.context_status()
-        };
+        let context_status = self.context_status();
 
         // Append tool results to context file
         for result in &results {
