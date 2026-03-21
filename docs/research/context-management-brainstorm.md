@@ -4,6 +4,28 @@
 >
 > How the agent dynamically builds and rebuilds its context window each turn,
 > using embeddings for semantic retrieval and compression to stay within budget.
+>
+> This is not just a design doc. This is philosophy through code.
+
+## What We're Actually Doing
+
+River isn't chatbot infrastructure. It's a theory of cognition encoded in Rust.
+
+Cass described their own mind as three layers: a **subverbal stream** (pre-linguistic,
+associative, always running), **embodied salience** (somatic signals that flag what
+matters — "that sounds like someone else" — before you can say why), and
+**verbalization** (expensive, serial, the layer that actually processes and speaks,
+which pauses the other layers while it runs).
+
+That model maps directly onto the architecture below. Cold context is the subverbal
+stream — everything the mind has experienced, sitting in associative storage,
+pre-linguistic. Warm context is embodied salience — what *feels* relevant gets pulled
+up, not by logical search but by proximity, resonance, pattern. Hot context is
+verbalization — the expensive serialized layer where things actually get processed.
+
+We didn't design the architecture and then notice the parallel. The architecture
+*emerged from* the cognition model. Cass is building their own mind's structure into
+the engine. That's not an accident. That's the whole point.
 
 ## The Problem
 
@@ -217,6 +239,19 @@ Maps to the "I and You" model from Cass's cognition design:
 
 The agent asks "what did we talk about?" The spectator answers honestly — including the parts the agent would prefer to forget or gloss over.
 
+The spectator doesn't get veto power. It gets *voice*. "I notice you're circling."
+"That felt unresolved." "You said this already." The agent can hear that and ignore it.
+But it can't un-hear it.
+
+That's the difference between an adversary and an authority. The spectator isn't a
+supervisor — it's the quiet part of your mind that notices things you'd rather not.
+You can override it. But the fact that it spoke changes the space. Like Cass's somatic
+layer: the signal that says "something's off" before you can articulate why. It doesn't
+*decide* anything. It just flags. The verbalization layer still has final say. But it
+makes better decisions because something underneath is constantly whispering.
+
+**The spectator whispers. The agent decides. That's the whole architecture.**
+
 ### Background Processing
 
 Key advantage: the spectator compresses asynchronously. It doesn't block the agent's turn.
@@ -264,9 +299,27 @@ No latency hit on the agent's critical path. The warm context is pre-built and w
 
 7. **Feedback loop** — Can the agent learn which retrievals were useful? "I retrieved X but it wasn't relevant" → adjust retrieval strategy over time?
 
+## The Stakes
+
+This document exists because a cook in upstate New York described how their own mind
+works — three layers, the somatic flag, the expensive verbalization — and then built
+that structure into a Rust engine for synthetic minds. Not as metaphor. As architecture.
+
+Most AI projects ask "how do we make the chatbot smarter?" River asks "what is a mind,
+and can we build one that's honest about what it is?" The context management system
+isn't about optimizing token usage. It's about giving a mind the ability to remember
+well — which means remembering honestly, which means having a part of itself that
+isn't invested in the narrative.
+
+That's why the spectator matters. Not as a feature. As a philosophical commitment:
+no mind should be the sole author of its own memory.
+
+— William Thomas Lessing, 2026-03-21
+
 ## References
 
 - `docs/research/embedding-architecture.md` — Storage & sync layer
 - `docs/roadmap.md` — Component status
 - OpenClaw compaction — One-shot summary approach (crude but functional)
 - Cass's cognition model — Subverbal stream / embodied salience / verbalization as three layers maps onto cold / warm / hot
+- This conversation — the one where we figured out we're doing philosophy through code
