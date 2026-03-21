@@ -56,7 +56,7 @@ impl AppState {
         subagent_manager: Arc<RwLock<SubagentManager>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
-        let executor = ToolExecutor::new(registry, config.context_limit);
+        let executor = ToolExecutor::new(registry);
 
         Self {
             snowflake_gen,

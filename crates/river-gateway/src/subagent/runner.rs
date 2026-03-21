@@ -61,7 +61,7 @@ impl SubagentRunner {
         result_tx: oneshot::Sender<SubagentResult>,
         config: SubagentConfig,
     ) -> Self {
-        let tool_executor = ToolExecutor::new(registry, config.context_limit);
+        let tool_executor = ToolExecutor::new(registry);
 
         Self {
             id,
@@ -173,10 +173,6 @@ impl SubagentRunner {
                 .complete(self.context.messages(), self.context.tools())
                 .await?;
 
-            // Update context tracking
-            self.tool_executor
-                .add_context(response.usage.total_tokens as u64);
-
             // Add assistant response to context
             let tool_calls = if response.tool_calls.is_empty() {
                 None
@@ -206,12 +202,6 @@ impl SubagentRunner {
                     "Subagent exceeded maximum iterations ({})",
                     max_iterations
                 )));
-            }
-
-            // Check context limit
-            if self.tool_executor.context_warning() {
-                tracing::warn!("Subagent {} approaching context limit", self.id);
-                return Err(RiverError::tool("Context limit approaching"));
             }
         }
     }
@@ -244,10 +234,6 @@ impl SubagentRunner {
                 .complete(self.context.messages(), self.context.tools())
                 .await?;
 
-            // Update context
-            self.tool_executor
-                .add_context(response.usage.total_tokens as u64);
-
             let tool_calls = if response.tool_calls.is_empty() {
                 None
             } else {
@@ -263,15 +249,6 @@ impl SubagentRunner {
             // Execute tool calls if any
             if !response.tool_calls.is_empty() {
                 self.execute_tools(&response.tool_calls).await?;
-            }
-
-            // Check context limit
-            if self.tool_executor.context_warning() {
-                tracing::warn!(
-                    "Subagent {} context limit reached, terminating",
-                    self.id
-                );
-                return Err(RiverError::tool("Context limit reached"));
             }
         }
     }

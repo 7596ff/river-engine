@@ -81,7 +81,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health_check))
         .route("/incoming", post(handle_incoming))
         .route("/tools", get(list_tools))
-        .route("/context/status", get(context_status))
         .with_state(state)
 }
 
@@ -182,12 +181,6 @@ async fn list_tools(
     Json(executor.schemas())
 }
 
-async fn context_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<river_core::ContextStatus> {
-    let executor = state.tool_executor.read().await;
-    Json(executor.context_status())
-}
 
 #[cfg(test)]
 mod tests {
@@ -281,19 +274,6 @@ mod tests {
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap()
             )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_context_status() {
-        let (state, _rx) = test_state();
-        let app = create_router(state);
-
-        let response = app
-            .oneshot(Request::builder().uri("/context/status").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
