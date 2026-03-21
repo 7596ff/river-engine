@@ -369,11 +369,3 @@ That's why the spectator matters. Not as a feature. As a philosophical commitmen
 no mind should be the sole author of its own memory.
 
 — William Thomas Lessing, 2026-03-21
-
-## References
-
-- `docs/research/embedding-architecture.md` — Storage & sync layer
-- `docs/roadmap.md` — Component status
-- OpenClaw compaction — One-shot summary approach (crude but functional)
-- Cass's cognition model — Subverbal stream / embodied salience / verbalization as three layers maps onto cold / warm / hot
-- This conversation — the one where we figured out we're doing philosophy through code
