@@ -152,13 +152,11 @@ Moment: "Navbar z-index debugging session.
 
 Search vectors, decide what the agent should see next turn.
 
-**Output:** Flashes pushed to the queue
+**Output:** Flashes pushed to the queue (full note text, not summaries)
 
 **What it surfaces:**
-- Relevant memories ("solved something similar last week")
-- Forgotten context ("user mentioned deadline")
-- Connections ("relates to earlier discussion")
-- Warnings ("tried this before, didn't work")
+- Relevant notes from the zettelkasten (full text)
+- The spectator *selects*, the note *speaks*
 
 **What it doesn't surface:**
 - Everything vaguely related (noise)
@@ -306,10 +304,15 @@ Each turn, the context assembler builds the window from layers:
 │  ...                                                             │
 │  Move N: Current thread — discussing W                           │
 ├─────────────────────────────────────────────────────────────────┤
-│  WARM: Flashes (spectator-curated, global across channels)       │
+│  WARM: Flashes (spectator-curated, full note text)               │
 │                                                                  │
-│  "z-index fix from last week might be relevant"                  │
-│  "user mentioned deadline pressure in DMs"                       │
+│  [note: z-index-modal-fix.md]                                    │
+│  Modal overlay conflicts with navbar. Solution: z-index          │
+│  hierarchy — toast: 100, modal: 50, navbar: 40.                  │
+│                                                                  │
+│  [note: cass-deadline.md]                                        │
+│  Cass mentioned Friday deadline for the dashboard. Time          │
+│  pressure — keep responses focused.                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  WARM: Retrieved (semantic search based on hot context)          │
 │                                                                  │
@@ -337,7 +340,7 @@ Each turn, the context assembler builds the window from layers:
 Total context window (e.g., 128K)
 ├── System:              ~2-4K   (fixed)
 ├── Warm - Moves:        ~2-4K   (this channel's arc)
-├── Warm - Flashes:      ~1-2K   (spectator curations)
+├── Warm - Flashes:      ~1-2K   (full note text, spectator-selected)
 ├── Warm - Retrieved:    ~2-8K   (scales to fill budget)
 ├── Hot:                 ~8K     (token budget, min 3 messages)
 └── Reserved for output: ~4-8K
@@ -447,8 +450,8 @@ Spectator's curated recommendations flow to the context assembler:
 ```rust
 struct Flash {
     id: Snowflake,
-    content: String,           // "z-index fix from last week might be relevant"
-    source: Option<String>,    // Path to note that prompted this
+    content: String,           // Full text of the zettelkasten note
+    source: String,            // Path: "embeddings/notes/z-index-modal-fix.md"
     created_at: Timestamp,
     ttl: FlashTTL,
 }
