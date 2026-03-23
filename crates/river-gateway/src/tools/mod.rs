@@ -11,6 +11,7 @@ mod model;
 mod scheduling;
 mod logging;
 mod subagent;
+mod sync;
 
 pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
 pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
@@ -21,6 +22,7 @@ pub use communication::{
     AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool,
     ReadChannelTool
 };
+pub use sync::SyncConversationTool;
 pub use web::{WebFetchTool, WebSearchTool};
 pub use model::{
     ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
