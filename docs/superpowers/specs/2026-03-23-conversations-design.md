@@ -27,7 +27,7 @@ Extend the inbox system to capture both directions and add a sync tool for fetch
 
 pub const CONVERSATIONS_DIR: &str = "conversations";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageDirection {
     Unread,   // [ ]
     Read,     // [x]
@@ -35,13 +35,13 @@ pub enum MessageDirection {
     Failed,   // [!]
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Author {
     pub name: String,
     pub id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reaction {
     pub emoji: String,
     pub users: Vec<String>,      // Known usernames (from events)
@@ -70,7 +70,7 @@ impl Reaction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub direction: MessageDirection,
     pub timestamp: String,
@@ -80,7 +80,7 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Conversation {
     pub messages: Vec<Message>,
 }
@@ -358,39 +358,162 @@ if workspace.join("inbox").exists() && !workspace.join("conversations").exists()
 
 ---
 
-## 7. Concurrency
+## 7. ConversationWriter Pipeline
 
-Single-writer assumption: Only one agent process writes to a conversation file at a time. If multiple processes need to write:
-- Use file locking (`flock`)
-- Or accept interleaved writes (messages may be out of order but deduplication handles it)
+Single writer task handles all updates. Both real-time events and history syncs feed into the same channel.
 
-For now, we assume single-writer. Sync tool reads, merges, writes atomically per file.
+```
+Discord Events ─────┐
+                    ├──▶ [ConversationWriter] ──▶ files
+History Fetch ──────┘
+    (sync tool)
+```
+
+### WriteOp
+
+```rust
+pub enum WriteOp {
+    Message { path: PathBuf, msg: Message },
+    ReactionAdd { path: PathBuf, message_id: String, emoji: String, user: String },
+    ReactionRemove { path: PathBuf, message_id: String, emoji: String, user: String },
+    ReactionCount { path: PathBuf, message_id: String, emoji: String, count: usize },
+}
+```
+
+### Writer Task
+
+```rust
+pub struct ConversationWriter {
+    rx: mpsc::Receiver<WriteOp>,
+    conversations: HashMap<PathBuf, Conversation>,  // In-memory cache
+}
+
+impl ConversationWriter {
+    pub async fn run(&mut self) {
+        while let Some(op) = self.rx.recv().await {
+            let path = op.path();
+            let conv = self.get_or_load(&path);
+            conv.apply(op);
+            conv.save(&path).ok();
+        }
+    }
+}
+```
+
+### Apply Logic (Merge, Don't Skip)
+
+```rust
+impl Conversation {
+    fn apply(&mut self, op: WriteOp) {
+        match op {
+            WriteOp::Message { msg, .. } => {
+                if let Some(existing) = self.messages.iter_mut().find(|m| m.id == msg.id) {
+                    existing.merge(&msg);
+                } else {
+                    self.messages.push(msg);
+                    self.messages.sort_by(|a, b| a.id.cmp(&b.id));
+                }
+            }
+            WriteOp::ReactionAdd { message_id, emoji, user, .. } => {
+                if let Some(msg) = self.get_mut(&message_id) {
+                    msg.add_reaction(&emoji, &user);
+                }
+            }
+            WriteOp::ReactionRemove { message_id, emoji, user, .. } => {
+                if let Some(msg) = self.get_mut(&message_id) {
+                    msg.remove_reaction(&emoji, &user);
+                }
+            }
+            WriteOp::ReactionCount { message_id, emoji, count, .. } => {
+                if let Some(msg) = self.get_mut(&message_id) {
+                    msg.update_reaction_count(&emoji, count);
+                }
+            }
+        }
+    }
+}
+
+impl Message {
+    fn merge(&mut self, other: &Message) {
+        // Content: take newer if different (edits)
+        if !other.content.is_empty() && other.content != self.content {
+            self.content = other.content.clone();
+        }
+
+        // Reactions: merge per-emoji
+        for other_reaction in &other.reactions {
+            if let Some(existing) = self.reactions.iter_mut().find(|r| r.emoji == other_reaction.emoji) {
+                existing.merge(other_reaction);
+            } else {
+                self.reactions.push(other_reaction.clone());
+            }
+        }
+
+        // Direction: only escalate Unread → Read
+        if other.direction == MessageDirection::Read && self.direction == MessageDirection::Unread {
+            self.direction = MessageDirection::Read;
+        }
+    }
+}
+```
+
+### Merge Rules
+
+| Field | Rule |
+|-------|------|
+| `content` | Take newer if different (edits) |
+| `reactions` | Merge per-emoji (users + counts) |
+| `direction` | Only escalate: Unread → Read |
+| `timestamp` | Keep original |
+| `author` | Keep original |
+
+### Usage
+
+```rust
+// From Discord event handler
+writer_tx.send(WriteOp::Message { path, msg }).await;
+
+// From sync_conversation tool - each message as event
+for msg in fetched_messages {
+    writer_tx.send(WriteOp::Message { path: path.clone(), msg }).await;
+    for reaction in msg.reactions {
+        writer_tx.send(WriteOp::ReactionCount {
+            path: path.clone(),
+            message_id: msg.id.clone(),
+            emoji: reaction.emoji,
+            count: reaction.count,
+        }).await;
+    }
+}
+```
 
 ---
 
-## Files to Modify
+## 8. Files to Modify
 
 | File | Change |
 |------|--------|
-| `crates/river-gateway/src/tools/communication.rs` | Add workspace/agent fields, capture outgoing messages |
-| `crates/river-gateway/src/server.rs` | Pass workspace/agent to SendMessageTool, add migration |
+| `crates/river-gateway/src/tools/communication.rs` | Send WriteOp::Message on send |
+| `crates/river-gateway/src/server.rs` | Spawn ConversationWriter, pass tx to tools |
 | `crates/river-gateway/src/lib.rs` | Add `pub mod conversations;` |
 | `crates/river-discord/src/outbound.rs` | Add `/read` endpoint with reactions |
+| `crates/river-discord/src/inbound.rs` | Send WriteOp for message/reaction events |
 
 New files:
 
 | File | Purpose |
 |------|---------|
-| `crates/river-gateway/src/conversations/mod.rs` | `Conversation`, `Message`, `MessageDirection`, `Reaction` types |
-| `crates/river-gateway/src/conversations/format.rs` | `Conversation::to_string()`, `Conversation::from_str()` |
-| `crates/river-gateway/src/conversations/path.rs` | Path building helpers (replaces inbox/writer.rs path logic) |
-| `crates/river-gateway/src/tools/sync.rs` | `SyncConversationTool` implementation |
+| `crates/river-gateway/src/conversations/mod.rs` | Types: `Conversation`, `Message`, `Reaction`, `WriteOp` |
+| `crates/river-gateway/src/conversations/format.rs` | `Conversation::to_string()`, `from_str()` |
+| `crates/river-gateway/src/conversations/writer.rs` | `ConversationWriter` task |
+| `crates/river-gateway/src/conversations/path.rs` | Path building helpers |
+| `crates/river-gateway/src/tools/sync.rs` | `SyncConversationTool` |
 
-Deprecate (keep for migration):
+Deprecate:
 
 | File | Status |
 |------|--------|
-| `crates/river-gateway/src/inbox/` | Keep for now, migrate callers to `conversations/` |
+| `crates/river-gateway/src/inbox/` | Keep for migration, then remove |
 
 ---
 
