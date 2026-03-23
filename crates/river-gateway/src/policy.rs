@@ -140,6 +140,9 @@ impl HealthPolicy {
     }
 
     /// Mark turn as heartbeat (excluded from progress tracking)
+    ///
+    /// Called in wake phase. Heartbeats are self-initiated check-ins that
+    /// correctly produce minimal output, so they shouldn't trigger stuck detection.
     pub fn set_heartbeat_turn(&mut self, is_heartbeat: bool) {
         self.is_heartbeat_turn = is_heartbeat;
     }
@@ -376,13 +379,18 @@ impl HealthPolicy {
     }
 
     /// Record token counts for progress tracking
+    ///
+    /// This is called once per wake-settle cycle (not per think-act iteration).
+    /// A single wake may involve multiple think→act loops before settling,
+    /// but this method is only invoked in the settle phase to record final progress.
     pub fn record_turn_tokens(&mut self, start_tokens: u64, end_tokens: u64) {
         self.context_tokens_at_turn_start = start_tokens;
         self.context_tokens_at_turn_end = end_tokens;
 
-        // Skip progress tracking for heartbeat turns
+        // Skip progress tracking for heartbeat turns - a heartbeat producing
+        // minimal tokens is correct behavior, not stuck behavior
         if self.is_heartbeat_turn {
-            self.is_heartbeat_turn = false; // Reset for next turn
+            self.is_heartbeat_turn = false; // Reset for next wake-settle cycle
             return;
         }
 
