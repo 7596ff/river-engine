@@ -217,6 +217,8 @@ impl Tool for SendMessageTool {
                 debug!(status = %status, "SendMessageTool: Received HTTP response");
 
                 if status.is_success() {
+                    let body = response.text().await.unwrap_or_default();
+
                     info!(
                         adapter = %adapter,
                         channel = %channel,
@@ -224,8 +226,12 @@ impl Tool for SendMessageTool {
                     );
 
                     // Record outgoing message
-                    // Generate a timestamp-based ID since Discord doesn't return message_id in response
-                    let message_id = format!("out-{}", chrono::Utc::now().timestamp_millis());
+                    // Try to extract message_id from adapter response, fall back to timestamp-based ID
+                    let message_id = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| format!("out-{}", chrono::Utc::now().timestamp_millis()));
+
                     let conv_path = crate::conversations::path::build_discord_path(
                         &workspace,
                         None, // Guild info not available in current flow
@@ -240,10 +246,12 @@ impl Tool for SendMessageTool {
                         &content,
                     );
 
-                    let _ = writer_tx.send(WriteOp::Message {
+                    if let Err(e) = writer_tx.send(WriteOp::Message {
                         path: conv_path,
                         msg,
-                    }).await;
+                    }).await {
+                        warn!("Failed to record outgoing message: {}", e);
+                    }
 
                     Ok(ToolResult::success(format!(
                         "Message sent to {} via {}",
@@ -274,10 +282,12 @@ impl Tool for SendMessageTool {
                         &content,
                     );
 
-                    let _ = writer_tx.send(WriteOp::Message {
+                    if let Err(e) = writer_tx.send(WriteOp::Message {
                         path: conv_path,
                         msg,
-                    }).await;
+                    }).await {
+                        warn!("Failed to record failed message: {}", e);
+                    }
 
                     Err(RiverError::tool(format!(
                         "Adapter returned error {}: {}",
