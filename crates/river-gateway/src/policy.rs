@@ -2,9 +2,30 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crate::tools::ToolCall;
+
+/// Compute a hash of the action for stuck detection
+pub fn compute_action_hash(tool_calls: &[ToolCall]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    for call in tool_calls {
+        call.name.hash(&mut hasher);
+        // Hash key fields, not full args (timestamps change)
+        if let Some(path) = call.arguments.get("path") {
+            path.to_string().hash(&mut hasher);
+        }
+        if let Some(command) = call.arguments.get("command") {
+            command.to_string().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
 
 /// Decay period for tool failures (1 hour)
 const TOOL_FAILURE_DECAY_SECS: i64 = 3600;
@@ -269,6 +290,34 @@ impl HealthPolicy {
 
         Ok(())
     }
+
+    /// Check if action is repeated, mark stuck if 3+ times
+    pub fn check_repeated_action(&mut self, action_hash: u64) {
+        if Some(action_hash) == self.last_action_hash {
+            self.repeated_action_count += 1;
+            if self.repeated_action_count >= 3 {
+                self.mark_stuck("Same action repeated 3+ times");
+            }
+        } else {
+            self.last_action_hash = Some(action_hash);
+            self.repeated_action_count = 1;
+        }
+    }
+
+    fn mark_stuck(&mut self, reason: &str) {
+        self.status = HealthStatus::Degraded;
+        self.recovery_attempts += 1;
+        tracing::warn!(
+            event = "stuck.detected",
+            reason = reason,
+            attempts = self.recovery_attempts,
+            "Agent may be stuck"
+        );
+
+        if self.recovery_attempts > 3 {
+            let _ = self.escalate(reason, "Agent stuck, human intervention needed");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -475,5 +524,84 @@ mod tests {
 
         let action = policy.on_model_error(500);
         assert!(matches!(action, ModelErrorAction::RetryWithBackoff(_)));
+    }
+
+    // Task 5: Stuck detection - repeated action tests
+
+    #[test]
+    fn test_repeated_action_detection() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+        let hash = 12345u64;
+
+        policy.check_repeated_action(hash);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+
+        policy.check_repeated_action(hash);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+
+        policy.check_repeated_action(hash); // 3rd repeat
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_different_actions_reset_count() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        policy.check_repeated_action(111);
+        policy.check_repeated_action(111);
+        policy.check_repeated_action(222); // Different action
+        policy.check_repeated_action(222);
+        policy.check_repeated_action(222); // 3rd of this action
+
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_compute_action_hash() {
+        use crate::tools::ToolCall;
+
+        let call1 = ToolCall {
+            id: "1".to_string(),
+            name: "read".to_string(),
+            arguments: serde_json::json!({"path": "/foo/bar.txt"}),
+        };
+        let call2 = ToolCall {
+            id: "2".to_string(),
+            name: "read".to_string(),
+            arguments: serde_json::json!({"path": "/foo/bar.txt"}),
+        };
+        let call3 = ToolCall {
+            id: "3".to_string(),
+            name: "read".to_string(),
+            arguments: serde_json::json!({"path": "/different.txt"}),
+        };
+
+        let hash1 = compute_action_hash(&[call1]);
+        let hash2 = compute_action_hash(&[call2]);
+        let hash3 = compute_action_hash(&[call3]);
+
+        assert_eq!(hash1, hash2); // Same tool + path = same hash
+        assert_ne!(hash1, hash3); // Different path = different hash
+    }
+
+    #[test]
+    fn test_stuck_escalation_after_four_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+        let hash = 12345u64;
+
+        // mark_stuck is called on every check after count >= 3
+        // So: 1st call: count=1, 2nd: count=2, 3rd: count=3 -> mark_stuck (recovery_attempts=1)
+        // 4th: count=4 -> mark_stuck (recovery_attempts=2), etc.
+        // We need recovery_attempts > 3, so at least 4 calls to mark_stuck
+        // That means 6 repeated actions: 3 to reach threshold, 3 more to trigger 3 more mark_stuck
+        // Actually: calls 3,4,5,6 each trigger mark_stuck = 4 times, recovery_attempts=4 > 3 triggers escalate
+        for _ in 0..6 {
+            policy.check_repeated_action(hash);
+        }
+
+        assert!(policy.recovery_attempts() > 3);
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+        assert!(dir.path().join("ATTENTION.md").exists());
     }
 }
