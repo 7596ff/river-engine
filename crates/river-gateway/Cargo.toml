@@ -20,6 +20,7 @@ reqwest.workspace = true
 rusqlite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender = "0.2"
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
