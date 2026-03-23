@@ -388,11 +388,19 @@ data/
 
 **Reproducible:** Delete `vectors.db`, run sync, get identical vectors. The folder is the source of truth.
 
-### Zettelkasten Linking
+### Note Format
 
-Notes contain links to other notes. The content is the focus — links emerge from meaning, not imposed structure.
+Notes are self-contained. Metadata lives in the file, human-readable.
 
 ```markdown
+---
+id: 0x01a2b3c4d5e6f7...
+created: 2026-03-23T14:32:07Z
+author: agent
+type: note
+tags: [css, z-index, debugging]
+---
+
 # z-index hierarchy
 
 Modal overlay conflicts with navbar. Solution:
@@ -403,7 +411,15 @@ Modal overlay conflicts with navbar. Solution:
 Related: [[css-stacking-contexts]] [[modal-component-patterns]]
 ```
 
-Links are content, embedded with the note. Retrieval surfaces the whole note; connections come along.
+| Field | Source |
+|-------|--------|
+| `id` | Snowflake (hex) |
+| `created` | Extracted from snowflake timestamp |
+| `author` | `agent` or `spectator` |
+| `type` | `note`, `move`, `moment`, `room-note` |
+| `tags` | Optional, agent-defined |
+
+Links are `[[wiki-style]]`. Content is the focus — connections emerge from meaning.
 
 ### Sync Service
 
