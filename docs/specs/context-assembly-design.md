@@ -169,12 +169,17 @@ Search vectors, decide what the agent should see next turn.
 
 The spectator never uses "I". It is the perspective of "You" — the outside observer.
 
+**Critical in the philosophical sense:** The spectator lays bare contradictions. Dry truth, no emotional valence. Not "you're being defensive" but "response contradicts position from turn 12."
+
 ```
 Wrong: "I noticed you're repeating yourself"
 Right: "Similar response given 3 turns ago"
 
 Wrong: "I think this is relevant"
 Right: [flash appears in context, no commentary]
+
+Wrong: "You're being defensive about the design choice"
+Right: "Response contradicts position stated in turn 12"
 ```
 
 ### Communication Hierarchy
