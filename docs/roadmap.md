@@ -137,8 +137,13 @@ workspace/embeddings/     Sync Service      sqlite-vec
 |---------|--------|-------|
 | Dynamic thinking temperature | 🔴 | Continuous 0.0–1.0, system-controlled |
 | Adversarial mind | ⚪ | Actor-spectator dialectical architecture |
+| Utterances | 🔴 | Speech as deliberate act, not token leakage |
+| Silent work | 🔴 | Background processing without user output |
+| Heartbeat coalescing | 🔴 | Priority queue for scheduled wakes |
 
 **Concept:** "I" and "You" — a spectator that observes and critiques the actor's work. The spectator adjusts the dial, agent operates at whatever level is set. "No mind should be the sole author of its own cognition level."
+
+**Utterances:** The agent thinks (internal stream), then *utters* (deliberate speech via tool). Typing indicator shows during thinking. Messages arrive when the agent chooses to speak.
 
 ---
 
