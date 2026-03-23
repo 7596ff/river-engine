@@ -1,6 +1,7 @@
 //! HTTP API routes
 
 use crate::inbox::{format_inbox_line, build_discord_path, append_line, sanitize_name};
+use crate::metrics::{get_rss_bytes, LoopStateLabel};
 use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use axum::{
@@ -9,7 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -37,11 +38,53 @@ fn validate_auth(headers: &HeaderMap, expected_token: Option<&str>) -> Result<()
     }
 }
 
-/// Health check response
+/// Rich health check response
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
     version: &'static str,
+    uptime_seconds: u64,
+    agent: AgentInfo,
+    loop_state: LoopInfo,
+    context: ContextInfo,
+    resources: ResourceInfo,
+    counters: CounterInfo,
+}
+
+#[derive(Serialize)]
+struct AgentInfo {
+    name: String,
+    birth: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct LoopInfo {
+    state: LoopStateLabel,
+    last_wake: Option<DateTime<Utc>>,
+    last_settle: Option<DateTime<Utc>>,
+    turns_since_restart: u64,
+}
+
+#[derive(Serialize)]
+struct ContextInfo {
+    current_tokens: u64,
+    limit_tokens: u64,
+    usage_percent: f64,
+    context_id: Option<String>,
+    rotations: u64,
+}
+
+#[derive(Serialize)]
+struct ResourceInfo {
+    db_size_bytes: u64,
+    rss_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CounterInfo {
+    model_calls: u64,
+    tool_calls: u64,
+    tool_errors: u64,
 }
 
 /// Incoming message request
@@ -84,10 +127,52 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health_check() -> Json<HealthResponse> {
+async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+    let metrics = state.metrics.read().await;
+
+    // Get current DB size
+    let db_size = std::fs::metadata(state.config.db_path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    // Get current RSS
+    let rss = get_rss_bytes();
+
+    let uptime = Utc::now()
+        .signed_duration_since(metrics.start_time)
+        .num_seconds()
+        .max(0) as u64;
+
     Json(HealthResponse {
-        status: "ok",
+        status: "healthy",
         version: env!("CARGO_PKG_VERSION"),
+        uptime_seconds: uptime,
+        agent: AgentInfo {
+            name: metrics.agent_name.clone(),
+            birth: metrics.agent_birth,
+        },
+        loop_state: LoopInfo {
+            state: metrics.loop_state,
+            last_wake: metrics.last_wake,
+            last_settle: metrics.last_settle,
+            turns_since_restart: metrics.turns_since_restart,
+        },
+        context: ContextInfo {
+            current_tokens: metrics.context_tokens,
+            limit_tokens: metrics.context_limit,
+            usage_percent: metrics.context_usage_percent(),
+            context_id: metrics.context_id.clone(),
+            rotations: metrics.rotations_since_restart,
+        },
+        resources: ResourceInfo {
+            db_size_bytes: db_size,
+            rss_bytes: rss,
+        },
+        counters: CounterInfo {
+            model_calls: metrics.model_calls,
+            tool_calls: metrics.tool_calls,
+            tool_errors: metrics.tool_errors,
+        },
     })
 }
 
@@ -405,5 +490,28 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_health_returns_rich_response() {
+        let (state, _rx) = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(health["status"], "healthy");
+        assert!(health["agent"]["name"].is_string());
+        assert!(health["loop_state"]["state"].is_string());
+        assert!(health["context"]["usage_percent"].is_number());
+        assert!(health["resources"]["rss_bytes"].is_number());
+        assert!(health["counters"]["tool_calls"].is_number());
     }
 }
