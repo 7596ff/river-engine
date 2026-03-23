@@ -310,6 +310,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         context_rotation,
         loop_config,
         state.metrics.clone(),
+        state.policy.clone(),
     );
     tokio::spawn(async move {
         agent_loop.run().await;

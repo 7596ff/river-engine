@@ -15,6 +15,7 @@ pub use persistence::ContextFile;
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::metrics::{AgentMetrics, LoopStateLabel};
+use crate::policy::{HealthPolicy, compute_action_hash, ContextAction};
 use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
 use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType, ContextStatus};
@@ -81,6 +82,12 @@ pub struct AgentLoop {
     last_prompt_tokens: u64,
     /// Shared metrics for observability
     metrics: Arc<RwLock<AgentMetrics>>,
+    /// Self-healing health policy
+    policy: Arc<RwLock<HealthPolicy>>,
+    /// Total tool calls this turn
+    turn_total_calls: u32,
+    /// Failed tool calls this turn
+    turn_failed_calls: u32,
 }
 
 impl AgentLoop {
@@ -95,6 +102,7 @@ impl AgentLoop {
         context_rotation: Arc<ContextRotation>,
         config: LoopConfig,
         metrics: Arc<RwLock<AgentMetrics>>,
+        policy: Arc<RwLock<HealthPolicy>>,
     ) -> Self {
         let git = GitOps::new(&config.workspace);
         Self {
@@ -117,6 +125,9 @@ impl AgentLoop {
             context_file: None,
             last_prompt_tokens: 0,
             metrics,
+            policy,
+            turn_total_calls: 0,
+            turn_failed_calls: 0,
         }
     }
 
@@ -342,11 +353,36 @@ impl AgentLoop {
             }
         };
 
+        // Check if ATTENTION.md was cleared and handle any human response
+        {
+            let mut policy = self.policy.write().await;
+            if let Some(human_response) = policy.check_attention_cleared() {
+                tracing::info!(response_len = human_response.len(), "Human responded to ATTENTION.md");
+                self.pending_notifications.push(format!(
+                    "HUMAN RESPONSE (from ATTENTION.md):\n{}",
+                    human_response
+                ));
+            }
+        }
+
         // Drain any messages that arrived before we woke
         let queued_messages = self.message_queue.drain();
         if !queued_messages.is_empty() {
             tracing::info!("Processing {} queued messages", queued_messages.len());
         }
+
+        // Update policy with turn start state
+        let is_heartbeat = matches!(trigger, WakeTrigger::Heartbeat);
+        {
+            let mut policy = self.policy.write().await;
+            policy.set_pending_messages(queued_messages.len() as u32);
+            policy.set_turn_start_tokens(self.last_prompt_tokens);
+            policy.set_heartbeat_turn(is_heartbeat);
+        }
+
+        // Reset turn counters
+        self.turn_total_calls = 0;
+        self.turn_failed_calls = 0;
 
         // Only rebuild context from scratch on first wake or after rotation
         if self.needs_context_reset {
@@ -469,6 +505,19 @@ impl AgentLoop {
     }
 
     async fn think_phase(&mut self) {
+        // Check error backoff before model call
+        let backoff = {
+            let policy = self.policy.read().await;
+            policy.error_backoff()
+        };
+        if !backoff.is_zero() {
+            tracing::warn!(
+                backoff_secs = backoff.as_secs(),
+                "Error backoff active - waiting before model call"
+            );
+            tokio::time::sleep(backoff).await;
+        }
+
         // Increment model_calls counter
         {
             let mut m = self.metrics.write().await;
@@ -572,6 +621,22 @@ impl AgentLoop {
             self.update_metrics_state(LoopStateLabel::Settling).await;
             self.state = LoopState::Settling;
         } else {
+            // Has tool calls - check for repeated action (stuck detection)
+            // Convert ToolCallRequest to ToolCall for hashing
+            let tool_calls_for_hash: Vec<ToolCall> = response.tool_calls.iter().map(|tc| {
+                ToolCall {
+                    id: tc.id.clone(),
+                    name: tc.function.name.clone(),
+                    arguments: serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(serde_json::Value::Null),
+                }
+            }).collect();
+            let action_hash = compute_action_hash(&tool_calls_for_hash);
+            {
+                let mut policy = self.policy.write().await;
+                policy.check_repeated_action(action_hash);
+            }
+
             // Has tool calls - execute them
             tracing::info!(
                 tool_call_count = response.tool_calls.len(),
@@ -606,6 +671,20 @@ impl AgentLoop {
         {
             let mut executor = self.tool_executor.write().await;
             for (i, tc) in tool_calls.iter().enumerate() {
+                // Check tool backoff before execution
+                let tool_backoff = {
+                    let policy = self.policy.read().await;
+                    policy.tool_backoff(&tc.function.name)
+                };
+                if !tool_backoff.is_zero() {
+                    tracing::warn!(
+                        tool = %tc.function.name,
+                        backoff_secs = tool_backoff.as_secs(),
+                        "Tool backoff active - waiting before execution"
+                    );
+                    tokio::time::sleep(tool_backoff).await;
+                }
+
                 tracing::info!(
                     index = i,
                     tool = %tc.function.name,
@@ -638,13 +717,29 @@ impl AgentLoop {
                     name: tc.function.name.clone(),
                     arguments,
                 };
+                let start_time = std::time::Instant::now();
                 let result = executor.execute(&call);
+                let duration = start_time.elapsed();
                 let success = result.result.is_ok();
+
+                // Update turn counters
+                self.turn_total_calls += 1;
+                if !success {
+                    self.turn_failed_calls += 1;
+                }
+
+                // Update policy with tool result
+                {
+                    let mut policy = self.policy.write().await;
+                    policy.on_tool_result(&tc.function.name, success, duration);
+                }
+
                 tracing::info!(
                     event = "loop.tool",
                     tool_name = %tc.function.name,
                     call_id = %tc.id,
                     success = success,
+                    duration_ms = duration.as_millis(),
                     "Tool execution complete"
                 );
                 results.push(result);
@@ -746,6 +841,35 @@ impl AgentLoop {
     async fn settle_phase(&mut self) {
         self.update_metrics_state(LoopStateLabel::Settling).await;
         tracing::info!(event = "loop.settle", "Turn complete, settling");
+
+        // Record turn tokens and notify policy of turn completion
+        {
+            let mut policy = self.policy.write().await;
+            // Record token progress for stuck detection
+            let turn_start_tokens = policy.context_tokens_at_turn_start;
+            policy.record_turn_tokens(turn_start_tokens, self.last_prompt_tokens);
+            // Notify policy of turn completion with call counts
+            policy.on_turn_complete(self.turn_total_calls, self.turn_failed_calls);
+            tracing::debug!(
+                total_calls = self.turn_total_calls,
+                failed_calls = self.turn_failed_calls,
+                "Turn stats recorded"
+            );
+        }
+
+        // Check for proactive context rotation
+        let context_percent = (self.last_prompt_tokens as f64 / self.config.context_limit as f64) * 100.0;
+        let context_action = {
+            let policy = self.policy.read().await;
+            policy.on_context_warning(context_percent)
+        };
+        if context_action == ContextAction::RotateNow && !self.context_rotation.is_requested() {
+            tracing::info!(
+                context_percent = format!("{:.1}", context_percent),
+                "Policy recommends proactive context rotation"
+            );
+            self.context_rotation.request_auto();
+        }
 
         // Handle context rotation if requested
         if let Some(summary_opt) = self.context_rotation.take_request() {
