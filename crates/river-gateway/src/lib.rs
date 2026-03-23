@@ -17,4 +17,5 @@ pub mod subagent;
 pub mod metrics;
 pub mod logging;
 pub mod policy;
+pub mod preferences;
 pub mod watchdog;

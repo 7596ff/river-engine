@@ -8,6 +8,7 @@
 //! - Uses internal queue for parent communication
 
 use super::{InternalQueue, SubagentResult, SubagentStatus, SubagentType};
+use crate::preferences::{Preferences, format_current_time};
 use crate::r#loop::{ChatMessage, ContextBuilder, ModelClient, ToolCallRequest};
 use crate::tools::{ToolCall, ToolExecutor, ToolRegistry};
 use river_core::{RiverError, Snowflake};
@@ -128,6 +129,8 @@ impl SubagentRunner {
         self.context.clear();
 
         // System prompt for subagent
+        let prefs = Preferences::load(&self.config.workspace);
+        let time_str = format_current_time(prefs.timezone());
         let system_prompt = format!(
             "You are a subagent (ID: {}) spawned to complete a specific task.\n\n\
              Your task: {}\n\n\
@@ -140,7 +143,7 @@ impl SubagentRunner {
              Current time: {}",
             self.id,
             self.task,
-            chrono::Utc::now().to_rfc3339()
+            time_str
         );
         self.context.add_message(ChatMessage::system(system_prompt));
 

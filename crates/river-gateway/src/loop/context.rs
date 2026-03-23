@@ -1,6 +1,7 @@
 //! Context assembly for model calls
 
 use crate::api::IncomingMessage;
+use crate::preferences::{Preferences, format_current_time};
 use crate::tools::{ToolCallResponse, ToolSchema};
 use crate::r#loop::state::{ToolCallRequest, WakeTrigger};
 use serde::{Deserialize, Serialize};
@@ -142,9 +143,10 @@ impl ContextBuilder {
             }
         }
 
-        // Add system state
-        let now = chrono::Utc::now();
-        parts.push(format!("Current time: {}", now.to_rfc3339()));
+        // Load preferences and add system state with timezone
+        let prefs = Preferences::load(workspace);
+        let time_str = format_current_time(prefs.timezone());
+        parts.push(format!("Current time: {}", time_str));
 
         if parts.is_empty() {
             "You are an AI assistant.".to_string()

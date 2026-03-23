@@ -30,6 +30,8 @@ anyhow.workspace = true
 glob.workspace = true
 regex.workspace = true
 chrono.workspace = true
+chrono-tz = "0.10"
+toml = "0.8"
 fred.workspace = true
 sd-notify = "0.4"
 
