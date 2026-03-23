@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod format;
+
 pub const CONVERSATIONS_DIR: &str = "conversations";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +87,66 @@ impl Message {
 pub struct Conversation {
     pub messages: Vec<Message>,
 }
+
+impl Conversation {
+    /// Serialize conversation to custom human-readable format
+    pub fn to_string(&self) -> String {
+        self.messages
+            .iter()
+            .map(|msg| format::format_message(msg))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Parse conversation from custom format
+    pub fn from_str(s: &str) -> Result<Self, ParseError> {
+        let mut messages = Vec::new();
+        let mut current_message: Option<Message> = None;
+
+        for line in s.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // Check if this is a message line or a reaction line
+            if line.starts_with("    ") {
+                // Reaction line
+                if let Some(ref mut msg) = current_message {
+                    if let Some(reaction) = format::parse_reaction_line(line) {
+                        msg.reactions.push(reaction);
+                    } else {
+                        return Err(ParseError(format!("Invalid reaction line: {}", line)));
+                    }
+                } else {
+                    return Err(ParseError(
+                        "Reaction line without preceding message".to_string(),
+                    ));
+                }
+            } else {
+                // Message line - save previous message if any
+                if let Some(msg) = current_message.take() {
+                    messages.push(msg);
+                }
+
+                // Parse new message
+                current_message = Some(
+                    format::parse_message_line(line)
+                        .ok_or_else(|| ParseError(format!("Invalid message line: {}", line)))?,
+                );
+            }
+        }
+
+        // Don't forget the last message
+        if let Some(msg) = current_message {
+            messages.push(msg);
+        }
+
+        Ok(Conversation { messages })
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseError(pub String);
 
 #[derive(Debug, Clone)]
 pub enum WriteOp {
@@ -273,5 +335,100 @@ mod tests {
         assert_eq!(msg.id, deserialized.id);
         assert_eq!(msg.content, deserialized.content);
         assert_eq!(msg.direction, deserialized.direction);
+    }
+
+    #[test]
+    fn test_conversation_roundtrip() {
+        // Create a conversation with multiple messages and reactions
+        let mut conversation = Conversation::default();
+
+        conversation.messages.push(Message {
+            direction: MessageDirection::Unread,
+            timestamp: "2026-03-23 14:30:00".to_string(),
+            id: "msg123".to_string(),
+            author: Author {
+                name: "alice".to_string(),
+                id: "111".to_string(),
+            },
+            content: "hey, can you help?".to_string(),
+            reactions: vec![
+                Reaction {
+                    emoji: "👍".to_string(),
+                    users: vec!["bob".to_string(), "charlie".to_string()],
+                    unknown_count: 0,
+                },
+                Reaction {
+                    emoji: "❤️".to_string(),
+                    users: vec![],
+                    unknown_count: 3,
+                },
+            ],
+        });
+
+        conversation.messages.push(Message {
+            direction: MessageDirection::Outgoing,
+            timestamp: "2026-03-23 14:30:15".to_string(),
+            id: "msg124".to_string(),
+            author: Author {
+                name: "river".to_string(),
+                id: "999".to_string(),
+            },
+            content: "Sure! What do you need?".to_string(),
+            reactions: vec![],
+        });
+
+        conversation.messages.push(Message {
+            direction: MessageDirection::Read,
+            timestamp: "2026-03-23 14:30:30".to_string(),
+            id: "msg125".to_string(),
+            author: Author {
+                name: "alice".to_string(),
+                id: "111".to_string(),
+            },
+            content: "I'm trying to deploy...".to_string(),
+            reactions: vec![Reaction {
+                emoji: "🎉".to_string(),
+                users: vec!["river".to_string()],
+                unknown_count: 2,
+            }],
+        });
+
+        conversation.messages.push(Message {
+            direction: MessageDirection::Failed,
+            timestamp: "2026-03-23 14:31:00".to_string(),
+            id: "-".to_string(),
+            author: Author {
+                name: "river".to_string(),
+                id: "999".to_string(),
+            },
+            content: "(failed: Connection timeout) Original message".to_string(),
+            reactions: vec![],
+        });
+
+        // Serialize
+        let serialized = conversation.to_string();
+
+        // Parse back
+        let parsed = Conversation::from_str(&serialized).expect("Failed to parse conversation");
+
+        // Verify equality
+        assert_eq!(parsed.messages.len(), conversation.messages.len());
+
+        for (original, parsed) in conversation.messages.iter().zip(parsed.messages.iter()) {
+            assert_eq!(original.direction, parsed.direction);
+            assert_eq!(original.timestamp, parsed.timestamp);
+            assert_eq!(original.id, parsed.id);
+            assert_eq!(original.author.name, parsed.author.name);
+            assert_eq!(original.author.id, parsed.author.id);
+            assert_eq!(original.content, parsed.content);
+            assert_eq!(original.reactions.len(), parsed.reactions.len());
+
+            for (orig_react, parsed_react) in original.reactions.iter().zip(parsed.reactions.iter())
+            {
+                assert_eq!(orig_react.emoji, parsed_react.emoji);
+                assert_eq!(orig_react.users, parsed_react.users);
+                assert_eq!(orig_react.unknown_count, parsed_react.unknown_count);
+            }
+        }
     }
 }
