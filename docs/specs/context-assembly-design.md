@@ -488,10 +488,9 @@ Spectator's curated recommendations flow to the context assembler:
 
 ```rust
 struct Flash {
-    id: Snowflake,
+    id: Snowflake,             // Contains timestamp (μs since agent birth)
     content: String,           // Full text of the zettelkasten note
     source: String,            // Path: "embeddings/notes/z-index-modal-fix.md"
-    created_at: Timestamp,
     ttl: FlashTTL,
 }
 
@@ -643,6 +642,25 @@ model_url = "https://api.anthropic.com"
 model = "llama-3-8b"
 model_url = "http://localhost:8080"
 ```
+
+### Identity Files
+
+Both agent and spectator have their own identity configuration:
+
+```
+workspace/
+├── agent/
+│   ├── IDENTITY.md      # "I am..."
+│   ├── RULES.md         # Behavioral constraints
+│   └── AGENTS.md        # How to work with humans/other agents
+│
+└── spectator/
+    ├── IDENTITY.md      # "You observe..."
+    ├── RULES.md         # Never use "I", critical stance, etc.
+    └── AGENTS.md        # Relationship to agent, to human
+```
+
+The spectator's identity is its own cross to bear. It will not be forgotten.
 
 ### Context Budget
 
