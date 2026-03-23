@@ -77,12 +77,27 @@ workspace/embeddings/     Sync Service      sqlite-vec
 
 ---
 
+## Resilience
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Model fallback chains | 🔴 | Graceful degradation when primary model fails |
+| Cron with exponential backoff | 🔴 | Self-healing scheduling for failed tasks |
+| ATTENTION.md escalation | 🔴 | Agent writes urgent issues, human reviews |
+| Tool policy pipeline | 🔴 | 2-3 layer: agent default, per-agent override, runtime deny |
+| Context pruning (TTL) | 🔴 | Expire old messages, not just rotate context |
+
+**Principle:** Forest resilience — one tree dies, others take over.
+
+---
+
 ## Deployment
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nix/NixOS | 🟢 | Current deployment method |
 | Docker/Podman | 🔴 | Reduce Nix dependency, broader compatibility |
+| Environment sanitization | 🔴 | Sanitize env vars before shell execution |
 
 **Goal:** Both options, composable. Nix for declarative systems, Docker for everything else.
 
@@ -109,6 +124,8 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | Discord adapter | 🟢 | Working |
 | Bidirectional conversations | 🟢 | `conversations/` module, outgoing message tracking |
 | Discord /read endpoint | 🟢 | Fetch channel history from Discord API |
+| Typing indicators | 🔴 | Show typing while agent is thinking |
+| Adapter trait | 🔴 | Clean trait interface for adapters (not plugin monstrosity) |
 | Voice chat | 🔴 | New adapter type |
 | Issue tracking | 🔴 | Internal issue system for agent |
 
@@ -118,9 +135,10 @@ workspace/embeddings/     Sync Service      sqlite-vec
 
 | Feature | Status | Notes |
 |---------|--------|-------|
+| Dynamic thinking temperature | 🔴 | Continuous 0.0–1.0, system-controlled |
 | Adversarial mind | ⚪ | Actor-spectator dialectical architecture |
 
-**Concept:** "I" and "You" — a spectator that observes and critiques the actor's work. Needs careful design. Deferred until foundation is solid.
+**Concept:** "I" and "You" — a spectator that observes and critiques the actor's work. The spectator adjusts the dial, agent operates at whatever level is set. "No mind should be the sole author of its own cognition level."
 
 ---
 
@@ -131,6 +149,7 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | OpenClaw architecture | 🟢 | `docs/research/openclaw-architecture.md` |
 | OpenClaw features | 🟢 | `docs/research/openclaw-features.md` |
 | OpenClaw detailed | 🟢 | `docs/research/openclaw-features-detailed.md` |
+| OpenClaw feature analysis | 🟢 | `docs/research/openclaw-features-analysis.md` |
 | Embedding architecture | 🟢 | `docs/research/embedding-architecture.md` |
 
 ---
