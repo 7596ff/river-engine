@@ -14,6 +14,7 @@ pub use persistence::ContextFile;
 
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
+use crate::metrics::{AgentMetrics, LoopStateLabel};
 use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
 use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType, ContextStatus};
@@ -21,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
+use chrono::Utc;
 
 /// Configuration for the agent loop
 #[derive(Debug, Clone)]
@@ -77,6 +79,8 @@ pub struct AgentLoop {
     context_file: Option<ContextFile>,
     /// Last known prompt token count
     last_prompt_tokens: u64,
+    /// Shared metrics for observability
+    metrics: Arc<RwLock<AgentMetrics>>,
 }
 
 impl AgentLoop {
@@ -90,6 +94,7 @@ impl AgentLoop {
         heartbeat_scheduler: Arc<HeartbeatScheduler>,
         context_rotation: Arc<ContextRotation>,
         config: LoopConfig,
+        metrics: Arc<RwLock<AgentMetrics>>,
     ) -> Self {
         let git = GitOps::new(&config.workspace);
         Self {
@@ -111,6 +116,7 @@ impl AgentLoop {
             context_id: None,
             context_file: None,
             last_prompt_tokens: 0,
+            metrics,
         }
     }
 
@@ -130,6 +136,29 @@ impl AgentLoop {
             used: self.last_prompt_tokens,
             limit: self.config.context_limit,
         }
+    }
+
+    /// Update shared metrics with current loop state
+    async fn update_metrics_state(&self, new_state: LoopStateLabel) {
+        let mut m = self.metrics.write().await;
+        m.loop_state = new_state;
+        match new_state {
+            LoopStateLabel::Waking => {
+                m.last_wake = Some(Utc::now());
+            }
+            LoopStateLabel::Settling => {
+                m.last_settle = Some(Utc::now());
+                m.turns_since_restart += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Update context metrics
+    async fn update_metrics_context(&self) {
+        let mut m = self.metrics.write().await;
+        m.context_tokens = self.last_prompt_tokens;
+        m.context_id = self.context_id.map(|id| id.to_string());
     }
 
     /// Initialize context persistence on startup
@@ -271,12 +300,14 @@ impl AgentLoop {
                 match event {
                     Some(LoopEvent::InboxUpdate(paths)) => {
                         tracing::info!("Wake: inbox update with {} files", paths.len());
+                        self.update_metrics_state(LoopStateLabel::Waking).await;
                         self.state = LoopState::Waking {
                             trigger: WakeTrigger::Inbox(paths)
                         };
                     }
                     Some(LoopEvent::Heartbeat) => {
                         tracing::info!("Wake: heartbeat");
+                        self.update_metrics_state(LoopStateLabel::Waking).await;
                         self.state = LoopState::Waking {
                             trigger: WakeTrigger::Heartbeat
                         };
@@ -293,6 +324,7 @@ impl AgentLoop {
             }
             _ = tokio::time::sleep(heartbeat_delay) => {
                 tracing::info!("Wake: heartbeat timer");
+                self.update_metrics_state(LoopStateLabel::Waking).await;
                 self.state = LoopState::Waking {
                     trigger: WakeTrigger::Heartbeat
                 };
@@ -426,10 +458,17 @@ impl AgentLoop {
         let executor = self.tool_executor.read().await;
         self.context.set_tools(executor.schemas());
 
+        self.update_metrics_state(LoopStateLabel::Thinking).await;
         self.state = LoopState::Thinking;
     }
 
     async fn think_phase(&mut self) {
+        // Increment model_calls counter
+        {
+            let mut m = self.metrics.write().await;
+            m.model_calls += 1;
+        }
+
         // Hard limit gate - force rotation if context is dangerously full
         let context_percent = self.context_status().percent();
         if context_percent >= 95.0 {
@@ -479,6 +518,9 @@ impl AgentLoop {
         // Track token count for persistence
         self.last_prompt_tokens = response.usage.prompt_tokens as u64;
 
+        // Update context metrics
+        self.update_metrics_context().await;
+
         // Check for 90% auto-rotation
         let context_percent = (self.last_prompt_tokens as f64 / self.config.context_limit as f64) * 100.0;
         if context_percent >= 90.0 {
@@ -519,6 +561,7 @@ impl AgentLoop {
             } else {
                 tracing::info!("No content and no tool calls - transitioning to Settling");
             }
+            self.update_metrics_state(LoopStateLabel::Settling).await;
             self.state = LoopState::Settling;
         } else {
             // Has tool calls - execute them
@@ -527,6 +570,7 @@ impl AgentLoop {
                 tools = ?response.tool_calls.iter().map(|t| &t.function.name).collect::<Vec<_>>(),
                 "Transitioning to Acting phase"
             );
+            self.update_metrics_state(LoopStateLabel::Acting).await;
             self.state = LoopState::Acting {
                 pending: response.tool_calls,
             };
@@ -691,6 +735,7 @@ impl AgentLoop {
     }
 
     async fn settle_phase(&mut self) {
+        self.update_metrics_state(LoopStateLabel::Settling).await;
         tracing::debug!("Settling...");
 
         // Handle context rotation if requested
@@ -709,6 +754,12 @@ impl AgentLoop {
 
                 if let Err(e) = result {
                     tracing::error!(error = %e, "Failed to create new context");
+                } else {
+                    // Increment rotation counter
+                    {
+                        let mut m = self.metrics.write().await;
+                        m.rotations_since_restart += 1;
+                    }
                 }
 
                 self.needs_context_reset = true;
@@ -754,6 +805,7 @@ impl AgentLoop {
 
         // Messages now go to inbox files, so we just go to sleep.
         // Any new messages will trigger InboxUpdate events.
+        self.update_metrics_state(LoopStateLabel::Sleeping).await;
         self.state = LoopState::Sleeping;
     }
 }
