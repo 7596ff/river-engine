@@ -6,6 +6,7 @@ use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
 use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
+use crate::watchdog::{spawn_watchdog_task, notify_ready};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
 use crate::subagent::SubagentManager;
@@ -340,6 +341,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     tracing::info!("Gateway listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Spawn systemd watchdog task (30s interval, 60s timeout)
+    let _watchdog_handle = spawn_watchdog_task(30);
+
+    // Notify systemd that service is ready
+    notify_ready();
+
     axum::serve(listener, app).await?;
 
     Ok(())
