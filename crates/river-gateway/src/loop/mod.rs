@@ -15,7 +15,7 @@ pub use persistence::ContextFile;
 use crate::db::{Database, Message, MessageRole};
 use crate::git::{GitOps, GitCommitResult};
 use crate::metrics::{AgentMetrics, LoopStateLabel};
-use crate::policy::{HealthPolicy, compute_action_hash, ContextAction};
+use crate::policy::{HealthPolicy, ModelErrorAction, compute_action_hash, ContextAction};
 use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ContextRotation, HeartbeatScheduler, ToolExecutor, ToolCall};
 use river_core::{RiverError, RiverResult, Snowflake, SnowflakeGenerator, SnowflakeType, ContextStatus};
@@ -552,6 +552,47 @@ impl AgentLoop {
             self.context.tools(),
         ).await {
             Ok(resp) => resp,
+            Err(RiverError::ModelApi { status, message }) => {
+                tracing::error!(
+                    status = status,
+                    message = %message,
+                    "Model API error - consulting policy"
+                );
+                let action = {
+                    let mut policy = self.policy.write().await;
+                    policy.on_model_error(status)
+                };
+                match action {
+                    ModelErrorAction::RetryAfter(duration) => {
+                        tracing::info!(
+                            retry_after_secs = duration.as_secs(),
+                            "Rate limited - waiting before retry"
+                        );
+                        tokio::time::sleep(duration).await;
+                        // Stay in Thinking state to retry
+                        return;
+                    }
+                    ModelErrorAction::RetryWithBackoff(duration) => {
+                        tracing::warn!(
+                            backoff_secs = duration.as_secs(),
+                            "Server error - will retry with backoff"
+                        );
+                        // Backoff is applied at start of next think_phase
+                        self.state = LoopState::Settling;
+                        return;
+                    }
+                    ModelErrorAction::NoRetry => {
+                        tracing::error!("Client error - not retrying");
+                        self.state = LoopState::Settling;
+                        return;
+                    }
+                    ModelErrorAction::Escalated => {
+                        tracing::error!("Auth error (401/403) - escalated to NeedsAttention");
+                        self.state = LoopState::Settling;
+                        return;
+                    }
+                }
+            }
             Err(e) => {
                 tracing::error!(
                     error = %e,

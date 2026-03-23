@@ -137,7 +137,7 @@ impl ModelClient {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             tracing::error!(status = %status, body = %body, "Model API returned error");
-            return Err(RiverError::model(format!("API error {}: {}", status, body)));
+            return Err(RiverError::model_api(status.as_u16(), body));
         }
 
         let body = response.text().await.map_err(|e| {
@@ -208,7 +208,7 @@ impl ModelClient {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             tracing::error!(status = %status, body = %body, "Anthropic API returned error");
-            return Err(RiverError::model(format!("API error {}: {}", status, body)));
+            return Err(RiverError::model_api(status.as_u16(), body));
         }
 
         let body = response.text().await.map_err(|e| {

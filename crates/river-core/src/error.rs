@@ -37,6 +37,10 @@ pub enum RiverError {
     #[error("Model error: {0}")]
     Model(String),
 
+    /// Model API HTTP errors with status code for policy decisions
+    #[error("Model API error {status}: {message}")]
+    ModelApi { status: u16, message: String },
+
     /// Authentication errors (invalid token, expired credentials)
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -99,6 +103,11 @@ impl RiverError {
     /// Creates a new Model error with the given message.
     pub fn model(msg: impl Into<String>) -> Self {
         Self::Model(msg.into())
+    }
+
+    /// Creates a new Model API error with HTTP status code.
+    pub fn model_api(status: u16, msg: impl Into<String>) -> Self {
+        Self::ModelApi { status, message: msg.into() }
     }
 
     /// Creates a new Auth error with the given message.
