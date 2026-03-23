@@ -14,3 +14,4 @@ pub mod heartbeat;
 pub mod git;
 pub mod inbox;
 pub mod subagent;
+pub mod metrics;
