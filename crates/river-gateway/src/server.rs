@@ -4,6 +4,7 @@ use crate::api::create_router;
 use crate::db::init_db;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
+use crate::policy::HealthPolicy;
 use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
@@ -275,6 +276,12 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         gateway_config.context_limit,
     )));
 
+    // Create health policy
+    let policy = Arc::new(RwLock::new(HealthPolicy::new(
+        gateway_config.agent_name.clone(),
+        gateway_config.data_dir.clone(),
+    )));
+
     // Create app state
     let state = Arc::new(AppState::new(
         gateway_config,
@@ -287,6 +294,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         auth_token,
         subagent_manager,
         metrics,
+        policy,
     ));
 
     // Spawn the agent loop

@@ -3,6 +3,7 @@
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
+use crate::policy::HealthPolicy;
 use crate::r#loop::{LoopEvent, MessageQueue};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::subagent::SubagentManager;
@@ -28,6 +29,8 @@ pub struct AppState {
     pub subagent_manager: Arc<RwLock<SubagentManager>>,
     /// Shared metrics for observability
     pub metrics: Arc<RwLock<AgentMetrics>>,
+    /// Health policy for self-healing
+    pub policy: Arc<RwLock<HealthPolicy>>,
 }
 
 /// Gateway configuration (runtime)
@@ -64,6 +67,7 @@ impl AppState {
         auth_token: Option<String>,
         subagent_manager: Arc<RwLock<SubagentManager>>,
         metrics: Arc<RwLock<AgentMetrics>>,
+        policy: Arc<RwLock<HealthPolicy>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
         let executor = ToolExecutor::new(registry).with_metrics(metrics.clone());
@@ -80,6 +84,7 @@ impl AppState {
             auth_token,
             subagent_manager,
             metrics,
+            policy,
         }
     }
 }
@@ -89,6 +94,7 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::metrics::AgentMetrics;
+    use crate::policy::HealthPolicy;
     use crate::tools::ToolRegistry;
     use chrono::Utc;
     use river_core::SnowflakeGenerator;
@@ -121,6 +127,10 @@ mod tests {
             Utc::now(),
             65536,
         )));
+        let policy = Arc::new(RwLock::new(HealthPolicy::new(
+            "test".to_string(),
+            PathBuf::from("/tmp/test"),
+        )));
         let state = AppState::new(
             config,
             db,
@@ -132,6 +142,7 @@ mod tests {
             None,
             subagent_manager,
             metrics,
+            policy,
         );
 
         assert_eq!(state.config.port, 3000);

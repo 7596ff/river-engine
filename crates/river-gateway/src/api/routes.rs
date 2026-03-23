@@ -272,6 +272,7 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::metrics::AgentMetrics;
+    use crate::policy::HealthPolicy;
     use crate::r#loop::MessageQueue;
     use crate::state::GatewayConfig;
     use crate::subagent::SubagentManager;
@@ -311,8 +312,12 @@ mod tests {
             Utc::now(),
             65536,
         )));
+        let policy = Arc::new(RwLock::new(HealthPolicy::new(
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+        )));
         // No auth token for basic tests - tests that need auth should set it explicitly
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager, metrics)), loop_rx)
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager, metrics, policy)), loop_rx)
     }
 
     #[tokio::test]
@@ -399,7 +404,11 @@ mod tests {
             Utc::now(),
             65536,
         )));
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager, metrics)), loop_rx)
+        let policy = Arc::new(RwLock::new(HealthPolicy::new(
+            "test-agent".to_string(),
+            PathBuf::from("/tmp/test"),
+        )));
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager, metrics, policy)), loop_rx)
     }
 
     #[tokio::test]
