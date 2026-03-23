@@ -31,6 +31,7 @@ glob.workspace = true
 regex.workspace = true
 chrono.workspace = true
 fred.workspace = true
+sd-notify = "0.4"
 
 [dev-dependencies]
 tempfile = "3.10"
