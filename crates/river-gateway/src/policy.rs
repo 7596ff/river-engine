@@ -22,6 +22,15 @@ pub enum HealthStatus {
     NeedsAttention,
 }
 
+/// Action to take after model error
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelErrorAction {
+    RetryAfter(Duration),
+    RetryWithBackoff(Duration),
+    NoRetry,
+    Escalated,
+}
+
 /// Central decision-making for self-healing
 pub struct HealthPolicy {
     // Identity & config
@@ -196,6 +205,70 @@ impl HealthPolicy {
             self.status = HealthStatus::Degraded;
         }
     }
+
+    /// Handle model API error, returning appropriate action
+    pub fn on_model_error(&mut self, status_code: u16) -> ModelErrorAction {
+        match status_code {
+            401 | 403 => {
+                // Auth errors escalate immediately
+                let _ = self.escalate(
+                    &format!("Authentication error: HTTP {}", status_code),
+                    "API key may be invalid or expired. Check credentials.",
+                );
+                ModelErrorAction::Escalated
+            }
+            429 => {
+                // Rate limit - use default 60s retry
+                ModelErrorAction::RetryAfter(Duration::from_secs(60))
+            }
+            500..=599 => {
+                // Server error - use exponential backoff
+                self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+                self.last_error = Some(Utc::now());
+                ModelErrorAction::RetryWithBackoff(self.error_backoff())
+            }
+            _ => {
+                // Other client errors - don't retry
+                self.status = HealthStatus::Degraded;
+                ModelErrorAction::NoRetry
+            }
+        }
+    }
+
+    /// Escalate to NeedsAttention and write ATTENTION.md
+    pub fn escalate(&mut self, reason: &str, context: &str) -> std::io::Result<()> {
+        self.status = HealthStatus::NeedsAttention;
+        self.attention_created_at = Some(Utc::now());
+
+        let attention_path = self.data_dir.join("ATTENTION.md");
+        let content = format!(
+            "# Attention Required\n\n\
+             **Agent:** {}\n\
+             **Time:** {}\n\
+             **Reason:** {}\n\n\
+             ## Context\n\n\
+             {}\n\n\
+             ## To Clear\n\n\
+             Delete this file after addressing the issue.\n\n\
+             ---\n\n\
+             ## Response\n\n\
+             (Add your response here)\n",
+            self.agent_name,
+            Utc::now().to_rfc3339(),
+            reason,
+            context
+        );
+
+        std::fs::write(&attention_path, content)?;
+        tracing::error!(
+            event = "escalation",
+            reason = reason,
+            file = %attention_path.display(),
+            "Agent requires attention"
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -363,5 +436,44 @@ mod tests {
         policy.on_turn_complete(5, 2);
         assert_eq!(policy.consecutive_errors(), 2);
         assert_eq!(policy.status(), HealthStatus::Degraded);
+    }
+
+    // Task 4: Model error handling tests
+
+    #[test]
+    fn test_401_immediate_escalation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+        let action = policy.on_model_error(401);
+        assert!(matches!(action, ModelErrorAction::Escalated));
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+        assert!(dir.path().join("ATTENTION.md").exists());
+    }
+
+    #[test]
+    fn test_403_immediate_escalation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+        let action = policy.on_model_error(403);
+        assert!(matches!(action, ModelErrorAction::Escalated));
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+    }
+
+    #[test]
+    fn test_429_returns_retry_after() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        let action = policy.on_model_error(429);
+        assert!(matches!(action, ModelErrorAction::RetryAfter(_)));
+    }
+
+    #[test]
+    fn test_500_returns_backoff() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        let action = policy.on_model_error(500);
+        assert!(matches!(action, ModelErrorAction::RetryWithBackoff(_)));
     }
 }
