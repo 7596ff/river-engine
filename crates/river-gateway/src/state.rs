@@ -66,7 +66,7 @@ impl AppState {
         metrics: Arc<RwLock<AgentMetrics>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
-        let executor = ToolExecutor::new(registry);
+        let executor = ToolExecutor::new(registry).with_metrics(metrics.clone());
 
         Self {
             snowflake_gen,

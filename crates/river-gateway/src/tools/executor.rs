@@ -1,8 +1,11 @@
 //! Tool executor with context tracking
 
 use super::{ToolRegistry, ToolResult, ToolSchema};
+use crate::metrics::AgentMetrics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// A tool call from the model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,11 +25,20 @@ pub struct ToolCallResponse {
 /// Executes tools
 pub struct ToolExecutor {
     registry: ToolRegistry,
+    metrics: Option<Arc<RwLock<AgentMetrics>>>,
 }
 
 impl ToolExecutor {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            metrics: None,
+        }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<RwLock<AgentMetrics>>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Execute a tool call
@@ -74,6 +86,16 @@ impl ToolExecutor {
                 Err(format!("Unknown tool: {}", call.name))
             }
         };
+
+        // Update metrics counters
+        if let Some(ref metrics) = self.metrics {
+            if let Ok(mut m) = metrics.try_write() {
+                m.tool_calls += 1;
+                if result.is_err() {
+                    m.tool_errors += 1;
+                }
+            }
+        }
 
         ToolCallResponse {
             tool_call_id: call.id.clone(),
