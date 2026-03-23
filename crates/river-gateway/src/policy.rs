@@ -177,6 +177,9 @@ impl HealthPolicy {
     }
 
     /// Called after each tool execution
+    ///
+    /// The `duration` parameter is reserved for future performance anomaly detection
+    /// (e.g., detecting tools that are taking unusually long). Currently unused.
     pub fn on_tool_result(&mut self, tool: &str, success: bool, _duration: Duration) {
         if success {
             self.tool_failures.remove(tool);
