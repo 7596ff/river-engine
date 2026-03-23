@@ -318,6 +318,29 @@ impl HealthPolicy {
             let _ = self.escalate(reason, "Agent stuck, human intervention needed");
         }
     }
+
+    /// Record token counts for progress tracking
+    pub fn record_turn_tokens(&mut self, start_tokens: u64, end_tokens: u64) {
+        self.context_tokens_at_turn_start = start_tokens;
+        self.context_tokens_at_turn_end = end_tokens;
+
+        // Skip progress tracking for heartbeat turns
+        if self.is_heartbeat_turn {
+            self.is_heartbeat_turn = false; // Reset for next turn
+            return;
+        }
+
+        let progress = end_tokens.saturating_sub(start_tokens);
+        if progress < 100 {
+            self.low_progress_turns += 1;
+            // Only mark stuck if user is actually waiting
+            if self.low_progress_turns >= 3 && self.pending_user_messages > 0 {
+                self.mark_stuck("No progress: low token growth for 3+ turns while user waiting");
+            }
+        } else {
+            self.low_progress_turns = 0;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -603,5 +626,64 @@ mod tests {
         assert!(policy.recovery_attempts() > 3);
         assert_eq!(policy.status(), HealthStatus::NeedsAttention);
         assert!(dir.path().join("ATTENTION.md").exists());
+    }
+
+    // Task 6: Low progress stuck detection tests
+
+    #[test]
+    fn test_low_progress_detection() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+        policy.set_pending_messages(1); // User is waiting
+
+        // 3 turns with <100 token progress
+        policy.record_turn_tokens(1000, 1050);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+
+        policy.record_turn_tokens(1050, 1080);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+
+        policy.record_turn_tokens(1080, 1090);
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_heartbeat_excluded_from_progress() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+        policy.set_pending_messages(1);
+        policy.set_heartbeat_turn(true);
+
+        // Heartbeat turns don't count toward stuck detection
+        policy.record_turn_tokens(1000, 1010);
+        policy.record_turn_tokens(1010, 1020);
+        policy.record_turn_tokens(1020, 1030);
+
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_no_stuck_without_pending_messages() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+        // No pending messages - user isn't waiting
+
+        policy.record_turn_tokens(1000, 1010);
+        policy.record_turn_tokens(1010, 1020);
+        policy.record_turn_tokens(1020, 1030);
+
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_good_progress_resets_counter() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+        policy.set_pending_messages(1);
+
+        policy.record_turn_tokens(1000, 1050);
+        policy.record_turn_tokens(1050, 1080);
+        // Good progress resets
+        policy.record_turn_tokens(1080, 1500);
+        policy.record_turn_tokens(1500, 1520);
+        policy.record_turn_tokens(1520, 1540);
+
+        assert_eq!(policy.status(), HealthStatus::Healthy);
     }
 }
