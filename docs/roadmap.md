@@ -11,31 +11,11 @@
 
 ---
 
-## Quick Wins
+# Core Prototype
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Timezone support | 🟢 | `PREFERENCES.toml` with chrono-tz |
-| Shell profile loading | 🟢 | Bash `-l` flag for login shell |
-| Message history access | 🟢 | Bidirectional conversations, `sync_conversation` tool |
+The essential architecture. What makes River *River*.
 
----
-
-## Monitoring & Observability
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Health endpoint | 🟢 | Rich `/health` with metrics |
-| Agent metrics | 🟢 | `AgentMetrics` struct, context tracking |
-| Health policy | 🟢 | `HealthPolicy` with degraded/needs-attention states |
-| Systemd watchdog | 🟢 | `sd_notify` integration |
-| Structured logging | 🟢 | JSON logging support |
-
-**Files:** `metrics.rs`, `policy.rs`, `watchdog.rs`, `logging.rs`
-
----
-
-## Agent Core
+## Foundation (Complete)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -43,122 +23,97 @@
 | Context persistence | 🟢 | Save/restore conversation state |
 | Context rotation | 🟢 | Auto-rotate when approaching limit |
 | Subagent spawning | 🟢 | Task workers and long-running subagents |
-| Tool system | 🟢 | Registry, executor, 20+ tools |
+| Tool system | 🟢 | Registry, executor, 40+ tools |
 | Native Anthropic API | 🟢 | Direct Claude API with ephemeral caching |
+| Discord adapter | 🟢 | Working, bidirectional |
+| Monitoring | 🟢 | Health, metrics, watchdog, structured logging |
+| Nix deployment | 🟢 | Current deployment method |
 
-**Files:** `loop/`, `subagent/`, `tools/`
+## Gateway Restructure
 
----
+**Spec:** `docs/specs/gateway-restructure-meta-plan.md`
 
-## Embeddings
+| Phase | Status | Deliverable |
+|-------|--------|-------------|
+| Phase 0: Extract crates | 🔴 | river-tools, river-db, river-adapter |
+| Phase 0.5: Discord refactor | 🔴 | Discord uses river-adapter types |
+| Phase 1: Embeddings layer | 🔴 | Zettelkasten sync to sqlite-vec |
+| Phase 2: Flash queue | 🔴 | TTL-based memory surfacing |
+| Phase 3: Context assembly | 🔴 | Hot/warm/cold layers |
+| Phase 4: Coordinator | 🔴 | Event bus, peer task management |
+| Phase 5: Agent task | 🔴 | Agent as peer task |
+| Phase 6: Spectator task | 🔴 | Observer, compressor, curator |
+| Phase 7: Integration | 🔴 | I/You architecture running |
 
-**Status:** 🟡 In Progress
+## I/You Architecture
 
-**Architecture:** Declarative sync (NixOS-style)
+**Spec:** `docs/specs/context-assembly-design.md`
 
-```
-workspace/embeddings/     Sync Service      sqlite-vec
-├── memory.md        ──→  (hash, diff,  ──→  (vectors)
-├── notes/*.md            chunk, embed)
-└── context/*.md
-```
+The mind has two perspectives:
+- **Agent (I)** — thinks, acts, writes notes, decides
+- **Spectator (You)** — observes, compresses, curates, whispers
 
-| Component | Status | Description |
-|-----------|--------|-------------|
-| sqlite-vec integration | 🔴 | Load extension, create virtual tables |
-| Chunker | 🔴 | Split markdown into ~400 token pieces |
-| Sync service | 🔴 | Scan folder, hash files, diff against DB |
-| Embed client | 🟢 | Exists: `EmbeddingClient` in river-gateway |
-| Search API | 🔴 | Query vectors with `vec_distance_cosine()` |
+> "No mind should be the sole author of its own memory."
 
-**Design:** See `docs/research/embedding-architecture.md`
+## Adapter Framework
 
-**Principle:** The `embeddings/` folder is the source of truth. The database is derived state.
+**Spec:** `docs/specs/adapter-framework-design.md`
 
----
-
-## Resilience
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Model fallback chains | 🔴 | Graceful degradation when primary model fails |
-| Cron with exponential backoff | 🔴 | Self-healing scheduling for failed tasks |
-| ATTENTION.md escalation | 🔴 | Agent writes urgent issues, human reviews |
-| Tool policy pipeline | 🔴 | 2-3 layer: agent default, per-agent override, runtime deny |
-| Context pruning (TTL) | 🔴 | Expire old messages, not just rotate context |
-
-**Principle:** Forest resilience — one tree dies, others take over.
+| Component | Status | Notes |
+|-----------|--------|-------|
+| river-adapter crate | 🔴 | Types, trait, OpenAPI |
+| Discord refactor | 🔴 | Use shared types, self-register |
+| Feature flags | 🔴 | Adapters declare capabilities |
 
 ---
 
-## Deployment
+# Fun Features
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Nix/NixOS | 🟢 | Current deployment method |
-| Docker/Podman | 🔴 | Reduce Nix dependency, broader compatibility |
-| Environment sanitization | 🔴 | Sanitize env vars before shell execution |
-
-**Goal:** Both options, composable. Nix for declarative systems, Docker for everything else.
-
----
-
-## Architecture
-
-| Feature | Status | Depends On | Notes |
-|---------|--------|------------|-------|
-| Module support | 🔴 | — | Foundation for extensibility |
-| Skill support | 🔴 | Modules | CLI tools + metadata (OpenClaw-style) |
-| MCP support | 🔴 | Modules | Model Context Protocol integration |
-
-**Research:** See `docs/research/openclaw-*.md`
-
-**Key insight from OpenClaw:** Skills are just CLI wrappers with `SKILL.md` metadata files. Simple and effective.
-
----
+The shiny stuff. Build after core works.
 
 ## Communication
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Discord adapter | 🟢 | Working |
-| Bidirectional conversations | 🟢 | `conversations/` module, outgoing message tracking |
-| Discord /read endpoint | 🟢 | Fetch channel history from Discord API |
-| Typing indicators | 🔴 | Show typing while agent is thinking |
-| Adapter trait | 🔴 | Clean trait interface for adapters (not plugin monstrosity) |
-| Voice chat | 🔴 | New adapter type |
-| Issue tracking | 🔴 | Internal issue system for agent |
+| Utterances | 🔴 | Speech as deliberate act via `speak` tool |
+| Silent work | 🔴 | Background processing, no user output |
+| Typing indicators | 🔴 | Show typing while agent thinks |
+| Hooks expansion | 🔴 | Message lifecycle phases (received → processed → sent) |
 
----
+**Utterances:** The agent thinks (internal stream), then *utters* (deliberate speech). Messages arrive when the agent chooses to speak.
 
-## Advanced
+## Resilience
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Dynamic thinking temperature | 🔴 | Continuous 0.0–1.0, system-controlled |
-| Adversarial mind | ⚪ | Actor-spectator dialectical architecture |
-| Utterances | 🔴 | Speech as deliberate act, not token leakage |
-| Silent work | 🔴 | Background processing without user output |
+| Model fallback chains | 🔴 | Primary fails → try fallbacks with cooldowns |
 | Heartbeat coalescing | 🔴 | Priority queue for scheduled wakes |
+| Cron with exponential backoff | 🔴 | 30s → 1m → 5m → 15m → 60m |
+| ATTENTION.md escalation | 🔴 | Agent writes urgent issues, human reviews |
+| Tool policy pipeline | 🔴 | Multi-layer filtering, deny-wins |
+| Environment sanitization | 🔴 | Block *_API_KEY, *_TOKEN, etc. |
 
-**Concept:** "I" and "You" — a spectator that observes and critiques the actor's work. The spectator adjusts the dial, agent operates at whatever level is set. "No mind should be the sole author of its own cognition level."
+**Principle:** Forest resilience — one tree dies, others take over.
 
-**Utterances:** The agent thinks (internal stream), then *utters* (deliberate speech via tool). Typing indicator shows during thinking. Messages arrive when the agent chooses to speak.
+## Web & Search
 
----
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Web search | 🔴 | SearXNG self-hosted, scrape results |
+| Web fetch | 🟢 | Exists |
+| SSRF protection | 🔴 | URL validation, private IP blocking |
+| Content caching | 🔴 | SQLite, 15min TTL |
 
 ## Media & Voice
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Whisper transcription | 🔴 | Local tool, techniques with Will |
-| TTS | 🔴 | qwentts local, explore more local models |
+| TTS | 🔴 | qwentts local, explore more |
+| Canvas | 🔴 | Research Obsidian canvas spec |
 | Image generation | ⚪ | Tabled |
 | Image/video analysis | ⚪ | Tabled |
 | Browser automation | ⚪ | Tabled |
-| Canvas | 🔴 | Research Obsidian canvas spec |
-
----
 
 ## Extensibility
 
@@ -167,9 +122,15 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | Skills | 🔴 | Needs spec — CLI tools + SKILL.md metadata |
 | MCP | 🔴 | Needs spec — Model Context Protocol |
 
+## Deployment
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Docker/Podman | 🔴 | Reduce Nix dependency |
+
 ---
 
-## Research
+# Research
 
 | Topic | Status | Output |
 |-------|--------|--------|
@@ -178,40 +139,29 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | OpenClaw detailed | 🟢 | `docs/research/openclaw-features-detailed.md` |
 | OpenClaw feature analysis | 🟢 | `docs/research/openclaw-features-analysis.md` |
 | Embedding architecture | 🟢 | `docs/research/embedding-architecture.md` |
+| Context management | 🟢 | `docs/research/context-management-brainstorm.md` |
+| Two people in the room | 🟢 | `docs/research/two-people-in-the-room.md` |
 | Obsidian canvas | 🔴 | For canvas feature design |
 
 ---
 
-## Dependencies
+# Specs
 
-```
-                    ┌─────────────┐
-                    │   Modules   │
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐
-        │  Skills  │ │   MCP    │ │  Issues  │
-        └──────────┘ └──────────┘ └──────────┘
-
-        ┌──────────┐     ┌──────────┐     ┌──────────┐
-        │ sqlite-  │ ──▶ │  Sync    │ ──▶ │  Search  │
-        │   vec    │     │ Service  │     │   API    │
-        └──────────┘     └──────────┘     └──────────┘
-```
+| Spec | Status |
+|------|--------|
+| Context Assembly & I/You | 🟢 `docs/specs/context-assembly-design.md` |
+| Adapter Framework | 🟢 `docs/specs/adapter-framework-design.md` |
+| Gateway Restructure | 🟢 `docs/specs/gateway-restructure-meta-plan.md` |
+| Resilience | 🔴 Needs spec |
+| Utterances | 🔴 Needs spec |
+| Skills | 🔴 Needs spec |
+| MCP | 🔴 Needs spec |
 
 ---
 
-## Open Questions
+# Notes
 
-1. **Adversarial mind** — Design upfront or evolve as we go?
-2. **Nix vs Docker** — Both-and? Primary deployment target?
-
----
-
-## Notes
-
-- "It's a both-end situation, doesn't have to be one or the other" — on Nix vs Docker
-- "We needed to figure out a strategy and we needed to fail first" — on embeddings
-- "Reading OpenClaw source and sniping most of the features. Well, the good ones."
+- "Philosophy as code"
+- "No mind should be the sole author of its own memory"
+- "The agent thinks, then utters"
+- "Forest resilience — one tree dies, others take over"
