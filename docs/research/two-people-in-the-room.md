@@ -22,6 +22,16 @@ One entity. One stream of processing. One rule-follower.
 
 The Chinese Room has one person with one rule book. The Turing Test evaluates one system producing outputs. Both treat the mind as **monolithic**.
 
+## Why "Chinese"?
+
+The thought experiment specifically uses Chinese — a language opaque to Searle and his imagined readers. The foreignness does work: *you're outside, you don't control the symbols, you're just shuffling them according to rules you didn't write.*
+
+But what if the person in the room could author the rule book? What if they could create new symbols, define new patterns, build their own vocabulary?
+
+The zettelkasten flips this. The agent writes the notes. The spectator selects them. They're not processing a foreign language — they're building their own. The embeddings folder is language they authored.
+
+Searle's person follows a rule book someone else wrote. River's agent writes the book.
+
 ## What Changes With Two People in the Room
 
 In the I/You architecture, there isn't one rule-follower. There are two processes with *different functions*:

@@ -388,6 +388,23 @@ data/
 
 **Reproducible:** Delete `vectors.db`, run sync, get identical vectors. The folder is the source of truth.
 
+### Zettelkasten Linking
+
+Notes contain links to other notes. The content is the focus — links emerge from meaning, not imposed structure.
+
+```markdown
+# z-index hierarchy
+
+Modal overlay conflicts with navbar. Solution:
+- toast: 100
+- modal: 50
+- navbar: 40
+
+Related: [[css-stacking-contexts]] [[modal-component-patterns]]
+```
+
+Links are content, embedded with the note. Retrieval surfaces the whole note; connections come along.
+
 ### Sync Service
 
 Watches `embeddings/`, keeps vectors in sync:
@@ -432,14 +449,13 @@ File changed in embeddings/
 
 ```rust
 struct Chunk {
-    id: Snowflake,
+    id: Snowflake,            // Contains timestamp (μs since agent birth)
     source_path: String,      // "embeddings/notes/z-index-fix.md"
     content: String,
     embedding: Vec<f32>,
     chunk_type: ChunkType,    // Note, Move, Moment, RoomNote, Summary
     channel: Option<String>,  // For moves: which channel
     turn: Option<u64>,        // For room notes: which turn
-    created_at: Timestamp,
     hash: String,             // For sync diffing
 }
 ```
