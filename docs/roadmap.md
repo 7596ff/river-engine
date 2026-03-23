@@ -1,6 +1,6 @@
 # River Engine Roadmap
 
-> Last updated: 2026-03-21
+> Last updated: 2026-03-23
 
 ## Status Legend
 
@@ -15,9 +15,37 @@
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Timezone support | 🔴 | Agent needs proper time awareness |
-| Shell profile loading | 🔴 | Not loading user's shell profile correctly |
-| Message history access | 🔴 | Agent can't access its own conversation history |
+| Timezone support | 🟢 | `PREFERENCES.toml` with chrono-tz |
+| Shell profile loading | 🟢 | Bash `-l` flag for login shell |
+| Message history access | 🟢 | Bidirectional conversations, `sync_conversation` tool |
+
+---
+
+## Monitoring & Observability
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Health endpoint | 🟢 | Rich `/health` with metrics |
+| Agent metrics | 🟢 | `AgentMetrics` struct, context tracking |
+| Health policy | 🟢 | `HealthPolicy` with degraded/needs-attention states |
+| Systemd watchdog | 🟢 | `sd_notify` integration |
+| Structured logging | 🟢 | JSON logging support |
+
+**Files:** `metrics.rs`, `policy.rs`, `watchdog.rs`, `logging.rs`
+
+---
+
+## Agent Core
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Agent loop | 🟢 | Wake/think/act/settle cycle |
+| Context persistence | 🟢 | Save/restore conversation state |
+| Context rotation | 🟢 | Auto-rotate when approaching limit |
+| Subagent spawning | 🟢 | Task workers and long-running subagents |
+| Tool system | 🟢 | Registry, executor, 20+ tools |
+
+**Files:** `loop/`, `subagent/`, `tools/`
 
 ---
 
@@ -78,6 +106,8 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Discord adapter | 🟢 | Working |
+| Bidirectional conversations | 🟢 | `conversations/` module, outgoing message tracking |
+| Discord /read endpoint | 🟢 | Fetch channel history from Discord API |
 | Voice chat | 🔴 | New adapter type |
 | Issue tracking | 🔴 | Internal issue system for agent |
 
