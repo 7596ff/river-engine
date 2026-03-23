@@ -300,6 +300,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         heartbeat_scheduler,
         context_rotation,
         loop_config,
+        state.metrics.clone(),
     );
     tokio::spawn(async move {
         agent_loop.run().await;
