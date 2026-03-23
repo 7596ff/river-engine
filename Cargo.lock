@@ -1750,6 +1750,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "urlencoding",
 ]
 
 [[package]]

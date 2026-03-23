@@ -1,5 +1,6 @@
 //! sync_conversation tool for fetching and merging message history
 
+use crate::conversations::path::build_discord_path;
 use crate::conversations::{Author, Message, MessageDirection, WriteOp};
 use crate::tools::{AdapterRegistry, Tool, ToolResult};
 use river_core::RiverError;
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
+use urlencoding::encode;
 
 pub struct SyncConversationTool {
     registry: Arc<RwLock<AdapterRegistry>>,
@@ -94,9 +96,9 @@ impl Tool for SyncConversationTool {
                     .ok_or_else(|| RiverError::tool("Adapter doesn't support reading"))?;
 
                 // Build URL with params
-                let mut url = format!("{}?channel={}&limit={}", read_url, channel, limit);
+                let mut url = format!("{}?channel={}&limit={}", read_url, encode(&channel), limit);
                 if let Some(ref before_id) = before {
-                    url.push_str(&format!("&before={}", before_id));
+                    url.push_str(&format!("&before={}", encode(before_id)));
                 }
 
                 debug!(url = %url, "Fetching messages from adapter");
@@ -113,8 +115,14 @@ impl Tool for SyncConversationTool {
                 let messages: Vec<FetchedMessage> = response.json().await
                     .map_err(|e| RiverError::tool(format!("Parse error: {}", e)))?;
 
-                // Build conversation path (simplified - would need channel metadata)
-                let path = workspace.join("conversations").join(&adapter).join(format!("{}.txt", channel));
+                // Build conversation path using the path helper
+                let path = build_discord_path(
+                    &workspace,
+                    None,  // guild_id not available in this flow
+                    None,  // guild_name
+                    &channel,
+                    &channel,  // use channel ID as name for now
+                );
 
                 let mut processed_count = 0;
                 for fetched in &messages {
@@ -126,7 +134,14 @@ impl Tool for SyncConversationTool {
                         },
                         timestamp: chrono::DateTime::from_timestamp(fetched.timestamp, 0)
                             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .unwrap_or_default(),
+                            .unwrap_or_else(|| {
+                                warn!(
+                                    message_id = %fetched.id,
+                                    timestamp = fetched.timestamp,
+                                    "Invalid timestamp, using current time"
+                                );
+                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+                            }),
                         id: fetched.id.clone(),
                         author: Author { name: fetched.author_name.clone(), id: fetched.author_id.clone() },
                         content: fetched.content.clone(),
