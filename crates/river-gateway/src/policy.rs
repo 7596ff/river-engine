@@ -53,6 +53,13 @@ pub enum ModelErrorAction {
     Escalated,
 }
 
+/// Action for context management
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextAction {
+    Continue,
+    RotateNow,
+}
+
 /// Central decision-making for self-healing
 pub struct HealthPolicy {
     // Identity & config
@@ -459,6 +466,20 @@ impl HealthPolicy {
             Some(path.to_string_lossy().to_string())
         } else {
             None
+        }
+    }
+
+    /// Called when context usage is checked, returns action to take
+    pub fn on_context_warning(&self, usage_percent: f64) -> ContextAction {
+        if usage_percent >= 80.0 && usage_percent < 90.0 {
+            tracing::info!(
+                event = "context.proactive_rotation",
+                usage_percent = usage_percent,
+                "Triggering proactive context rotation at 80%"
+            );
+            ContextAction::RotateNow
+        } else {
+            ContextAction::Continue
         }
     }
 }
@@ -878,6 +899,18 @@ I rotated the API key. Try again.
     }
 
     // Task 8: Recovery memory logging tests
+
+    // Task 9: Proactive context rotation tests
+
+    #[test]
+    fn test_proactive_rotation_at_80_percent() {
+        let policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        assert_eq!(policy.on_context_warning(70.0), ContextAction::Continue);
+        assert_eq!(policy.on_context_warning(80.0), ContextAction::RotateNow);
+        assert_eq!(policy.on_context_warning(85.0), ContextAction::RotateNow);
+        assert_eq!(policy.on_context_warning(90.0), ContextAction::Continue); // 90%+ handled elsewhere
+    }
 
     #[test]
     fn test_recovery_logged_to_file() {
