@@ -434,6 +434,12 @@ impl AgentLoop {
         // Inject 80% context warning if needed
         let context_percent = (self.last_prompt_tokens as f64 / self.config.context_limit as f64) * 100.0;
         if context_percent >= 80.0 && context_percent < 90.0 {
+            tracing::warn!(
+                event = "context.warning",
+                usage_percent = format!("{:.1}", context_percent),
+                threshold = 80,
+                "Context usage high"
+            );
             self.context.add_message(ChatMessage::system(format!(
                 "WARNING: Context at {:.1}%. Consider summarizing and calling rotate_context soon.",
                 context_percent
@@ -486,9 +492,10 @@ impl AgentLoop {
         let message_count = self.context.messages().len();
         let tool_count = self.context.tools().len();
         tracing::info!(
+            event = "loop.think",
             message_count = message_count,
             tool_count = tool_count,
-            "Think phase: calling model"
+            "Calling model"
         );
 
         let response = match self.model_client.complete(
@@ -507,6 +514,7 @@ impl AgentLoop {
         };
 
         tracing::info!(
+            event = "loop.response",
             tokens_total = response.usage.total_tokens,
             tokens_prompt = response.usage.prompt_tokens,
             tokens_completion = response.usage.completion_tokens,
@@ -633,7 +641,8 @@ impl AgentLoop {
                 let result = executor.execute(&call);
                 let success = result.result.is_ok();
                 tracing::info!(
-                    tool = %tc.function.name,
+                    event = "loop.tool",
+                    tool_name = %tc.function.name,
                     call_id = %tc.id,
                     success = success,
                     "Tool execution complete"
@@ -736,11 +745,16 @@ impl AgentLoop {
 
     async fn settle_phase(&mut self) {
         self.update_metrics_state(LoopStateLabel::Settling).await;
-        tracing::debug!("Settling...");
+        tracing::info!(event = "loop.settle", "Turn complete, settling");
 
         // Handle context rotation if requested
         if let Some(summary_opt) = self.context_rotation.take_request() {
-            tracing::info!(has_summary = summary_opt.is_some(), "Processing context rotation");
+            tracing::info!(
+                event = "context.rotate",
+                has_summary = summary_opt.is_some(),
+                old_tokens = self.last_prompt_tokens,
+                "Processing context rotation"
+            );
 
             if let Err(e) = self.archive_current_context(summary_opt.as_deref()) {
                 tracing::error!(error = %e, "Failed to archive context");
@@ -806,6 +820,7 @@ impl AgentLoop {
         // Messages now go to inbox files, so we just go to sleep.
         // Any new messages will trigger InboxUpdate events.
         self.update_metrics_state(LoopStateLabel::Sleeping).await;
+        tracing::debug!(event = "loop.sleep", "Entering sleep");
         self.state = LoopState::Sleeping;
     }
 }
