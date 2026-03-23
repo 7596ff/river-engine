@@ -147,6 +147,28 @@ workspace/embeddings/     Sync Service      sqlite-vec
 
 ---
 
+## Media & Voice
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Whisper transcription | 🔴 | Local tool, techniques with Will |
+| TTS | 🔴 | qwentts local, explore more local models |
+| Image generation | ⚪ | Tabled |
+| Image/video analysis | ⚪ | Tabled |
+| Browser automation | ⚪ | Tabled |
+| Canvas | 🔴 | Research Obsidian canvas spec |
+
+---
+
+## Extensibility
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Skills | 🔴 | Needs spec — CLI tools + SKILL.md metadata |
+| MCP | 🔴 | Needs spec — Model Context Protocol |
+
+---
+
 ## Research
 
 | Topic | Status | Output |
@@ -156,6 +178,7 @@ workspace/embeddings/     Sync Service      sqlite-vec
 | OpenClaw detailed | 🟢 | `docs/research/openclaw-features-detailed.md` |
 | OpenClaw feature analysis | 🟢 | `docs/research/openclaw-features-analysis.md` |
 | Embedding architecture | 🟢 | `docs/research/embedding-architecture.md` |
+| Obsidian canvas | 🔴 | For canvas feature design |
 
 ---
 
