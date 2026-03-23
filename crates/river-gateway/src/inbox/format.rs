@@ -1,4 +1,21 @@
-//! Inbox line formatting and parsing
+//! Inbox/chat line formatting and parsing
+//!
+//! Supports bidirectional messages:
+//! - `[ ]` incoming unread
+//! - `[x]` incoming read
+//! - `[>]` outgoing (sent by agent)
+//! - `[!]` failed to send
+
+/// Message direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDirection {
+    /// Incoming message (from external user)
+    Incoming { read: bool },
+    /// Outgoing message (sent by agent)
+    Outgoing,
+    /// Failed to send
+    Failed,
+}
 
 /// Escape content for single-line storage
 /// Escapes: \ -> \\, \n -> \\n, \r -> \\r
