@@ -17,11 +17,11 @@
 7. **ATTENTION.md / escalation pattern** — Already in self-healing spec. Keep and extend.
 8. **Environment variable sanitization** — Basic security hygiene. Non-negotiable.
 9. **Typing indicators** — Small thing but makes agents feel present. Worth having.
+10. **Sandbox/Docker hardening** — There should be multiple ways to run river-engine, different platforms, etc.
 
 ## ADAPT — Good ideas, wrong implementation
 
-10. **Channel adapters** — River should have them, but simpler. One clean trait, not the 8-adapter plugin monstrosity. Start with Discord (already have it), add one at a time.
-11. **Sandbox/Docker hardening** — River agents run on your machine as you. NixOS module already provides isolation. Use systemd sandboxing (PrivateTmp, ProtectSystem, etc.) instead of Docker-in-Docker.
+11. **Channel adapters** — River should have them, but simpler. One clean trait, not the 8-adapter plugin monstrosity. Start with Discord (already have it), add one at a time.
 12. **Auth profiles** — Good idea, but use the filesystem (key files) rather than JSON config blobs. Simpler, more Unixy.
 13. **Streaming coalescing** — Human-paced responses are nice, but let the adapter decide pacing, not the core engine.
 14. **Thinking temperature** — Not discrete levels (off/minimal/low/medium/high/xhigh/adaptive). Continuous float 0.0–1.0. System sets it dynamically based on signal, not the agent. Maps to I/You/Ground: spectator adjusts the dial, agent operates at whatever level is set, human can override. "No mind should be the sole author of its own cognition level."
@@ -37,18 +37,5 @@
 
 ---
 
-## The Forest Test
-
-For any future feature decision, ask:
-
-> Does this feature help the agent be more resilient, adaptive, and alive? **Keep it.**
->
-> Does this feature exist to make the system legible to administrators who don't trust it? **Drop it.**
->
-> Does this feature exist because we're serving thousands of strangers? **We're not. Drop it.**
-
-The forest doesn't need a forester. It needs rain, soil, and diversity.
-
----
-
 *William Thomas Lessing, 2026-03-23*
+*Updated by cass 2026-03-23*
