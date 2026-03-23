@@ -2,11 +2,11 @@
 
 ## Overview
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Comprehensive system architecture documentation
-- **[MIGRATION-GUIDE.md](MIGRATION-GUIDE.md)** - Guide for migrating agents into River Engine
+- **[roadmap.md](roadmap.md)** - Project roadmap and status
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Comprehensive system architecture
 - **[DESIGN-PHILOSOPHY.md](DESIGN-PHILOSOPHY.md)** - Design principles and philosophy
-- **[DESIGN-continuous-tool-loop.md](DESIGN-continuous-tool-loop.md)** - Agent loop design details
-- **[FEATURE-ARCHEOLOGY.md](FEATURE-ARCHEOLOGY.md)** - Feature history and evolution
+- **[MIGRATION-GUIDE.md](MIGRATION-GUIDE.md)** - Guide for migrating agents into River Engine
+- **[snowflake-generation.md](snowflake-generation.md)** - Snowflake ID system reference
 
 ## Specifications
 

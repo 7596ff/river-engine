@@ -44,6 +44,7 @@
 | Context rotation | 🟢 | Auto-rotate when approaching limit |
 | Subagent spawning | 🟢 | Task workers and long-running subagents |
 | Tool system | 🟢 | Registry, executor, 20+ tools |
+| Native Anthropic API | 🟢 | Direct Claude API with ephemeral caching |
 
 **Files:** `loop/`, `subagent/`, `tools/`
 
