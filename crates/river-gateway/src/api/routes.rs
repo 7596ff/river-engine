@@ -2,6 +2,7 @@
 
 use crate::inbox::{format_inbox_line, build_discord_path, append_line, sanitize_name};
 use crate::metrics::{get_rss_bytes, LoopStateLabel};
+use crate::policy::HealthStatus;
 use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use axum::{
@@ -49,6 +50,7 @@ struct HealthResponse {
     context: ContextInfo,
     resources: ResourceInfo,
     counters: CounterInfo,
+    policy: PolicyInfo,
 }
 
 #[derive(Serialize)]
@@ -85,6 +87,15 @@ struct CounterInfo {
     model_calls: u64,
     tool_calls: u64,
     tool_errors: u64,
+}
+
+#[derive(Serialize)]
+struct PolicyInfo {
+    health_status: HealthStatus,
+    consecutive_errors: u32,
+    current_backoff_secs: u64,
+    recovery_attempts: u32,
+    attention_file: Option<String>,
 }
 
 /// Incoming message request
@@ -127,8 +138,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+async fn health_check(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
     let metrics = state.metrics.read().await;
+    let policy = state.policy.read().await;
 
     // Get current DB size
     let db_size = std::fs::metadata(state.config.db_path())
@@ -143,8 +155,30 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
         .num_seconds()
         .max(0) as u64;
 
-    Json(HealthResponse {
-        status: "healthy",
+    let health_status = policy.status();
+    let policy_info = PolicyInfo {
+        health_status,
+        consecutive_errors: policy.consecutive_errors(),
+        current_backoff_secs: policy.error_backoff().as_secs(),
+        recovery_attempts: policy.recovery_attempts(),
+        attention_file: policy.attention_file_path(),
+    };
+
+    // Determine HTTP status code based on health status
+    let http_status = match health_status {
+        HealthStatus::Healthy | HealthStatus::Degraded => StatusCode::OK,
+        HealthStatus::NeedsAttention => StatusCode::SERVICE_UNAVAILABLE,
+    };
+
+    // Determine status string based on health status
+    let status_str = match health_status {
+        HealthStatus::Healthy => "healthy",
+        HealthStatus::Degraded => "degraded",
+        HealthStatus::NeedsAttention => "needs_attention",
+    };
+
+    (http_status, Json(HealthResponse {
+        status: status_str,
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: uptime,
         agent: AgentInfo {
@@ -173,7 +207,8 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
             tool_calls: metrics.tool_calls,
             tool_errors: metrics.tool_errors,
         },
-    })
+        policy: policy_info,
+    }))
 }
 
 async fn handle_incoming(
@@ -522,5 +557,84 @@ mod tests {
         assert!(health["context"]["usage_percent"].is_number());
         assert!(health["resources"]["rss_bytes"].is_number());
         assert!(health["counters"]["tool_calls"].is_number());
+    }
+
+    #[tokio::test]
+    async fn test_health_includes_policy_info() {
+        let (state, _rx) = test_state();
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Check policy info is present with expected structure
+        assert_eq!(health["policy"]["health_status"], "healthy");
+        assert_eq!(health["policy"]["consecutive_errors"], 0);
+        assert_eq!(health["policy"]["current_backoff_secs"], 0);
+        assert_eq!(health["policy"]["recovery_attempts"], 0);
+        // attention_file may be null or a string path, just check field exists
+        assert!(health["policy"].get("attention_file").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_health_returns_503_for_needs_attention() {
+        let (state, _rx) = test_state();
+
+        // Escalate the policy to NeedsAttention
+        {
+            let mut policy = state.policy.write().await;
+            let _ = policy.escalate("Test escalation", "Test context");
+        }
+
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(health["status"], "needs_attention");
+        assert_eq!(health["policy"]["health_status"], "needs_attention");
+    }
+
+    #[tokio::test]
+    async fn test_health_returns_200_for_degraded() {
+        let (state, _rx) = test_state();
+
+        // Degrade the policy (simulate some errors)
+        {
+            let mut policy = state.policy.write().await;
+            policy.on_turn_complete(1, 1); // 100% failure
+            policy.on_turn_complete(1, 1); // Another failure
+        }
+
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // Degraded still returns 200, just with degraded status
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(health["status"], "degraded");
+        assert_eq!(health["policy"]["health_status"], "degraded");
+        assert!(health["policy"]["consecutive_errors"].as_u64().unwrap() > 0);
     }
 }
