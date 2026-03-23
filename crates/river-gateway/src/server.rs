@@ -18,7 +18,7 @@ use crate::tools::{
     // Web tools
     WebFetchTool, WebSearchTool,
     // Communication tools
-    SendMessageTool, ListAdaptersTool, ReadChannelTool, AdapterRegistry,
+    SendMessageTool, ListAdaptersTool, ReadChannelTool, AdapterRegistry, SyncConversationTool,
     // Model management tools
     RequestModelTool, ReleaseModelTool, SwitchModelTool, ModelManagerConfig, ModelManagerState,
     // Scheduling tools
@@ -52,6 +52,14 @@ pub struct ServerConfig {
 
 /// Initialize and run the gateway server
 pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
+    // Migrate inbox/ to conversations/ if needed
+    let inbox_path = config.workspace.join("inbox");
+    let conversations_path = config.workspace.join("conversations");
+    if inbox_path.exists() && !conversations_path.exists() {
+        std::fs::rename(&inbox_path, &conversations_path)?;
+        tracing::info!("Migrated inbox/ to conversations/");
+    }
+
     // Initialize database
     let db_path = config.data_dir.join("river.db");
     let db = init_db(&db_path)?;
@@ -184,25 +192,32 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }
     }
 
-    // Create conversation writer channel (TODO: Task 8 will wire this to ConversationWriter)
-    let (conv_writer_tx, mut conv_writer_rx) = mpsc::channel::<crate::conversations::WriteOp>(256);
-    // Spawn a task to drain the receiver for now (will be replaced by ConversationWriter in Task 8)
+    // Create conversation writer channel
+    let (conv_writer_tx, conv_writer_rx) = mpsc::channel::<crate::conversations::WriteOp>(256);
+
+    // Spawn ConversationWriter task
+    use crate::conversations::writer::ConversationWriter;
+    let mut conversation_writer = ConversationWriter::new(conv_writer_rx);
     tokio::spawn(async move {
-        while let Some(_op) = conv_writer_rx.recv().await {
-            // TODO: Task 8 will replace this with ConversationWriter
-        }
+        conversation_writer.run().await;
     });
+    tracing::info!("Spawned ConversationWriter");
 
     registry.register(Box::new(SendMessageTool::new(
         adapter_registry.clone(),
         config.workspace.clone(),
         config.agent_name.clone(),
         agent_birth.to_string(),
-        conv_writer_tx,
+        conv_writer_tx.clone(),
     )));
     registry.register(Box::new(ListAdaptersTool::new(adapter_registry.clone())));
     registry.register(Box::new(ReadChannelTool::new(adapter_registry.clone())));
-    tracing::info!("Registered communication tools (send_message, list_adapters, read_channel)");
+    registry.register(Box::new(SyncConversationTool::new(
+        adapter_registry.clone(),
+        config.workspace.clone(),
+        conv_writer_tx.clone(),
+    )));
+    tracing::info!("Registered communication tools (send_message, list_adapters, read_channel, sync_conversation)");
 
     // Create and register model management tools (only if orchestrator is configured)
     if let Some(ref orchestrator_url) = config.orchestrator_url {
