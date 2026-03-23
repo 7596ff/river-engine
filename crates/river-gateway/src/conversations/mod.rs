@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod format;
+pub mod path;
 
 pub const CONVERSATIONS_DIR: &str = "conversations";
 
