@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -201,10 +202,10 @@ impl HealthPolicy {
             self.repeated_action_count = 0;
 
             if self.status == HealthStatus::Degraded {
+                self.log_recovery("Turn completed with 80%+ success rate");
                 self.status = HealthStatus::Healthy;
                 self.recovery_attempts = 0;
                 self.last_recovery = Some(Utc::now());
-                tracing::info!(event = "recovery", "Agent recovered to healthy");
             }
         } else if success_ratio < 0.5 {
             // 50%+ failure = escalate faster (counts as 2 errors)
@@ -225,6 +226,54 @@ impl HealthPolicy {
         } else if self.consecutive_errors >= 2 {
             self.status = HealthStatus::Degraded;
         }
+    }
+
+    fn log_recovery(&self, reason: &str) {
+        let recovery_log = self.data_dir.join("recovery.jsonl");
+
+        let entry = serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339(),
+            "agent": self.agent_name,
+            "previous_status": self.status,
+            "recovery_reason": reason,
+            "context": {
+                "consecutive_errors_before": self.consecutive_errors,
+                "recovery_attempts": self.recovery_attempts,
+                "last_error": self.last_error.map(|t| t.to_rfc3339()),
+                "tool_failures": self.tool_failures.keys().collect::<Vec<_>>(),
+            }
+        });
+
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&recovery_log)
+        {
+            Ok(mut file) => {
+                if let Err(e) = writeln!(file, "{}", entry) {
+                    tracing::warn!(
+                        event = "recovery.log_write_failed",
+                        error = %e,
+                        "Failed to write recovery log"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    event = "recovery.log_open_failed",
+                    path = %recovery_log.display(),
+                    error = %e,
+                    "Failed to open recovery log file"
+                );
+            }
+        }
+
+        tracing::info!(
+            event = "recovery.complete",
+            reason = reason,
+            attempts = self.recovery_attempts,
+            "Agent recovered"
+        );
     }
 
     /// Handle model API error, returning appropriate action
@@ -826,5 +875,29 @@ I rotated the API key. Try again.
         let response = policy.check_attention_cleared();
         assert!(response.is_some());
         assert!(response.unwrap().contains("Fixed the issue"));
+    }
+
+    // Task 8: Recovery memory logging tests
+
+    #[test]
+    fn test_recovery_logged_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+        // Degrade then recover
+        policy.on_turn_complete(1, 1);
+        policy.on_turn_complete(1, 1);
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+
+        policy.on_turn_complete(5, 0); // Clean turn
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+
+        // Check recovery.jsonl exists and has content
+        let log_path = dir.path().join("recovery.jsonl");
+        assert!(log_path.exists());
+
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains("recovery"));
+        assert!(content.contains("test")); // agent name
     }
 }
