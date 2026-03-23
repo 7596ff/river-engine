@@ -158,10 +158,12 @@ Search vectors, decide what the agent should see next turn.
 - Relevant notes from the zettelkasten (full text)
 - The spectator *selects*, the note *speaks*
 
-**What it doesn't surface:**
-- Everything vaguely related (noise)
-- Things already in hot context (redundant)
-- Stale superseded information
+**What stays cold** (still there, just not surfaced this turn):
+- Tangentially related notes (retrievable if context shifts)
+- Things already in hot context (no duplication needed)
+- Superseded information (kept for history, not active use)
+
+**Nothing is deleted.** The spectator moves between layers, doesn't erase.
 
 ---
 
@@ -513,7 +515,7 @@ enum FlashTTL {
 | Spectator pushes flash | Add to queue with TTL |
 | Turn begins | Decrement turn-based TTLs |
 | Clock tick | Check time-based TTLs |
-| TTL expires | Drop flash |
+| TTL expires | Flash fades (note remains in cold storage) |
 | Duplicate content pushed | Refresh TTL |
 | Context assembler reads | Non-destructive, flashes persist until expired |
 
@@ -569,6 +571,20 @@ If agent is mid-turn when spectator sends a Flash:
 ---
 
 ## Editorial Model
+
+### The Transformation Principle
+
+**All text is transformed, never deleted.** The spectator moves content between layers:
+
+```
+Hot (recent messages)
+  ↓ compress
+Warm (moves, flashes)
+  ↓ archive
+Cold (searchable, not active)
+```
+
+Even "background" content (phatic exchanges, superseded info) persists in cold storage. Nothing is erased — only moved to lower layers of accessibility.
 
 ### Permissions
 
@@ -692,9 +708,12 @@ max_tokens = 300
 ```toml
 [compression.quality]
 temperature = 0.3
-preserve = ["decisions", "outcomes", "emotional_texture", "unresolved_threads"]
-drop = ["phatic", "redundant_attempts", "superseded", "debugging_steps"]
+foreground = ["decisions", "outcomes", "emotional_texture", "unresolved_threads"]
+background = ["phatic", "redundant_attempts", "superseded", "debugging_steps"]
 ```
+
+**Foreground:** Include in the summary (moves to warm).
+**Background:** Archive to cold storage, not in summary but still searchable.
 
 ### Presets
 
