@@ -186,6 +186,7 @@ async fn list_tools(
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::metrics::AgentMetrics;
     use crate::r#loop::MessageQueue;
     use crate::state::GatewayConfig;
     use crate::subagent::SubagentManager;
@@ -194,6 +195,7 @@ mod tests {
     use axum::http::Request;
     use river_core::{AgentBirth, SnowflakeGenerator};
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tokio::sync::{mpsc, RwLock};
     use tower::ServiceExt;
 
@@ -219,8 +221,13 @@ mod tests {
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
+        let metrics = Arc::new(RwLock::new(AgentMetrics::new(
+            "test-agent".to_string(),
+            Utc::now(),
+            65536,
+        )));
         // No auth token for basic tests - tests that need auth should set it explicitly
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager)), loop_rx)
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager, metrics)), loop_rx)
     }
 
     #[tokio::test]
@@ -302,7 +309,12 @@ mod tests {
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager)), loop_rx)
+        let metrics = Arc::new(RwLock::new(AgentMetrics::new(
+            "test-agent".to_string(),
+            Utc::now(),
+            65536,
+        )));
+        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager, metrics)), loop_rx)
     }
 
     #[tokio::test]

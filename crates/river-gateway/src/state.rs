@@ -2,6 +2,7 @@
 
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::metrics::AgentMetrics;
 use crate::r#loop::{LoopEvent, MessageQueue};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::subagent::SubagentManager;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub auth_token: Option<String>,
     /// Subagent manager
     pub subagent_manager: Arc<RwLock<SubagentManager>>,
+    /// Shared metrics for observability
+    pub metrics: Arc<RwLock<AgentMetrics>>,
 }
 
 /// Gateway configuration (runtime)
@@ -43,6 +46,12 @@ pub struct GatewayConfig {
     pub redis: Option<RedisConfig>,
 }
 
+impl GatewayConfig {
+    pub fn db_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("river.db")
+    }
+}
+
 impl AppState {
     pub fn new(
         config: GatewayConfig,
@@ -54,6 +63,7 @@ impl AppState {
         message_queue: Arc<MessageQueue>,
         auth_token: Option<String>,
         subagent_manager: Arc<RwLock<SubagentManager>>,
+        metrics: Arc<RwLock<AgentMetrics>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
         let executor = ToolExecutor::new(registry);
@@ -69,6 +79,7 @@ impl AppState {
             config,
             auth_token,
             subagent_manager,
+            metrics,
         }
     }
 }
@@ -77,7 +88,9 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::metrics::AgentMetrics;
     use crate::tools::ToolRegistry;
+    use chrono::Utc;
     use river_core::SnowflakeGenerator;
 
     #[tokio::test]
@@ -103,6 +116,11 @@ mod tests {
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
+        let metrics = Arc::new(RwLock::new(AgentMetrics::new(
+            "test".to_string(),
+            Utc::now(),
+            65536,
+        )));
         let state = AppState::new(
             config,
             db,
@@ -113,6 +131,7 @@ mod tests {
             message_queue,
             None,
             subagent_manager,
+            metrics,
         );
 
         assert_eq!(state.config.port, 3000);

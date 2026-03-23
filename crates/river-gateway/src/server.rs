@@ -3,6 +3,7 @@
 use crate::api::create_router;
 use crate::db::init_db;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
+use crate::metrics::AgentMetrics;
 use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
@@ -23,6 +24,7 @@ use crate::tools::{
     // Logging tools
     LogReadTool,
 };
+use chrono::Utc;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -266,6 +268,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         None
     };
 
+    // Create metrics
+    let metrics = Arc::new(RwLock::new(AgentMetrics::new(
+        gateway_config.agent_name.clone(),
+        Utc::now(),
+        gateway_config.context_limit,
+    )));
+
     // Create app state
     let state = Arc::new(AppState::new(
         gateway_config,
@@ -277,6 +286,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         message_queue.clone(),
         auth_token,
         subagent_manager,
+        metrics,
     ));
 
     // Spawn the agent loop
