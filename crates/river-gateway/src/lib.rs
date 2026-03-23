@@ -15,3 +15,4 @@ pub mod git;
 pub mod inbox;
 pub mod subagent;
 pub mod metrics;
+pub mod logging;
