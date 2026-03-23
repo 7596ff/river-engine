@@ -341,6 +341,77 @@ impl HealthPolicy {
             self.low_progress_turns = 0;
         }
     }
+
+    /// Check ATTENTION.md for clearance or human response
+    pub fn check_attention_cleared(&mut self) -> Option<String> {
+        if self.status != HealthStatus::NeedsAttention {
+            return None;
+        }
+
+        let attention_path = self.data_dir.join("ATTENTION.md");
+        if !attention_path.exists() {
+            // Human deleted the file — allow recovery on next clean turn
+            self.status = HealthStatus::Degraded;
+            self.attention_created_at = None;
+            tracing::info!(event = "attention.cleared", "ATTENTION.md removed, allowing recovery");
+            return None;
+        }
+
+        // Check for human response in the file
+        match std::fs::read_to_string(&attention_path) {
+            Ok(content) => {
+                if let Some(response) = Self::parse_human_response(&content) {
+                    tracing::info!(
+                        event = "attention.response",
+                        response = %response,
+                        "Human responded to ATTENTION.md"
+                    );
+                    return Some(response);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    event = "attention.read_error",
+                    error = %e,
+                    path = %attention_path.display(),
+                    "Failed to read ATTENTION.md"
+                );
+            }
+        }
+        None
+    }
+
+    /// Parse human response from ATTENTION.md
+    pub fn parse_human_response(content: &str) -> Option<String> {
+        // Look for "## Response" section added by human
+        if let Some(idx) = content.find("## Response") {
+            let response_section = &content[idx..];
+            let response: String = response_section
+                .lines()
+                .skip(1) // Skip "## Response" header
+                .take_while(|line| !line.starts_with("##"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+
+            // Only return if there's actual content beyond the placeholder
+            if !response.is_empty() && !response.contains("(Add your response here)") {
+                return Some(response);
+            }
+        }
+        None
+    }
+
+    /// Get ATTENTION.md path if it exists
+    pub fn attention_file_path(&self) -> Option<String> {
+        let path = self.data_dir.join("ATTENTION.md");
+        if path.exists() {
+            Some(path.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -685,5 +756,75 @@ mod tests {
         policy.record_turn_tokens(1520, 1540);
 
         assert_eq!(policy.status(), HealthStatus::Healthy);
+    }
+
+    // Task 7: Bidirectional ATTENTION.md tests
+
+    #[test]
+    fn test_attention_cleared_on_file_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+        // Escalate to create ATTENTION.md
+        policy.escalate("Test", "Context").unwrap();
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+
+        // File exists, no response yet
+        assert!(policy.check_attention_cleared().is_none());
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+
+        // Delete the file
+        std::fs::remove_file(dir.path().join("ATTENTION.md")).unwrap();
+
+        // Now it should clear
+        assert!(policy.check_attention_cleared().is_none());
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_parse_human_response() {
+        let content = r#"# Attention Required
+
+**Agent:** test
+**Time:** 2026-03-23T14:30:00Z
+**Reason:** Test
+
+## Context
+
+Test context
+
+## To Clear
+
+Delete this file.
+
+---
+
+## Response
+
+I rotated the API key. Try again.
+
+— Cassie
+"#;
+
+        let response = HealthPolicy::parse_human_response(content);
+        assert!(response.is_some());
+        assert!(response.unwrap().contains("I rotated the API key"));
+    }
+
+    #[test]
+    fn test_check_attention_returns_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+        // First escalate to set status to NeedsAttention
+        policy.escalate("Test", "Context").unwrap();
+
+        // Overwrite ATTENTION.md with a response
+        let content = "# Attention\n\n## Response\n\nFixed the issue.\n";
+        std::fs::write(dir.path().join("ATTENTION.md"), content).unwrap();
+
+        let response = policy.check_attention_cleared();
+        assert!(response.is_some());
+        assert!(response.unwrap().contains("Fixed the issue"));
     }
 }
