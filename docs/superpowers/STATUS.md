@@ -1,6 +1,6 @@
 # River Engine Implementation Status
 
-**Last Updated:** 2026-03-16
+**Last Updated:** 2026-03-23
 
 ## Completed
 
@@ -108,9 +108,40 @@
   - CUDA-optional llama-cpp
   - All River binaries
 
-## Next Up
+## Next Up: I/You Architecture Restructure
 
-(No pending plans)
+**Master Spec:** `docs/superpowers/specs/2026-03-23-iyou-architecture-design.md`
+
+### Implementation Plans (dependency order)
+
+| # | Phase | Plan | Depends On | Est. Scope |
+|---|-------|------|------------|------------|
+| 1 | **Phase 0: Extract Crates** | `plans/2026-03-23-plan-phase0-extract-crates.md` | — | ~40 steps |
+| 2 | **Phase 1: Embeddings** | `plans/2026-03-23-plan-phase1-embeddings.md` | Phase 0 | ~30 steps |
+| 3 | **Phase 2: Flash Queue** | `plans/2026-03-23-plan-phase2-flash-queue.md` | Phase 0 | ~10 steps |
+| 4 | **Phase 3: Context Assembly** | `plans/2026-03-23-plan-phase3-context-assembly.md` | Phase 1, 2 | ~15 steps |
+| 5 | **Phase 4: Coordinator** | `plans/2026-03-23-plan-phase4-coordinator.md` | Phase 3 | ~15 steps |
+| 6 | **Phase 5: Agent Task** | `plans/2026-03-23-plan-phase5-agent-task.md` | Phase 4 | ~20 steps |
+| 7 | **Phase 6: Spectator** | `plans/2026-03-23-plan-phase6-spectator.md` | Phase 5 | ~20 steps |
+| 8 | **Phase 7: Integration** | `plans/2026-03-23-plan-phase7-integration.md` | Phase 6 | ~20 steps |
+
+### Independent Track
+
+| # | Plan | Depends On | Est. Scope |
+|---|------|------------|------------|
+| — | **Adapter Framework** | `plans/2026-03-23-plan-adapter-framework.md` | None (parallel) | ~25 steps |
+
+### Dependency Graph
+
+```
+Phase 0 ──► Phase 1 ──┐
+              │        ├──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6 ──► Phase 7
+Phase 0 ──► Phase 2 ──┘
+
+(Independent) Adapter Framework
+```
+
+### Estimated Total: ~195 steps across 9 plans
 
 ## Key Files
 
