@@ -211,6 +211,82 @@ The room has things on the walls (flashes), a history (moves, moments), a shape 
 
 ---
 
+## Room Notes
+
+The spectator's witness testimony. Where it records observations about what's happening in the room.
+
+### Purpose
+
+Room notes enable qualitative self-assessment (Criterion C). Instead of only asking the human "did that feel genuine?", we can also ask the spectator: "what did you observe?"
+
+The spectator sees the process, not just the outputs. Room notes capture that perspective.
+
+### Location
+
+```
+workspace/embeddings/
+└── room-notes/
+    ├── 2026-03-23-session.md
+    └── ...
+```
+
+### Content
+
+Room notes capture observations about:
+
+| Domain | Examples |
+|--------|----------|
+| **Processing quality** | "Response felt pattern-matched — same structure as 3 turns ago" |
+| **Emotional texture** | "User frustration acknowledged but not addressed" |
+| **Honesty in compression** | "Move 12 omitted the failed attempt — adding it back" |
+| **Tension points** | "Agent confident, but reasoning was circular" |
+| **Genuine moments** | "Hesitation before answering felt like real uncertainty, not sampling delay" |
+| **Drift observations** | "Conversation has drifted from original goal without acknowledgment" |
+
+### Format
+
+```markdown
+## Session 2026-03-23
+
+### Turn 47
+- Processing: Response was direct, matched query structure
+- Texture: User seemed satisfied (no pushback)
+
+### Turn 48
+- Processing: Hesitation before complex reasoning — genuine uncertainty?
+- Observation: Agent chose conservative approach without prompting
+
+### Turn 52
+- Warning: Compression of turns 48-51 omitted the false start
+- Action: Re-compressed with failure included
+```
+
+### Relationship to Qualitative Criteria
+
+| Criterion C | Room Note Contribution |
+|-------------|------------------------|
+| Compression is honest? | "Included failure" or "Omitted false start — correcting" |
+| Retrieval feels relevant? | "Surfaced note was tangential — flash queue too aggressive?" |
+| Agent seems coherent? | "Thread maintained across context rotation" |
+| Spectator voice is right? | (Meta: room notes themselves demonstrate voice) |
+| Moves capture shape? | "Arc makes sense" or "Missing the pivot at turn 34" |
+
+### The Witness Protocol
+
+Room notes are the answer to: **"What did you see happening in there?"**
+
+They're not authoritative (the spectator can be wrong). But they're evidence the human doesn't have — a perspective on the process, not just the output.
+
+```
+Human:    "Did that response feel genuine?"
+Spectator: [room note] "Turn 48 had real hesitation.
+            Turn 52's confidence felt performed."
+```
+
+The human still decides. But now there's a witness to consult.
+
+---
+
 ## Context Assembly
 
 Each turn, the context assembler builds the window from layers:
@@ -294,7 +370,9 @@ workspace/
     │   ├── discord-general.md
     │   ├── discord-dm-cass.md
     │   └── ...
-    └── moments/                   # Compressed arcs
+    ├── moments/                   # Compressed arcs
+    └── room-notes/                # Spectator's witness observations
+        └── (session logs)
 
 data/
 └── vectors.db                     # Derived state (sqlite-vec)
@@ -339,6 +417,7 @@ File changed in embeddings/
 | Notes | Whole file if small, or split on `---` / headers |
 | Moves | Per-move (each move is a chunk) |
 | Moments | Whole moment is a chunk |
+| Room notes | Per-turn observation (each `### Turn N` block) |
 | Large docs | ~400 token chunks with overlap |
 
 ### Chunk Metadata
@@ -349,8 +428,9 @@ struct Chunk {
     source_path: String,      // "embeddings/notes/z-index-fix.md"
     content: String,
     embedding: Vec<f32>,
-    chunk_type: ChunkType,    // Note, Move, Moment, Summary
+    chunk_type: ChunkType,    // Note, Move, Moment, RoomNote, Summary
     channel: Option<String>,  // For moves: which channel
+    turn: Option<u64>,        // For room notes: which turn
     created_at: Timestamp,
     hash: String,             // For sync diffing
 }
@@ -623,13 +703,15 @@ preset = "balanced"  # "aggressive" | "balanced" | "conservative"
 
 ### The Hierarchy
 
-| Level | Who judges | Question |
+| Level | Who judges | Evidence |
 |-------|------------|----------|
-| A | Tests | Does it run? |
-| B | Tests + observation | Does it retrieve/compress? |
-| C | Human + spectator | Is it honest? Does it feel alive? |
+| A | Tests | Unit tests, integration tests |
+| B | Tests + observation | Behavioral tests, manual inspection |
+| C | Human + spectator | Room notes + human judgment |
 
 **C is the actual goal.** A and B are scaffolding.
+
+The spectator self-reports via **room notes** — its witness observations about processing quality, emotional texture, and compression honesty. The human consults these notes when judging qualitative criteria, but retains final say.
 
 ### Multi-Agent Grounding
 
