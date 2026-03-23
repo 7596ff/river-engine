@@ -95,6 +95,15 @@ The shiny stuff. Build after core works.
 
 **Principle:** Forest resilience — one tree dies, others take over.
 
+## Tmux Integration
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Tmux tool | 🔴 | Create/attach sessions, run commands in panes |
+| Session persistence | 🔴 | Agent can resume terminal sessions across restarts |
+
+**Concept:** Agent gets persistent terminal sessions. Long-running processes, interactive debugging, process monitoring.
+
 ## Web & Search
 
 | Feature | Status | Notes |
@@ -103,6 +112,8 @@ The shiny stuff. Build after core works.
 | Web fetch | 🟢 | Exists |
 | SSRF protection | 🔴 | URL validation, private IP blocking |
 | Content caching | 🔴 | SQLite, 15min TTL |
+
+**Stack:** SearXNG (meta-search) → fetch top N → scrape/extract → return to agent
 
 ## Media & Voice
 
@@ -147,15 +158,17 @@ The shiny stuff. Build after core works.
 
 # Specs
 
-| Spec | Status |
-|------|--------|
-| Context Assembly & I/You | 🟢 `docs/specs/context-assembly-design.md` |
-| Adapter Framework | 🟢 `docs/specs/adapter-framework-design.md` |
-| Gateway Restructure | 🟢 `docs/specs/gateway-restructure-meta-plan.md` |
-| Resilience | 🔴 Needs spec |
-| Utterances | 🔴 Needs spec |
-| Skills | 🔴 Needs spec |
-| MCP | 🔴 Needs spec |
+| Spec | Status | Priority |
+|------|--------|----------|
+| Context Assembly & I/You | 🟢 `docs/specs/context-assembly-design.md` | — |
+| Adapter Framework | 🟢 `docs/specs/adapter-framework-design.md` | — |
+| Gateway Restructure | 🟢 `docs/specs/gateway-restructure-meta-plan.md` | — |
+| Tmux Integration | 🔴 Needs spec | Next |
+| Web & Search | 🔴 Needs spec | Next |
+| Resilience | 🔴 Needs spec | Next |
+| Utterances | 🔴 Needs spec | Next |
+| Skills | 🔴 Needs spec | Later |
+| MCP | 🔴 Needs spec | Later |
 
 ---
 
