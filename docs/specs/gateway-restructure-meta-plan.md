@@ -205,18 +205,22 @@ river-gateway/src/
 ```
 Phase 0: Extract crates (tools, db, adapter)
     │
-    ├──► Phase 0.5: Discord refactor ─────────────────────┐
+    ├──► COMMUNICATION ───────────────────────────────────┐
+    │    Phase 0.5: Discord refactor                      │
     │                                                      │
-    └──► Phase 1 ──► Phase 2 ──► Phase 3 ────────────────┤
+    └──► COGNITION ───────────────────────────────────────┤
+         Phase 1 ──► Phase 2 ──► Phase 3                  │
          (embeddings) (flash)   (context)                 │
                                                           ▼
                                                       Phase 4 ──► Phase 5 ──► Phase 6 ──► Phase 7
                                                     (coordinator) (agent)   (spectator) (integration)
 ```
 
-- Phase 0.5 and Phases 1-3 can run in parallel after Phase 0
-- Phase 4-7 are sequential (coordinator → agent → spectator → integration)
-- Both tracks must complete before Phase 4
+**Two tracks after Phase 0:**
+- **Communication** (Phase 0.5) — Adapter types, Discord refactor
+- **Cognition** (Phases 1-7) — Memory, context, the I/You dialectic
+
+Both tracks must complete before Phase 4.
 
 ## Risk Mitigation
 
