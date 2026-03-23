@@ -9,6 +9,9 @@ use std::time::Duration;
 /// Decay period for tool failures (1 hour)
 const TOOL_FAILURE_DECAY_SECS: i64 = 3600;
 
+/// Maximum backoff for consecutive errors (15 minutes)
+const BACKOFF_CAP_SECS: u64 = 900;
+
 /// Health status reflecting agent capability
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -142,6 +145,57 @@ impl HealthPolicy {
             entry.1 = Utc::now();
         }
     }
+
+    /// Get global error backoff based on consecutive errors
+    pub fn error_backoff(&self) -> Duration {
+        if self.consecutive_errors == 0 {
+            return Duration::ZERO;
+        }
+        let base = 60u64; // 1 minute
+        let multiplier = 2u64.saturating_pow(self.consecutive_errors.saturating_sub(1));
+        Duration::from_secs(std::cmp::min(base.saturating_mul(multiplier), BACKOFF_CAP_SECS))
+    }
+
+    /// Called at end of turn with call counts (not binary had_errors)
+    pub fn on_turn_complete(&mut self, total_calls: u32, failed_calls: u32) {
+        let success_ratio = if total_calls == 0 {
+            1.0 // No calls = clean turn
+        } else {
+            (total_calls.saturating_sub(failed_calls)) as f64 / total_calls as f64
+        };
+
+        if success_ratio >= 0.8 {
+            // 80%+ success = "clean enough" to recover
+            self.consecutive_errors = 0;
+            self.low_progress_turns = 0;
+            self.repeated_action_count = 0;
+
+            if self.status == HealthStatus::Degraded {
+                self.status = HealthStatus::Healthy;
+                self.recovery_attempts = 0;
+                self.last_recovery = Some(Utc::now());
+                tracing::info!(event = "recovery", "Agent recovered to healthy");
+            }
+        } else if success_ratio < 0.5 {
+            // 50%+ failure = escalate faster (counts as 2 errors)
+            self.consecutive_errors = self.consecutive_errors.saturating_add(2);
+            self.last_error = Some(Utc::now());
+            self.update_status_from_errors();
+        } else {
+            // Between 50-80% success = normal error accumulation
+            self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+            self.last_error = Some(Utc::now());
+            self.update_status_from_errors();
+        }
+    }
+
+    fn update_status_from_errors(&mut self) {
+        if self.consecutive_errors >= 6 {
+            self.status = HealthStatus::NeedsAttention;
+        } else if self.consecutive_errors >= 2 {
+            self.status = HealthStatus::Degraded;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,5 +278,90 @@ mod tests {
 
         // After decay, backoff should be zero
         assert_eq!(policy.tool_backoff("bash"), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_error_backoff_escalates() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        assert_eq!(policy.error_backoff(), Duration::ZERO);
+
+        // 100% failure (1/1) counts as +2 errors
+        policy.on_turn_complete(1, 1);
+        assert_eq!(policy.consecutive_errors(), 2);
+        assert_eq!(policy.error_backoff(), Duration::from_secs(120)); // 2^1 * 60
+
+        // Another 100% failure
+        policy.on_turn_complete(1, 1);
+        assert_eq!(policy.consecutive_errors(), 4);
+    }
+
+    #[test]
+    fn test_error_backoff_caps_at_15_minutes() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        // Many failures
+        for _ in 0..20 {
+            policy.on_turn_complete(1, 1);
+        }
+
+        assert_eq!(policy.error_backoff(), Duration::from_secs(900)); // 15 min cap
+    }
+
+    #[test]
+    fn test_success_ratio_recovery() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        // Degrade the agent
+        policy.on_turn_complete(1, 1);
+        policy.on_turn_complete(1, 1);
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+
+        // 80% success rate (4/5 succeed) should recover
+        policy.on_turn_complete(5, 1);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+        assert_eq!(policy.consecutive_errors(), 0);
+    }
+
+    #[test]
+    fn test_needs_attention_after_six_errors() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        // 3 turns of 100% failure = 6 errors
+        policy.on_turn_complete(1, 1);
+        policy.on_turn_complete(1, 1);
+        policy.on_turn_complete(1, 1);
+
+        assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+    }
+
+    #[test]
+    fn test_zero_calls_is_clean_turn() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        // Degrade the agent first
+        policy.on_turn_complete(1, 1);
+        policy.on_turn_complete(1, 1);
+        assert_eq!(policy.status(), HealthStatus::Degraded);
+
+        // Zero calls is treated as 100% success (clean turn)
+        policy.on_turn_complete(0, 0);
+        assert_eq!(policy.status(), HealthStatus::Healthy);
+        assert_eq!(policy.consecutive_errors(), 0);
+    }
+
+    #[test]
+    fn test_partial_failure_accumulates_one_error() {
+        let mut policy = HealthPolicy::new("test".to_string(), PathBuf::from("/tmp"));
+
+        // 60% success (3/5 succeed) = between 50-80%, adds 1 error
+        policy.on_turn_complete(5, 2);
+        assert_eq!(policy.consecutive_errors(), 1);
+        assert_eq!(policy.status(), HealthStatus::Healthy); // Still healthy with 1 error
+
+        // Another 60% success adds 1 more, now 2 errors = Degraded
+        policy.on_turn_complete(5, 2);
+        assert_eq!(policy.consecutive_errors(), 2);
+        assert_eq!(policy.status(), HealthStatus::Degraded);
     }
 }
