@@ -5,6 +5,8 @@ use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt
 use twilight_http::Client as HttpClient;
 use twilight_model::id::{marker::GuildMarker, Id};
 
+use crate::outbound::{ReadMessage, ReadReaction};
+
 /// Shared Discord HTTP client (for sending messages)
 /// Can be cloned and shared across tasks
 #[derive(Clone)]
@@ -79,6 +81,55 @@ impl DiscordSender {
         let thread = response.model().await?;
 
         Ok(thread.id.get())
+    }
+
+    /// Read messages from a channel
+    pub async fn read_messages(
+        &self,
+        channel_id: u64,
+        limit: u16,
+        before: Option<u64>,
+    ) -> anyhow::Result<Vec<ReadMessage>> {
+        use twilight_model::channel::message::EmojiReactionType;
+        use twilight_model::id::{marker::ChannelMarker, marker::MessageMarker, Id};
+
+        let channel: Id<ChannelMarker> = Id::new(channel_id);
+
+        let request = self.http.channel_messages(channel).limit(limit);
+
+        let response = if let Some(before_id) = before {
+            let msg: Id<MessageMarker> = Id::new(before_id);
+            request.before(msg).await?
+        } else {
+            request.await?
+        };
+
+        let messages = response.models().await?;
+
+        Ok(messages
+            .into_iter()
+            .map(|m| ReadMessage {
+                id: m.id.to_string(),
+                author_id: m.author.id.to_string(),
+                author_name: m.author.name.clone(),
+                content: m.content.clone(),
+                timestamp: m.timestamp.as_secs(),
+                is_bot: m.author.bot,
+                reactions: m
+                    .reactions
+                    .iter()
+                    .map(|r| ReadReaction {
+                        emoji: match &r.emoji {
+                            EmojiReactionType::Unicode { name } => name.clone(),
+                            EmojiReactionType::Custom { id, name, .. } => {
+                                format!("<:{}:{}>", name.as_deref().unwrap_or(""), id)
+                            }
+                        },
+                        count: r.count as usize,
+                    })
+                    .collect(),
+            })
+            .collect())
     }
 }
 

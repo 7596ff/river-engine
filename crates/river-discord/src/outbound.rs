@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     routing::{delete, get, post},
     Json, Router,
@@ -91,6 +91,38 @@ pub struct HealthResponse {
     pub channel_count: usize,
 }
 
+/// Read message query parameters
+#[derive(Debug, Deserialize)]
+pub struct ReadQuery {
+    pub channel: String,
+    #[serde(default = "default_limit")]
+    pub limit: u64,
+    pub before: Option<String>,
+}
+
+fn default_limit() -> u64 {
+    50
+}
+
+/// Read message response
+#[derive(Debug, Serialize)]
+pub struct ReadMessage {
+    pub id: String,
+    pub author_id: String,
+    pub author_name: String,
+    pub content: String,
+    pub timestamp: i64,
+    pub is_bot: bool,
+    pub reactions: Vec<ReadReaction>,
+}
+
+/// Message reaction
+#[derive(Debug, Serialize)]
+pub struct ReadReaction {
+    pub emoji: String,
+    pub count: usize,
+}
+
 /// Shared application state for HTTP server
 pub struct AppState {
     pub channels: Arc<ChannelState>,
@@ -129,6 +161,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/send", post(handle_send))
+        .route("/read", get(handle_read))
         .route("/channels", get(list_channels))
         .route("/channels", post(add_channel))
         .route("/channels/{id}", delete(remove_channel))
@@ -376,6 +409,68 @@ async fn remove_channel(
     }
 }
 
+async fn handle_read(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReadQuery>,
+) -> Result<Json<Vec<ReadMessage>>, (StatusCode, Json<SendResponse>)> {
+    let discord_guard = state.discord.read().await;
+    let Some(ref discord) = *discord_guard else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("discord client not initialized".to_string()),
+            }),
+        ));
+    };
+
+    let channel_id: u64 = query.channel.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("invalid channel id".to_string()),
+            }),
+        )
+    })?;
+
+    let before_id: Option<u64> = query
+        .before
+        .as_ref()
+        .map(|s| s.parse())
+        .transpose()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(SendResponse {
+                    success: false,
+                    message_id: None,
+                    error: Some("invalid before message id".to_string()),
+                }),
+            )
+        })?;
+
+    let limit = query.limit.min(100) as u16;
+
+    let messages = discord
+        .read_messages(channel_id, limit, before_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(SendResponse {
+                    success: false,
+                    message_id: None,
+                    error: Some(format!("discord api error: {}", e)),
+                }),
+            )
+        })?;
+
+    Ok(Json(messages))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,5 +616,115 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(channels.contains(999).await);
+    }
+
+    #[test]
+    fn test_read_query_default_limit() {
+        let json = r#"{"channel": "123"}"#;
+        let query: ReadQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.channel, "123");
+        assert_eq!(query.limit, 50);
+        assert_eq!(query.before, None);
+    }
+
+    #[test]
+    fn test_read_query_with_limit_and_before() {
+        let json = r#"{"channel": "123", "limit": 25, "before": "999"}"#;
+        let query: ReadQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.channel, "123");
+        assert_eq!(query.limit, 25);
+        assert_eq!(query.before, Some("999".to_string()));
+    }
+
+    #[test]
+    fn test_read_message_serialization() {
+        let msg = ReadMessage {
+            id: "123".to_string(),
+            author_id: "456".to_string(),
+            author_name: "TestUser".to_string(),
+            content: "Hello".to_string(),
+            timestamp: 1234567890,
+            is_bot: false,
+            reactions: vec![ReadReaction {
+                emoji: "👍".to_string(),
+                count: 3,
+            }],
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"id\":\"123\""));
+        assert!(json.contains("\"author_name\":\"TestUser\""));
+        assert!(json.contains("\"reactions\":["));
+    }
+
+    #[tokio::test]
+    async fn test_read_endpoint_no_discord_client() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let channels = ChannelState::new(vec![111], None);
+        let state = AppState::new(channels);
+
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/read?channel=111")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_read_endpoint_invalid_channel() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let channels = ChannelState::new(vec![], None);
+        let state = AppState::new(channels);
+
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/read?channel=invalid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Without Discord client, service is unavailable before validation
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn test_read_endpoint_invalid_before() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let channels = ChannelState::new(vec![], None);
+        let state = AppState::new(channels);
+
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/read?channel=111&before=invalid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Without Discord client, service is unavailable before validation
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
