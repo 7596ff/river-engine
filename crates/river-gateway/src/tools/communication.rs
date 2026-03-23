@@ -2,12 +2,14 @@
 //!
 //! These tools allow the agent to send messages through configured communication adapters.
 
+use crate::conversations::{Author, Message, WriteOp};
 use crate::tools::{Tool, ToolResult};
 use river_core::RiverError;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
 /// Adapter endpoint configuration
@@ -53,13 +55,34 @@ impl AdapterRegistry {
 pub struct SendMessageTool {
     registry: Arc<RwLock<AdapterRegistry>>,
     http_client: reqwest::Client,
+    workspace: PathBuf,
+    agent_name: String,
+    agent_id: String,
+    writer_tx: mpsc::Sender<WriteOp>,
 }
 
 impl SendMessageTool {
-    pub fn new(registry: Arc<RwLock<AdapterRegistry>>) -> Self {
+    pub fn new(
+        registry: Arc<RwLock<AdapterRegistry>>,
+        workspace: PathBuf,
+        agent_name: String,
+        agent_id: String,
+        writer_tx: mpsc::Sender<WriteOp>,
+    ) -> Self {
         Self {
             registry,
             http_client: reqwest::Client::new(),
+            workspace,
+            agent_name,
+            agent_id,
+            writer_tx,
+        }
+    }
+
+    fn agent_author(&self) -> Author {
+        Author {
+            name: self.agent_name.clone(),
+            id: self.agent_id.clone(),
         }
     }
 }
@@ -136,6 +159,9 @@ impl Tool for SendMessageTool {
         // Block on async operation
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
+        let writer_tx = self.writer_tx.clone();
+        let workspace = self.workspace.clone();
+        let agent_author = self.agent_author();
         let adapter = adapter.to_string();
         let channel = channel.to_string();
         let content = content.to_string();
@@ -196,6 +222,29 @@ impl Tool for SendMessageTool {
                         channel = %channel,
                         "SendMessageTool: Message sent successfully"
                     );
+
+                    // Record outgoing message
+                    // Generate a timestamp-based ID since Discord doesn't return message_id in response
+                    let message_id = format!("out-{}", chrono::Utc::now().timestamp_millis());
+                    let conv_path = crate::conversations::path::build_discord_path(
+                        &workspace,
+                        None, // Guild info not available in current flow
+                        None,
+                        &channel,
+                        &channel, // Use channel ID as name (simplified)
+                    );
+
+                    let msg = Message::outgoing(
+                        &message_id,
+                        agent_author.clone(),
+                        &content,
+                    );
+
+                    let _ = writer_tx.send(WriteOp::Message {
+                        path: conv_path,
+                        msg,
+                    }).await;
+
                     Ok(ToolResult::success(format!(
                         "Message sent to {} via {}",
                         channel, adapter
@@ -209,6 +258,27 @@ impl Tool for SendMessageTool {
                         channel = %channel,
                         "SendMessageTool: Adapter returned error"
                     );
+
+                    // Record failed message
+                    let conv_path = crate::conversations::path::build_discord_path(
+                        &workspace,
+                        None,
+                        None,
+                        &channel,
+                        &channel,
+                    );
+
+                    let msg = Message::failed(
+                        agent_author.clone(),
+                        &format!("Adapter returned error {}", status),
+                        &content,
+                    );
+
+                    let _ = writer_tx.send(WriteOp::Message {
+                        path: conv_path,
+                        msg,
+                    }).await;
+
                     Err(RiverError::tool(format!(
                         "Adapter returned error {}: {}",
                         status, body
@@ -537,16 +607,46 @@ mod tests {
         assert_eq!(tool.description(), "List available communication adapters");
     }
 
-    #[test]
-    fn test_send_message_tool_schema() {
+    #[tokio::test]
+    async fn test_send_message_tool_schema() {
+        use std::path::PathBuf;
+        use tokio::sync::mpsc;
+
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let tool = SendMessageTool::new(registry);
+        let (tx, _rx) = mpsc::channel(1);
+        let tool = SendMessageTool::new(
+            registry,
+            PathBuf::from("."),
+            "test_agent".to_string(),
+            "agent_123".to_string(),
+            tx,
+        );
 
         assert_eq!(tool.name(), "send_message");
         let params = tool.parameters();
         assert!(params["properties"]["adapter"].is_object());
         assert!(params["properties"]["channel"].is_object());
         assert!(params["properties"]["content"].is_object());
+    }
+
+    #[test]
+    fn test_send_message_tool_agent_author() {
+        use std::path::PathBuf;
+        use tokio::sync::mpsc;
+
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let (tx, _rx) = mpsc::channel(1);
+        let tool = SendMessageTool::new(
+            registry,
+            PathBuf::from("/workspace"),
+            "river".to_string(),
+            "river_001".to_string(),
+            tx,
+        );
+
+        let author = tool.agent_author();
+        assert_eq!(author.name, "river");
+        assert_eq!(author.id, "river_001");
     }
 
     #[test]
