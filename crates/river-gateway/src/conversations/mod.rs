@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 pub mod format;
 pub mod path;
+pub mod writer;
 
 pub const CONVERSATIONS_DIR: &str = "conversations";
 
@@ -82,6 +83,64 @@ impl Message {
             reactions: vec![],
         }
     }
+
+    pub fn merge(&mut self, other: &Message) {
+        // Content: take newer if different (edits)
+        if !other.content.is_empty() && other.content != self.content {
+            self.content = other.content.clone();
+        }
+
+        // Reactions: merge per-emoji
+        for other_reaction in &other.reactions {
+            if let Some(existing) = self.reactions.iter_mut().find(|r| r.emoji == other_reaction.emoji) {
+                existing.merge(other_reaction);
+            } else {
+                self.reactions.push(other_reaction.clone());
+            }
+        }
+
+        // Direction: only escalate Unread → Read
+        if other.direction == MessageDirection::Read && self.direction == MessageDirection::Unread {
+            self.direction = MessageDirection::Read;
+        }
+    }
+
+    pub fn add_reaction(&mut self, emoji: &str, user: &str) {
+        if let Some(r) = self.reactions.iter_mut().find(|r| r.emoji == emoji) {
+            if !r.users.contains(&user.to_string()) {
+                r.users.push(user.to_string());
+            }
+        } else {
+            self.reactions.push(Reaction {
+                emoji: emoji.to_string(),
+                users: vec![user.to_string()],
+                unknown_count: 0,
+            });
+        }
+    }
+
+    pub fn remove_reaction(&mut self, emoji: &str, user: &str) {
+        if let Some(r) = self.reactions.iter_mut().find(|r| r.emoji == emoji) {
+            r.users.retain(|u| u != user);
+            if r.users.is_empty() && r.unknown_count == 0 {
+                self.reactions.retain(|r| r.emoji != emoji);
+            }
+        }
+    }
+
+    pub fn update_reaction_count(&mut self, emoji: &str, count: usize) {
+        if let Some(r) = self.reactions.iter_mut().find(|r| r.emoji == emoji) {
+            if count > r.users.len() {
+                r.unknown_count = count - r.users.len();
+            }
+        } else {
+            self.reactions.push(Reaction {
+                emoji: emoji.to_string(),
+                users: vec![],
+                unknown_count: count,
+            });
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -143,6 +202,33 @@ impl Conversation {
         }
 
         Ok(Conversation { messages })
+    }
+
+    pub fn apply_message(&mut self, msg: Message) {
+        if let Some(existing) = self.messages.iter_mut().find(|m| m.id == msg.id) {
+            existing.merge(&msg);
+        } else {
+            self.messages.push(msg);
+            self.messages.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut Message> {
+        self.messages.iter_mut().find(|m| m.id == id)
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<Self, std::io::Error> {
+        let content = std::fs::read_to_string(path)?;
+        Self::from_str(&content).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.0)
+        })
+    }
+
+    pub fn save(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, self.to_string())
     }
 }
 
