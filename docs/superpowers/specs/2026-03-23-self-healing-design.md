@@ -74,7 +74,7 @@ pub struct HealthPolicy {
     // Error tracking
     consecutive_errors: u32,
     last_error: Option<DateTime<Utc>>,
-    tool_failures: HashMap<String, u32>,  // Per-tool failure counts
+    tool_failures: HashMap<String, (u32, DateTime<Utc>)>,  // (count, last_failure) with decay
 
     // Stuck detection
     last_action_hash: Option<u64>,
@@ -82,6 +82,8 @@ pub struct HealthPolicy {
     context_tokens_at_turn_start: u64,
     context_tokens_at_turn_end: u64,
     low_progress_turns: u32,
+    pending_user_messages: u32,  // Only trigger stuck detection when user is waiting
+    is_heartbeat_turn: bool,     // Exclude heartbeats from progress tracking
 
     // Recovery tracking
     recovery_attempts: u32,
@@ -105,31 +107,26 @@ impl HealthPolicy {
             context_tokens_at_turn_start: 0,
             context_tokens_at_turn_end: 0,
             low_progress_turns: 0,
+            pending_user_messages: 0,
+            is_heartbeat_turn: false,
             recovery_attempts: 0,
             last_recovery: None,
             attention_created_at: None,
         }
     }
 
-    /// Called after each tool execution
-    pub fn on_tool_result(&mut self, tool: &str, success: bool, _duration: Duration) {
-        if success {
-            // Clear failure count on success
-            self.tool_failures.remove(tool);
-        } else {
-            let count = self.tool_failures.entry(tool.to_string()).or_insert(0);
-            *count += 1;
-        }
-    }
-
     /// Get current health status for /health endpoint
     pub fn status(&self) -> HealthStatus { self.status }
 
-    /// Get backoff for specific tool based on its failure count
-    pub fn tool_backoff(&self, tool: &str) -> Duration { /* see Section 3 */ }
+    /// Mark turn as heartbeat (excluded from progress tracking)
+    pub fn set_heartbeat_turn(&mut self, is_heartbeat: bool) {
+        self.is_heartbeat_turn = is_heartbeat;
+    }
 
-    /// Get global error backoff based on consecutive errors
-    pub fn error_backoff(&self) -> Duration { /* see Section 3 */ }
+    /// Track pending user messages for stuck detection context
+    pub fn set_pending_messages(&mut self, count: u32) {
+        self.pending_user_messages = count;
+    }
 }
 ```
 
@@ -151,15 +148,34 @@ When a specific tool fails repeatedly, delay before retrying that tool:
 Tool backoff caps lower (8 min) because individual tool issues shouldn't block the entire agent — it can try other actions.
 
 ```rust
+const TOOL_FAILURE_DECAY: Duration = Duration::from_secs(3600); // 1 hour
+
 impl HealthPolicy {
     pub fn tool_backoff(&self, tool: &str) -> Duration {
-        let failures = self.tool_failures.get(tool).unwrap_or(&0);
-        match failures {
-            0 | 1 => Duration::ZERO,
-            2 => Duration::from_secs(60),
-            3 => Duration::from_secs(120),
-            4 => Duration::from_secs(240),
-            _ => Duration::from_secs(480),
+        if let Some((count, last_fail)) = self.tool_failures.get(tool) {
+            // Decay: if no failures for 1 hour, reset
+            if Utc::now().signed_duration_since(*last_fail) > chrono::Duration::seconds(3600) {
+                return Duration::ZERO;
+            }
+            match count {
+                0 | 1 => Duration::ZERO,
+                2 => Duration::from_secs(60),
+                3 => Duration::from_secs(120),
+                4 => Duration::from_secs(240),
+                _ => Duration::from_secs(480),
+            }
+        } else {
+            Duration::ZERO
+        }
+    }
+
+    pub fn on_tool_result(&mut self, tool: &str, success: bool, _duration: Duration) {
+        if success {
+            self.tool_failures.remove(tool);
+        } else {
+            let entry = self.tool_failures.entry(tool.to_string()).or_insert((0, Utc::now()));
+            entry.0 += 1;
+            entry.1 = Utc::now();
         }
     }
 }
@@ -169,7 +185,38 @@ impl HealthPolicy {
 On model API errors, retry with backoff:
 - Rate limit (429): respect Retry-After header, or 60s default
 - Server error (5xx): exponential backoff up to 15 minutes
-- Client error (4xx except 429): no retry, escalate
+- **Auth error (401/403): IMMEDIATE escalation to NeedsAttention** — don't burn through backoff cycles on a bad API key
+- Other client error (4xx): no retry, escalate
+
+```rust
+impl HealthPolicy {
+    pub fn on_model_error(&mut self, status_code: u16) -> ModelErrorAction {
+        match status_code {
+            401 | 403 => {
+                // Auth errors escalate immediately — every failed attempt wastes time/money
+                let _ = self.escalate(
+                    &format!("Authentication error: HTTP {}", status_code),
+                    "API key may be invalid or expired. Check credentials.",
+                );
+                ModelErrorAction::Escalated
+            }
+            429 => ModelErrorAction::RetryAfter(self.get_retry_after_or_default()),
+            500..=599 => ModelErrorAction::RetryWithBackoff(self.error_backoff()),
+            _ => {
+                self.status = HealthStatus::Degraded;
+                ModelErrorAction::NoRetry
+            }
+        }
+    }
+}
+
+pub enum ModelErrorAction {
+    RetryAfter(Duration),
+    RetryWithBackoff(Duration),
+    NoRetry,
+    Escalated,
+}
+```
 
 **Error Backoff (General):**
 Global backoff between turns when errors accumulate:
@@ -196,12 +243,41 @@ impl HealthPolicy {
 ```
 
 **Recovery Logic:**
-State resets when the agent completes a "clean turn" — a turn with no errors:
+State resets based on turn success ratio, not binary pass/fail:
 
 ```rust
 impl HealthPolicy {
-    pub fn on_turn_complete(&mut self, had_errors: bool) {
-        if had_errors {
+    /// Called at end of turn with call counts (not binary had_errors)
+    pub fn on_turn_complete(&mut self, total_calls: u32, failed_calls: u32) {
+        let success_ratio = if total_calls == 0 {
+            1.0  // No calls = clean turn
+        } else {
+            (total_calls - failed_calls) as f64 / total_calls as f64
+        };
+
+        if success_ratio >= 0.8 {
+            // 80%+ success = "clean enough" to recover
+            self.consecutive_errors = 0;
+            self.low_progress_turns = 0;
+            self.repeated_action_count = 0;
+
+            if self.status == HealthStatus::Degraded {
+                self.status = HealthStatus::Healthy;
+                self.recovery_attempts = 0;
+                self.last_recovery = Some(Utc::now());
+                self.log_recovery("Turn completed with 80%+ success rate");
+            }
+        } else if success_ratio < 0.5 {
+            // 50%+ failure = escalate faster
+            self.consecutive_errors += 2;
+            self.last_error = Some(Utc::now());
+            if self.consecutive_errors >= 6 {
+                self.status = HealthStatus::NeedsAttention;
+            } else {
+                self.status = HealthStatus::Degraded;
+            }
+        } else {
+            // Between 50-80% success = normal error accumulation
             self.consecutive_errors += 1;
             self.last_error = Some(Utc::now());
             if self.consecutive_errors >= 6 {
@@ -209,45 +285,63 @@ impl HealthPolicy {
             } else if self.consecutive_errors >= 2 {
                 self.status = HealthStatus::Degraded;
             }
-        } else {
-            // Clean turn — reset error tracking
-            self.consecutive_errors = 0;
-            self.tool_failures.clear();
-            self.low_progress_turns = 0;
-            self.repeated_action_count = 0;
-
-            // Recover from Degraded (but not NeedsAttention)
-            if self.status == HealthStatus::Degraded {
-                self.status = HealthStatus::Healthy;
-                self.recovery_attempts = 0;
-                tracing::info!(event = "recovery", "Agent recovered to healthy");
-            }
         }
     }
 
-    /// Called at start of each turn to check ATTENTION.md clearance
-    pub fn check_attention_cleared(&mut self) -> bool {
+    /// Called at start of each turn to check ATTENTION.md for human response
+    pub fn check_attention_cleared(&mut self) -> Option<String> {
         if self.status != HealthStatus::NeedsAttention {
-            return false;
+            return None;
         }
         let attention_path = self.data_dir.join("ATTENTION.md");
         if !attention_path.exists() {
-            // Human cleared the file — allow recovery on next clean turn
+            // Human deleted the file — allow recovery on next clean turn
             self.status = HealthStatus::Degraded;
             self.attention_created_at = None;
             tracing::info!(event = "attention.cleared", "ATTENTION.md removed, allowing recovery");
-            true
-        } else {
-            false
+            return None;
         }
+
+        // Check for human response in the file
+        if let Ok(content) = std::fs::read_to_string(&attention_path) {
+            if let Some(response) = Self::parse_human_response(&content) {
+                tracing::info!(
+                    event = "attention.response",
+                    response = %response,
+                    "Human responded to ATTENTION.md"
+                );
+                return Some(response);
+            }
+        }
+        None
+    }
+
+    /// Parse human response from ATTENTION.md
+    fn parse_human_response(content: &str) -> Option<String> {
+        // Look for "## Response" section added by human
+        if let Some(idx) = content.find("## Response") {
+            let response_section = &content[idx..];
+            let response = response_section
+                .lines()
+                .skip(1)  // Skip "## Response" header
+                .take_while(|line| !line.starts_with("##"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+            if !response.is_empty() {
+                return Some(response);
+            }
+        }
+        None
     }
 }
 ```
 
-A "clean turn" means:
-- Model call succeeded
-- All tool calls succeeded (or agent chose not to call tools)
-- No stuck detection triggered
+A "clean turn" is now graduated:
+- **80%+ success**: Clean enough to recover from Degraded → Healthy
+- **50-80% success**: Normal error accumulation
+- **<50% success**: Escalate faster (counts as 2 errors)
 
 ### 4. Stuck Detection
 
@@ -310,7 +404,11 @@ Track net context growth per turn. At turn start, record `context_tokens_at_turn
 - Agent producing output that gets discarded
 - Agent in a loop that doesn't accumulate useful context
 
-If 3+ consecutive turns show low progress, mark as stuck.
+**Important exclusions:**
+- **Heartbeat turns** are excluded — "HEARTBEAT_OK" is <100 tokens but isn't stuck behavior
+- **Only trigger when user is waiting** — stuck detection matters when there's a pending user message that isn't being addressed
+
+If 3+ consecutive non-heartbeat turns show low progress *while user messages are pending*, mark as stuck.
 
 ```rust
 impl HealthPolicy {
@@ -318,11 +416,17 @@ impl HealthPolicy {
         self.context_tokens_at_turn_start = start_tokens;
         self.context_tokens_at_turn_end = end_tokens;
 
+        // Skip progress tracking for heartbeat turns
+        if self.is_heartbeat_turn {
+            return;
+        }
+
         let progress = end_tokens.saturating_sub(start_tokens);
         if progress < 100 {
             self.low_progress_turns += 1;
-            if self.low_progress_turns >= 3 {
-                self.mark_stuck("No progress: low token growth for 3+ turns");
+            // Only mark stuck if user is actually waiting
+            if self.low_progress_turns >= 3 && self.pending_user_messages > 0 {
+                self.mark_stuck("No progress: low token growth for 3+ turns while user waiting");
             }
         } else {
             self.low_progress_turns = 0;
@@ -505,9 +609,11 @@ impl AgentLoop {
         let end = self.context_tokens();
         self.policy.write().await.record_turn_tokens(start, end);
 
-        // Mark turn complete
-        let had_errors = self.turn_had_errors;
-        self.policy.write().await.on_turn_complete(had_errors);
+        // Mark turn complete with call counts (not binary)
+        self.policy.write().await.on_turn_complete(
+            self.turn_total_calls,
+            self.turn_failed_calls,
+        );
 
         // ... existing settle logic ...
     }
@@ -524,14 +630,40 @@ This allows the agent to remain responsive if a human clears the issue, rather t
 
 ### 8. Health Endpoint Updates
 
-Extend `/health` response with policy status:
+Extend `/health` response with policy status and appropriate HTTP status codes:
+
+**HTTP Status Codes:**
+- `Healthy` → **200 OK**
+- `Degraded` → **200 OK** (still operational)
+- `NeedsAttention` → **503 Service Unavailable** (external monitoring tools can detect without parsing JSON)
 
 ```rust
 // src/api/routes.rs
 
+async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let policy = state.policy.read().await;
+    let response = HealthResponse {
+        status: policy.status(),
+        // ... other fields ...
+        policy: PolicyInfo {
+            consecutive_errors: policy.consecutive_errors,
+            current_backoff_secs: policy.error_backoff().as_secs(),
+            recovery_attempts: policy.recovery_attempts,
+            attention_file: policy.attention_file_path(),
+        },
+    };
+
+    let status_code = match policy.status() {
+        HealthStatus::Healthy | HealthStatus::Degraded => StatusCode::OK,
+        HealthStatus::NeedsAttention => StatusCode::SERVICE_UNAVAILABLE,
+    };
+
+    (status_code, Json(response))
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
-    status: HealthStatus,  // Changed from &'static str
+    status: HealthStatus,
     // ... existing fields ...
 
     policy: PolicyInfo,
@@ -546,12 +678,149 @@ struct PolicyInfo {
 }
 ```
 
+### 9. Recovery Memory
+
+When the agent recovers from a problem, log the full context — not just that recovery happened, but what led to it and how it was resolved. This builds institutional memory that humans (or future agents) can learn from.
+
+```rust
+// src/policy.rs
+
+impl HealthPolicy {
+    fn log_recovery(&self, reason: &str) {
+        let recovery_log = self.data_dir.join("recovery.jsonl");
+
+        let entry = serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339(),
+            "agent": self.agent_name,
+            "previous_status": self.status,
+            "recovery_reason": reason,
+            "context": {
+                "consecutive_errors_before": self.consecutive_errors,
+                "recovery_attempts": self.recovery_attempts,
+                "last_error": self.last_error,
+                "tool_failures": self.tool_failures.keys().collect::<Vec<_>>(),
+            }
+        });
+
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&recovery_log)
+        {
+            let _ = writeln!(file, "{}", entry);
+        }
+
+        tracing::info!(
+            event = "recovery.complete",
+            reason = reason,
+            attempts = self.recovery_attempts,
+            "Agent recovered"
+        );
+    }
+}
+```
+
+The recovery log (`recovery.jsonl`) accumulates over time, providing a history of what went wrong and how it was fixed. This can inform:
+- Detecting recurring patterns (same tool failing every Tuesday)
+- Improving thresholds based on actual recovery data
+- Understanding agent behavior during post-mortems
+
+### 10. Bidirectional ATTENTION.md
+
+ATTENTION.md isn't just a cry for help — it's a conversation. When a human responds, the agent can read their guidance and attempt recovery with new context.
+
+**ATTENTION.md format with response section:**
+
+```markdown
+# Attention Required
+
+**Agent:** thomas
+**Time:** 2026-03-23T14:30:00Z
+**Reason:** Authentication error: HTTP 401
+
+## Context
+
+API key may be invalid or expired. Check credentials.
+
+## To Clear
+
+Delete this file after addressing the issue.
+
+---
+
+## Response
+
+I rotated the API key. The new key is in the secrets manager.
+Try again.
+
+— Cassie, 2026-03-23T15:00:00Z
+```
+
+The agent checks for a `## Response` section at each wake. If found, the response text is injected into the next model prompt as context:
+
+```rust
+// In AgentLoop::wake_phase
+if let Some(human_response) = self.policy.write().await.check_attention_cleared() {
+    // Add human guidance to context for next turn
+    self.inject_system_message(&format!(
+        "Human responded to your ATTENTION request: {}",
+        human_response
+    ));
+}
+```
+
+This allows the agent to:
+- Retry with human-provided information ("I rotated the key")
+- Adjust approach based on guidance ("Try the backup endpoint instead")
+- Acknowledge and close the loop ("Fixed, proceeding")
+
+### 11. Proactive Context Rotation
+
+Phase 1 monitoring warns at 80% context usage. Self-healing should act on that warning — don't wait for 90% to force rotation.
+
+```rust
+// src/policy.rs
+
+impl HealthPolicy {
+    /// Called when context warning threshold (80%) is reached
+    pub fn on_context_warning(&mut self, usage_percent: f64) -> ContextAction {
+        if usage_percent >= 80.0 && usage_percent < 90.0 {
+            tracing::info!(
+                event = "context.proactive_rotation",
+                usage_percent = usage_percent,
+                "Triggering proactive context rotation at 80%"
+            );
+            ContextAction::RotateNow
+        } else {
+            ContextAction::Continue
+        }
+    }
+}
+
+pub enum ContextAction {
+    Continue,
+    RotateNow,
+}
+```
+
+Integration with the loop:
+
+```rust
+// In AgentLoop::settle_phase
+let usage = self.metrics.read().await.context_usage_percent();
+if let ContextAction::RotateNow = self.policy.read().await.on_context_warning(usage) {
+    self.rotate_context("proactive: 80% threshold").await;
+}
+```
+
+This is the forest's immune system — responding to early warning signals rather than waiting for disease to spread. The agent stays healthy by acting before problems become crises.
+
 ---
 
 ## Files Changed
 
 **New files:**
-- `crates/river-gateway/src/policy.rs` — `HealthPolicy`, `HealthStatus`, stuck detection, escalation
+- `crates/river-gateway/src/policy.rs` — `HealthPolicy`, `HealthStatus`, stuck detection, escalation, recovery memory
 - `crates/river-gateway/src/watchdog.rs` — systemd watchdog ping task
 
 **Modified files:**
@@ -579,14 +848,28 @@ fn test_error_backoff_exponential() {
 
     assert_eq!(policy.error_backoff(), Duration::ZERO);
 
-    policy.on_turn_complete(true); // 1 error
-    assert_eq!(policy.error_backoff(), Duration::from_secs(60));
+    policy.on_turn_complete(1, 1); // 1 call, 1 failed (100% failure = +2 errors)
+    assert_eq!(policy.consecutive_errors, 2);
 
-    policy.on_turn_complete(true); // 2 errors
-    assert_eq!(policy.error_backoff(), Duration::from_secs(120));
+    policy.on_turn_complete(2, 1); // 2 calls, 1 failed (50% failure = +1 error)
+    assert_eq!(policy.consecutive_errors, 3);
 
-    policy.on_turn_complete(true); // 3 errors
-    assert_eq!(policy.error_backoff(), Duration::from_secs(240));
+    policy.on_turn_complete(5, 1); // 5 calls, 1 failed (80% success = reset!)
+    assert_eq!(policy.consecutive_errors, 0);
+}
+
+#[test]
+fn test_success_ratio_recovery() {
+    let mut policy = HealthPolicy::new("test".to_string(), PathBuf::new());
+
+    // Degrade the agent
+    policy.on_turn_complete(1, 1);
+    policy.on_turn_complete(1, 1);
+    assert_eq!(policy.status(), HealthStatus::Degraded);
+
+    // 80% success rate should recover
+    policy.on_turn_complete(5, 1); // 4/5 = 80% success
+    assert_eq!(policy.status(), HealthStatus::Healthy);
 }
 
 #[test]
@@ -607,12 +890,42 @@ fn test_stuck_detection_repeated_action() {
 #[test]
 fn test_escalation_creates_attention_file() {
     let dir = tempfile::tempdir().unwrap();
-    let mut policy = HealthPolicy::new("test", dir.path().to_path_buf());
+    let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
 
     policy.escalate("Test reason", "Test context").unwrap();
 
     assert!(dir.path().join("ATTENTION.md").exists());
     assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+}
+
+#[test]
+fn test_tool_failure_decay() {
+    let mut policy = HealthPolicy::new("test".to_string(), PathBuf::new());
+
+    // Simulate 5 failures
+    for _ in 0..5 {
+        policy.on_tool_result("bash", false, Duration::ZERO);
+    }
+    assert_eq!(policy.tool_backoff("bash"), Duration::from_secs(480)); // 8 min cap
+
+    // Simulate time passing (mock by directly modifying last_fail time)
+    if let Some(entry) = policy.tool_failures.get_mut("bash") {
+        entry.1 = Utc::now() - chrono::Duration::hours(2);
+    }
+
+    // After decay, backoff should be zero
+    assert_eq!(policy.tool_backoff("bash"), Duration::ZERO);
+}
+
+#[test]
+fn test_401_immediate_escalation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut policy = HealthPolicy::new("test".to_string(), dir.path().to_path_buf());
+
+    let action = policy.on_model_error(401);
+    assert!(matches!(action, ModelErrorAction::Escalated));
+    assert_eq!(policy.status(), HealthStatus::NeedsAttention);
+    assert!(dir.path().join("ATTENTION.md").exists());
 }
 ```
 
