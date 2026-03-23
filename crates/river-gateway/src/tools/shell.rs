@@ -86,6 +86,7 @@ impl Tool for BashTool {
             tokio::runtime::Handle::current().block_on(async {
                 debug!(command = %command, "BashTool: Starting bash process");
                 let child = tokio::process::Command::new("bash")
+                    .arg("-l") // Login shell: sources ~/.bash_profile for full PATH
                     .arg("-c")
                     .arg(&command)
                     .current_dir(&workspace)
