@@ -69,7 +69,7 @@ pub enum EventType {
     MessageDelete,
     ReactionAdd,
     ReactionRemove,
-    Identify(String),
+    Identify(String),  // User identity events (name changes, profile updates)
     Custom(String),
 }
 
@@ -136,6 +136,8 @@ Adapter-specific data preserves platform structure:
 ```
 
 Gateway treats metadata as opaque. Agent sees native structure if needed.
+
+**Note:** Metadata validation happens at runtime, not compile time. If this becomes a pain point, consider adding `validate_metadata()` to the trait.
 
 ---
 
@@ -215,9 +217,15 @@ Adapter ready to receive events
 
 If adapter restarts, it re-registers. Gateway updates the entry.
 
+**Gateway restart:** For now, gateway restart means adapter restart too. Adapters don't know to re-register unprompted. This is simple and sufficient for the current deployment model.
+
 ### Health On Demand
 
 No heartbeat. Gateway checks `/health` when needed, handles failures gracefully.
+
+### Channel Identity
+
+The `channel` field is adapter-defined. Two adapters might use similar ID formats. Gateway always keys on `(adapter, channel)` pairs, never just `channel`.
 
 ---
 
@@ -268,6 +276,31 @@ pub struct MockAdapter {
 
 Gateway's `AdapterRegistry` holds `Box<dyn Adapter>`. Real adapters are `HttpAdapter`, tests use `MockAdapter`.
 
+### Error Types
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum AdapterError {
+    #[error("connection failed: {0}")]
+    Connection(String),
+
+    #[error("request timeout")]
+    Timeout,
+
+    #[error("feature not supported: {0:?}")]
+    Unsupported(Feature),
+
+    #[error("rate limited, retry after {retry_after_ms}ms")]
+    RateLimited { retry_after_ms: u64 },
+
+    #[error("adapter error: {0}")]
+    Platform(String),  // Adapter-specific errors
+
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+}
+```
+
 ---
 
 ## HTTP API
@@ -316,6 +349,10 @@ pub fn openapi_json() -> String {
 ```
 
 Spec committed to repo, regenerated on type changes.
+
+### Security
+
+**Auth is intentionally deferred.** Adapter ↔ gateway communication is localhost only. No authentication mechanism for now. Add token-based auth if/when adapters run on separate hosts.
 
 ---
 
