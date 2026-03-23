@@ -335,7 +335,7 @@ impl HealthPolicy {
              Delete this file after addressing the issue.\n\n\
              ---\n\n\
              ## Response\n\n\
-             (Add your response here)\n",
+             <!-- PLACEHOLDER: Delete this line and add your response -->\n",
             self.agent_name,
             Utc::now().to_rfc3339(),
             reason,
@@ -462,8 +462,9 @@ impl HealthPolicy {
                 .trim()
                 .to_string();
 
-            // Only return if there's actual content beyond the placeholder
-            if !response.is_empty() && !response.contains("(Add your response here)") {
+            // Only return if there's actual content beyond the placeholder marker
+            // The HTML comment marker is machine-generated and unlikely to appear naturally
+            if !response.is_empty() && !response.contains("<!-- PLACEHOLDER:") {
                 return Some(response);
             }
         }
