@@ -61,6 +61,22 @@ struct Args {
     /// Example: --adapter discord:http://localhost:8081/outbound:http://localhost:8081/read
     #[arg(long = "adapter", value_name = "CONFIG")]
     adapters: Vec<String>,
+
+    /// Log file directory (default: {data-dir}/logs/)
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
+
+    /// Override log file path
+    #[arg(long)]
+    log_file: Option<PathBuf>,
+
+    /// Output JSON logs to stdout (default: pretty for tty, json otherwise)
+    #[arg(long)]
+    json_stdout: bool,
+
+    /// Log level (default: info, or RUST_LOG env)
+    #[arg(long, default_value = "info")]
+    log_level: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -146,7 +162,17 @@ async fn main() -> anyhow::Result<()> {
         anyhow::anyhow!("--data-dir is required for normal operation")
     })?;
 
-    tracing_subscriber::fmt::init();
+    use river_gateway::logging::{LogConfig, init_logging};
+
+    let log_config = LogConfig {
+        log_dir: args.log_dir.unwrap_or_else(|| data_dir.join("logs")),
+        log_file: args.log_file,
+        json_stdout: args.json_stdout,
+        log_level: args.log_level.clone(),
+    };
+
+    let _log_guard = init_logging(&log_config)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {}", e))?;
 
     tracing::info!("Starting River Gateway");
     tracing::info!("Agent: {}", args.agent_name);
