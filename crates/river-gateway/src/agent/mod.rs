@@ -1,7 +1,12 @@
 //! Agent (I) — the acting self
 //!
-//! Currently contains context assembly. The full agent task comes in Phase 5.
+//! The agent runs as a peer task in the coordinator, managing the wake/think/act/settle
+//! turn cycle. It uses context assembly with hot/warm/cold layers and emits lifecycle
+//! events for the spectator to observe.
 
 pub mod context;
+pub mod task;
+pub mod tools;
 
 pub use context::{ContextAssembler, ContextBudget, AssembledContext, LayerStats};
+pub use task::{AgentTask, AgentTaskConfig};
