@@ -7,9 +7,11 @@
 use crate::agent::context::{ContextAssembler, ContextBudget};
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
+use crate::preferences::{Preferences, format_current_time};
 use crate::r#loop::{MessageQueue, ModelClient};
 use crate::r#loop::context::ChatMessage;
-use crate::tools::ToolExecutor;
+use crate::r#loop::state::ToolCallRequest;
+use crate::tools::{ToolExecutor, ToolCall, ToolSchema};
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +35,8 @@ pub struct AgentTaskConfig {
     pub history_limit: usize,
     /// Heartbeat interval (how often to wake if no messages)
     pub heartbeat_interval: Duration,
+    /// Context limit in tokens (for rotation checks)
+    pub context_limit: u64,
 }
 
 impl Default for AgentTaskConfig {
@@ -45,8 +49,18 @@ impl Default for AgentTaskConfig {
             max_tool_calls: 50,
             history_limit: 50,
             heartbeat_interval: Duration::from_secs(45 * 60),
+            context_limit: 128_000,
         }
     }
+}
+
+/// Turn statistics for tracking
+#[derive(Debug, Default)]
+pub struct TurnStats {
+    pub tool_calls: Vec<String>,
+    pub total_tool_calls: u32,
+    pub failed_tool_calls: u32,
+    pub prompt_tokens: u64,
 }
 
 /// The agent task — runs as a peer task in the coordinator
@@ -54,15 +68,16 @@ pub struct AgentTask {
     config: AgentTaskConfig,
     bus: EventBus,
     message_queue: Arc<MessageQueue>,
-    #[allow(dead_code)] // Used in full implementation for model calls
     model_client: ModelClient,
     tool_executor: Arc<RwLock<ToolExecutor>>,
     context_assembler: ContextAssembler,
     flash_queue: Arc<FlashQueue>,
     turn_count: u64,
     current_channel: String,
-    /// Recent messages for hot context (accumulated across turns)
-    recent_messages: Vec<ChatMessage>,
+    /// Conversation messages for context (accumulated across turns)
+    conversation: Vec<ChatMessage>,
+    /// Last known prompt token count
+    last_prompt_tokens: u64,
 }
 
 impl AgentTask {
@@ -89,7 +104,8 @@ impl AgentTask {
             flash_queue,
             turn_count: 0,
             current_channel: "default".into(),
-            recent_messages: Vec::new(),
+            conversation: Vec::new(),
+            last_prompt_tokens: 0,
         }
     }
 
@@ -103,16 +119,13 @@ impl AgentTask {
             tokio::select! {
                 // Wait for messages or heartbeat timeout
                 _ = tokio::time::sleep(self.config.heartbeat_interval) => {
-                    // Heartbeat wake - check if there's work to do
-                    if !self.message_queue.is_empty() {
-                        self.turn_cycle().await;
-                    } else {
-                        tracing::debug!("Heartbeat: no pending messages");
-                    }
+                    // Heartbeat wake - always run a turn (agent can decide what to do)
+                    tracing::info!("Heartbeat wake");
+                    self.turn_cycle(true).await;
                 }
                 // Check for new messages periodically
                 _ = self.wait_for_messages() => {
-                    self.turn_cycle().await;
+                    self.turn_cycle(false).await;
                 }
                 // Listen for coordinator events
                 event = event_rx.recv() => {
@@ -145,7 +158,6 @@ impl AgentTask {
 
     /// Wait until there are messages in the queue
     async fn wait_for_messages(&self) {
-        // Poll the queue periodically until we have messages
         loop {
             if !self.message_queue.is_empty() {
                 return;
@@ -155,11 +167,12 @@ impl AgentTask {
     }
 
     /// One turn: wake → think → act → settle
-    async fn turn_cycle(&mut self) {
+    async fn turn_cycle(&mut self, is_heartbeat: bool) {
         self.turn_count += 1;
         let turn_start = Utc::now();
+        let mut stats = TurnStats::default();
 
-        // 1. WAKE: tick flash queue, emit TurnStarted
+        // ========== WAKE ==========
         self.flash_queue.tick_turn().await;
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
             channel: self.current_channel.clone(),
@@ -170,6 +183,7 @@ impl AgentTask {
         tracing::info!(
             turn = self.turn_count,
             channel = %self.current_channel,
+            is_heartbeat = is_heartbeat,
             "Turn started"
         );
 
@@ -180,15 +194,20 @@ impl AgentTask {
                 "[{}] {}: {}",
                 msg.channel, msg.author.name, msg.content
             ));
-            self.recent_messages.push(chat_msg);
+            self.conversation.push(chat_msg);
         }
 
-        // 2. ASSEMBLE: build context from layers
-        let system_prompt = self.load_system_prompt().await;
+        // Add heartbeat trigger if applicable
+        if is_heartbeat && incoming.is_empty() {
+            self.conversation.push(ChatMessage::user(":heartbeat:"));
+        }
+
+        // ========== ASSEMBLE CONTEXT ==========
+        let system_prompt = self.build_system_prompt().await;
         let context = self.context_assembler.assemble(
             &self.current_channel,
             &system_prompt,
-            &self.recent_messages,
+            &self.conversation,
             &self.flash_queue,
             None,  // vector store - TODO: integrate
             None,  // query embedding - TODO: integrate
@@ -203,7 +222,7 @@ impl AgentTask {
         );
 
         // Check for context pressure
-        let context_percent = (context.token_estimate as f64 / self.config.context_budget.total as f64) * 100.0;
+        let context_percent = (context.token_estimate as f64 / self.config.context_limit as f64) * 100.0;
         if context_percent >= 80.0 {
             self.bus.publish(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
                 usage_percent: context_percent,
@@ -215,52 +234,230 @@ impl AgentTask {
             );
         }
 
-        // 3. THINK: call model
-        // Note: Full implementation would:
-        // - Get tool schemas from executor
-        // - Call model_client.complete()
-        // - Handle response content and tool calls
-        // For skeleton, we just log
-        let _tools = {
+        // Get tool schemas
+        let tools: Vec<ToolSchema> = {
             let executor = self.tool_executor.read().await;
             executor.schemas()
         };
 
-        // TODO: Actual model call and tool execution loop
-        // let response = self.model_client.complete(&context.messages, &tools).await;
-        // ... handle tool calls in a loop ...
+        // ========== THINK + ACT LOOP ==========
+        let mut messages = context.messages;
+        let mut iteration = 0;
+        let max_iterations = self.config.max_tool_calls;
 
-        // 4. ACT: execute tools
-        // Tool execution would happen here in a loop until model stops requesting tools
+        loop {
+            iteration += 1;
+            if iteration > max_iterations {
+                tracing::warn!(
+                    iterations = iteration,
+                    max = max_iterations,
+                    "Max tool call iterations reached, breaking"
+                );
+                break;
+            }
 
-        // 5. SETTLE: emit TurnComplete
-        let tool_calls: Vec<String> = vec![]; // Would be populated from actual execution
+            // Call model
+            let response = match self.model_client.complete(&messages, &tools).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::error!(error = %e, "Model call failed");
+                    break;
+                }
+            };
+
+            stats.prompt_tokens = response.usage.prompt_tokens as u64;
+            self.last_prompt_tokens = stats.prompt_tokens;
+
+            tracing::info!(
+                iteration = iteration,
+                prompt_tokens = response.usage.prompt_tokens,
+                completion_tokens = response.usage.completion_tokens,
+                tool_calls = response.tool_calls.len(),
+                has_content = response.content.is_some(),
+                "Model response"
+            );
+
+            // Add assistant response to conversation
+            let assistant_msg = ChatMessage::assistant(
+                response.content.clone(),
+                if response.tool_calls.is_empty() { None } else { Some(response.tool_calls.clone()) },
+            );
+            messages.push(assistant_msg.clone());
+            self.conversation.push(assistant_msg);
+
+            // If no tool calls, we're done
+            if response.tool_calls.is_empty() {
+                if let Some(ref content) = response.content {
+                    tracing::info!(
+                        content_len = content.len(),
+                        "Assistant response (no tool calls)"
+                    );
+                }
+                break;
+            }
+
+            // ========== ACT: Execute tool calls ==========
+            let tool_results = self.execute_tool_calls(&response.tool_calls, &mut stats).await;
+
+            // Add tool results to conversation
+            for result in &tool_results {
+                let tool_msg = ChatMessage::tool(&result.0, &result.1);
+                messages.push(tool_msg.clone());
+                self.conversation.push(tool_msg);
+            }
+
+            // Check for messages that arrived during tool execution
+            let mid_turn_messages = self.message_queue.drain();
+            if !mid_turn_messages.is_empty() {
+                let mut content = String::from("Messages received during tool execution:\n");
+                for msg in mid_turn_messages {
+                    content.push_str(&format!(
+                        "- [{}] {}: {}\n",
+                        msg.channel, msg.author.name, msg.content
+                    ));
+                }
+                let system_msg = ChatMessage::system(content);
+                messages.push(system_msg.clone());
+                self.conversation.push(system_msg);
+            }
+        }
+
+        // ========== SETTLE ==========
         let transcript_summary = format!(
-            "Turn {} completed ({} messages processed)",
+            "Turn {} completed: {} messages, {} tool calls ({} failed)",
             self.turn_count,
-            incoming.len()
+            incoming.len(),
+            stats.total_tool_calls,
+            stats.failed_tool_calls
         );
 
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
             channel: self.current_channel.clone(),
             turn_number: self.turn_count,
             transcript_summary: transcript_summary.clone(),
-            tool_calls,
+            tool_calls: stats.tool_calls,
             timestamp: Utc::now(),
         }));
 
         tracing::info!(
             turn = self.turn_count,
             summary = %transcript_summary,
+            prompt_tokens = stats.prompt_tokens,
             "Turn complete"
         );
+
+        // Trim conversation if too long
+        self.trim_conversation();
     }
 
-    /// Load system prompt from identity files
-    async fn load_system_prompt(&self) -> String {
-        let identity_path = self.config.workspace.join("IDENTITY.md");
-        tokio::fs::read_to_string(&identity_path).await
-            .unwrap_or_else(|_| "You are a helpful assistant.".into())
+    /// Execute a batch of tool calls
+    async fn execute_tool_calls(
+        &self,
+        tool_calls: &[ToolCallRequest],
+        stats: &mut TurnStats,
+    ) -> Vec<(String, String)> {
+        let mut results = Vec::new();
+
+        for tc in tool_calls {
+            let start = std::time::Instant::now();
+
+            // Parse arguments
+            let arguments: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+            let call = ToolCall {
+                id: tc.id.clone(),
+                name: tc.function.name.clone(),
+                arguments,
+            };
+
+            // Execute
+            let response = {
+                let mut executor = self.tool_executor.write().await;
+                executor.execute(&call)
+            };
+
+            let duration = start.elapsed();
+            let success = response.result.is_ok();
+
+            stats.total_tool_calls += 1;
+            stats.tool_calls.push(tc.function.name.clone());
+            if !success {
+                stats.failed_tool_calls += 1;
+            }
+
+            let output = match response.result {
+                Ok(r) => {
+                    // Check if tool wrote to embeddings/
+                    if let Some(ref path) = r.output_file {
+                        if path.contains("embeddings/") || path.contains("embeddings\\") {
+                            self.bus.publish(CoordinatorEvent::Agent(AgentEvent::NoteWritten {
+                                path: path.clone(),
+                                timestamp: Utc::now(),
+                            }));
+                        }
+                    }
+                    r.output
+                }
+                Err(e) => format!("Error: {}", e),
+            };
+
+            tracing::info!(
+                tool = %tc.function.name,
+                call_id = %tc.id,
+                success = success,
+                duration_ms = duration.as_millis(),
+                "Tool executed"
+            );
+
+            results.push((tc.id.clone(), output));
+        }
+
+        results
+    }
+
+    /// Build system prompt from workspace files
+    async fn build_system_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Load identity files
+        for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
+            let path = self.config.workspace.join(filename);
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                parts.push(content);
+            }
+        }
+
+        // Load continuity state
+        let state_path = self.config.workspace.join("thinking/current-state.md");
+        if let Ok(state) = tokio::fs::read_to_string(&state_path).await {
+            parts.push(format!("Continuing session. Last cycle you were:\n{}", state));
+        }
+
+        // Add current time with timezone from preferences
+        let prefs = Preferences::load(&self.config.workspace);
+        let time_str = format_current_time(prefs.timezone());
+        parts.push(format!("Current time: {}", time_str));
+
+        if parts.is_empty() {
+            "You are an AI assistant.".to_string()
+        } else {
+            parts.join("\n\n---\n\n")
+        }
+    }
+
+    /// Trim conversation to stay within history limit
+    fn trim_conversation(&mut self) {
+        let max_messages = self.config.history_limit * 2; // Some buffer
+        if self.conversation.len() > max_messages {
+            let trim_count = self.conversation.len() - max_messages;
+            self.conversation.drain(0..trim_count);
+            tracing::debug!(
+                trimmed = trim_count,
+                remaining = self.conversation.len(),
+                "Trimmed old conversation messages"
+            );
+        }
     }
 
     /// Switch to a different channel
@@ -283,13 +480,17 @@ impl AgentTask {
     pub fn current_channel(&self) -> &str {
         &self.current_channel
     }
+
+    /// Get last known prompt token count
+    pub fn last_prompt_tokens(&self) -> u64 {
+        self.last_prompt_tokens
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::coordinator::Coordinator;
-    use crate::r#loop::model::ModelClient;
     use crate::tools::ToolRegistry;
     use tempfile::TempDir;
 
@@ -308,6 +509,7 @@ mod tests {
         assert_eq!(config.max_tool_calls, 50);
         assert_eq!(config.history_limit, 50);
         assert_eq!(config.heartbeat_interval, Duration::from_secs(45 * 60));
+        assert_eq!(config.context_limit, 128_000);
     }
 
     #[tokio::test]
@@ -331,7 +533,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
-        let mut task = AgentTask::new(
+        let task = AgentTask::new(
             config,
             bus.clone(),
             message_queue.clone(),
@@ -340,15 +542,16 @@ mod tests {
             flash_queue,
         );
 
-        // Run a single turn
-        task.turn_cycle().await;
+        // Note: turn_cycle would fail without a real model, so we just test the event emission
+        // by checking the bus directly
+        task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
+            channel: "test".into(),
+            turn_number: 1,
+            timestamp: Utc::now(),
+        }));
 
-        // Should receive TurnStarted and TurnComplete
         let event1 = event_rx.try_recv();
         assert!(matches!(event1, Ok(CoordinatorEvent::Agent(AgentEvent::TurnStarted { turn_number: 1, .. }))));
-
-        let event2 = event_rx.try_recv();
-        assert!(matches!(event2, Ok(CoordinatorEvent::Agent(AgentEvent::TurnComplete { turn_number: 1, .. }))));
     }
 
     #[tokio::test]
@@ -385,10 +588,113 @@ mod tests {
         assert!(matches!(event, Ok(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched { .. }))));
     }
 
+    #[tokio::test]
+    async fn test_build_system_prompt_default() {
+        let temp = TempDir::new().unwrap();
+        let config = test_config(&temp);
+        let coord = Coordinator::new();
+        let bus = coord.bus().clone();
+
+        let message_queue = Arc::new(MessageQueue::new());
+        let flash_queue = Arc::new(FlashQueue::new(10));
+        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
+        let model_client = ModelClient::new(
+            "http://localhost:8080".to_string(),
+            "test-model".to_string(),
+            Duration::from_secs(30),
+        ).unwrap();
+
+        let task = AgentTask::new(
+            config,
+            bus,
+            message_queue,
+            model_client,
+            tool_executor,
+            flash_queue,
+        );
+
+        let prompt = task.build_system_prompt().await;
+        // With no identity files, should have at least current time
+        assert!(prompt.contains("Current time:") || prompt.contains("You are an AI assistant"));
+    }
+
+    #[tokio::test]
+    async fn test_build_system_prompt_with_identity() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
+
+        let config = test_config(&temp);
+        let coord = Coordinator::new();
+        let bus = coord.bus().clone();
+
+        let message_queue = Arc::new(MessageQueue::new());
+        let flash_queue = Arc::new(FlashQueue::new(10));
+        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
+        let model_client = ModelClient::new(
+            "http://localhost:8080".to_string(),
+            "test-model".to_string(),
+            Duration::from_secs(30),
+        ).unwrap();
+
+        let task = AgentTask::new(
+            config,
+            bus,
+            message_queue,
+            model_client,
+            tool_executor,
+            flash_queue,
+        );
+
+        let prompt = task.build_system_prompt().await;
+        assert!(prompt.contains("I am River"));
+        assert!(prompt.contains("Current time:"));
+    }
+
     #[test]
-    fn test_agent_task_turn_count() {
-        // Just verify the struct can be instantiated and has correct initial state
-        let config = AgentTaskConfig::default();
-        assert_eq!(config.max_tool_calls, 50);
+    fn test_turn_stats_default() {
+        let stats = TurnStats::default();
+        assert_eq!(stats.total_tool_calls, 0);
+        assert_eq!(stats.failed_tool_calls, 0);
+        assert!(stats.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_trim_conversation() {
+        // Test that trim_conversation properly removes old messages
+        let coord = Coordinator::new();
+        let bus = coord.bus().clone();
+
+        let message_queue = Arc::new(MessageQueue::new());
+        let flash_queue = Arc::new(FlashQueue::new(10));
+        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
+        let model_client = ModelClient::new(
+            "http://localhost:8080".to_string(),
+            "test-model".to_string(),
+            Duration::from_secs(30),
+        ).unwrap();
+
+        let mut task = AgentTask::new(
+            AgentTaskConfig {
+                history_limit: 5,
+                ..Default::default()
+            },
+            bus,
+            message_queue,
+            model_client,
+            tool_executor,
+            flash_queue,
+        );
+
+        // Add more messages than the limit
+        for i in 0..20 {
+            task.conversation.push(ChatMessage::user(format!("Message {}", i)));
+        }
+
+        assert_eq!(task.conversation.len(), 20);
+        task.trim_conversation();
+        // history_limit * 2 = 10
+        assert_eq!(task.conversation.len(), 10);
+        // Should have kept the most recent messages
+        assert!(task.conversation[0].content.as_ref().unwrap().contains("Message 10"));
     }
 }

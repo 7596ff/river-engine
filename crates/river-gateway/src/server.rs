@@ -1,7 +1,10 @@
 //! Server setup and initialization
 
+use crate::agent::{AgentTask, AgentTaskConfig};
 use crate::api::create_router;
+use crate::coordinator::Coordinator;
 use crate::db::init_db;
+use crate::flash::FlashQueue;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
@@ -48,6 +51,8 @@ pub struct ServerConfig {
     pub context_limit: u32,
     /// Communication adapters: (name, outbound_url, read_url)
     pub adapters: Vec<(String, String, Option<String>)>,
+    /// Use new coordinator-based agent (experimental)
+    pub use_coordinator: bool,
 }
 
 /// Initialize and run the gateway server
@@ -328,25 +333,77 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         policy,
     ));
 
-    // Spawn the agent loop
-    let mut agent_loop = AgentLoop::new(
-        loop_rx,
-        message_queue,
-        model_client,
-        state.tool_executor.clone(),
-        db_arc,
-        snowflake_gen,
-        heartbeat_scheduler,
-        context_rotation,
-        loop_config,
-        state.metrics.clone(),
-        state.policy.clone(),
-    );
-    tokio::spawn(async move {
-        agent_loop.run().await;
-        // Log if the loop exits (shouldn't happen in normal operation)
-        tracing::error!("Agent loop exited unexpectedly");
-    });
+    // Extract config values needed for agent before state takes ownership
+    let agent_workspace = state.config.workspace.clone();
+    let agent_model_url = state.config.model_url.clone();
+    let agent_model_name = state.config.model_name.clone();
+    let agent_context_limit = state.config.context_limit;
+    let agent_heartbeat_minutes = state.config.heartbeat_minutes;
+
+    // Spawn either the new coordinator-based agent or the old loop
+    if config.use_coordinator {
+        // New coordinator-based agent (experimental)
+        tracing::info!("Using coordinator-based agent task (experimental)");
+
+        let mut coordinator = Coordinator::new();
+        let flash_queue = Arc::new(FlashQueue::new(20));
+
+        // Create model client for agent task
+        let agent_model_client = ModelClient::new(
+            agent_model_url,
+            agent_model_name,
+            Duration::from_secs(120),
+        )?;
+
+        let agent_config = AgentTaskConfig {
+            workspace: agent_workspace,
+            embeddings_dir: config.workspace.join("embeddings"),
+            context_limit: agent_context_limit,
+            max_tool_calls: 50,
+            history_limit: 50,
+            heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),
+            ..Default::default()
+        };
+
+        let agent_task = AgentTask::new(
+            agent_config,
+            coordinator.bus().clone(),
+            message_queue,
+            agent_model_client,
+            state.tool_executor.clone(),
+            flash_queue,
+        );
+
+        coordinator.spawn_task("agent", |_| agent_task.run());
+
+        tokio::spawn(async move {
+            // Keep coordinator alive until shutdown
+            // In a full implementation, this would listen for shutdown signals
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+        });
+    } else {
+        // Old loop (default, stable)
+        let mut agent_loop = AgentLoop::new(
+            loop_rx,
+            message_queue,
+            model_client,
+            state.tool_executor.clone(),
+            db_arc,
+            snowflake_gen,
+            heartbeat_scheduler,
+            context_rotation,
+            loop_config,
+            state.metrics.clone(),
+            state.policy.clone(),
+        );
+        tokio::spawn(async move {
+            agent_loop.run().await;
+            // Log if the loop exits (shouldn't happen in normal operation)
+            tracing::error!("Agent loop exited unexpectedly");
+        });
+    }
 
     // Create router
     let app = create_router(state);
