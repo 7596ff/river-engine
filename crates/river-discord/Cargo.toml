@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 river-core = { path = "../river-core" }
+river-adapter = { path = "../river-adapter" }
 tokio.workspace = true
 axum.workspace = true
 reqwest.workspace = true

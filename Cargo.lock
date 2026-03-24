@@ -1733,6 +1733,7 @@ dependencies = [
  "axum",
  "clap",
  "reqwest",
+ "river-adapter",
  "river-core",
  "serde",
  "serde_json",
