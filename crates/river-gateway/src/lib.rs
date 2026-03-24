@@ -24,3 +24,4 @@ pub mod preferences;
 pub mod watchdog;
 pub mod embeddings;
 pub mod flash;
+pub mod agent;
