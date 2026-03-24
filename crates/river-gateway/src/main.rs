@@ -78,10 +78,6 @@ struct Args {
     #[arg(long, default_value = "info")]
     log_level: String,
 
-    /// Use experimental coordinator-based agent task
-    #[arg(long)]
-    use_coordinator: bool,
-
     /// Spectator model server URL (defaults to same as agent)
     #[arg(long)]
     spectator_model_url: Option<String>,
@@ -248,7 +244,6 @@ async fn main() -> anyhow::Result<()> {
         auth_token_file: args.auth_token_file,
         context_limit: args.context_limit,
         adapters: adapter_configs,
-        use_coordinator: args.use_coordinator,
         spectator_model_url: args.spectator_model_url,
         spectator_model_name: args.spectator_model_name,
     };

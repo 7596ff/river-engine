@@ -9,7 +9,7 @@ use crate::spectator::{SpectatorTask, SpectatorConfig};
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
-use crate::r#loop::{AgentLoop, LoopConfig, MessageQueue, ModelClient};
+use crate::r#loop::{MessageQueue, ModelClient};
 use crate::watchdog::{spawn_watchdog_task, notify_ready};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
@@ -52,8 +52,6 @@ pub struct ServerConfig {
     pub context_limit: u32,
     /// Communication adapters: (name, outbound_url, read_url)
     pub adapters: Vec<(String, String, Option<String>)>,
-    /// Use new coordinator-based agent (experimental)
-    pub use_coordinator: bool,
     /// Spectator model URL (defaults to same as agent)
     pub spectator_model_url: Option<String>,
     /// Spectator model name (defaults to same as agent)
@@ -275,26 +273,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     tracing::info!("Registered {} tools total", registry.names().len());
 
-    // Create loop components
-    let (loop_tx, loop_rx) = mpsc::channel(256);
+    // Create loop components (loop_tx used by API, message_queue shared)
+    let (loop_tx, _loop_rx) = mpsc::channel(256);
     let message_queue = Arc::new(MessageQueue::new());
-
-    // Create model client
-    let model_client = ModelClient::new(
-        gateway_config.model_url.clone(),
-        gateway_config.model_name.clone(),
-        Duration::from_secs(120),
-    )?;
-
-    // Create loop config
-    let loop_config = LoopConfig {
-        workspace: gateway_config.workspace.clone(),
-        default_heartbeat_minutes: gateway_config.heartbeat_minutes,
-        context_limit: gateway_config.context_limit,
-        model_timeout: Duration::from_secs(120),
-        max_tool_calls_per_generation: 50,
-        history_message_limit: 50, // Load last 50 messages for continuity
-    };
 
     // Load auth token if configured
     let auth_token = if let Some(ref token_file) = config.auth_token_file {
@@ -345,103 +326,78 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let agent_context_limit = state.config.context_limit;
     let agent_heartbeat_minutes = state.config.heartbeat_minutes;
 
-    // Spawn either the new coordinator-based agent or the old loop
-    if config.use_coordinator {
-        // New coordinator-based agent (experimental)
-        tracing::info!("Using coordinator-based agent task (experimental)");
+    // Coordinator-based agent (default)
+    let mut coordinator = Coordinator::new();
+    let flash_queue = Arc::new(FlashQueue::new(20));
 
-        let mut coordinator = Coordinator::new();
-        let flash_queue = Arc::new(FlashQueue::new(20));
+    // Determine spectator model (defaults to same as agent)
+    let spectator_model_url = config.spectator_model_url
+        .clone()
+        .unwrap_or_else(|| agent_model_url.clone());
+    let spectator_model_name = config.spectator_model_name
+        .clone()
+        .unwrap_or_else(|| agent_model_name.clone());
 
-        // Determine spectator model (defaults to same as agent)
-        let spectator_model_url = config.spectator_model_url
-            .clone()
-            .unwrap_or_else(|| agent_model_url.clone());
-        let spectator_model_name = config.spectator_model_name
-            .clone()
-            .unwrap_or_else(|| agent_model_name.clone());
+    // Create model client for agent task
+    let agent_model_client = ModelClient::new(
+        agent_model_url.clone(),
+        agent_model_name.clone(),
+        Duration::from_secs(120),
+    )?;
 
-        // Create model client for agent task
-        let agent_model_client = ModelClient::new(
-            agent_model_url.clone(),
-            agent_model_name.clone(),
-            Duration::from_secs(120),
-        )?;
+    let agent_config = AgentTaskConfig {
+        workspace: agent_workspace.clone(),
+        embeddings_dir: config.workspace.join("embeddings"),
+        context_limit: agent_context_limit,
+        max_tool_calls: 50,
+        history_limit: 50,
+        heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),
+        ..Default::default()
+    };
 
-        let agent_config = AgentTaskConfig {
-            workspace: agent_workspace.clone(),
-            embeddings_dir: config.workspace.join("embeddings"),
-            context_limit: agent_context_limit,
-            max_tool_calls: 50,
-            history_limit: 50,
-            heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),
-            ..Default::default()
-        };
+    let agent_task = AgentTask::new(
+        agent_config,
+        coordinator.bus().clone(),
+        message_queue,
+        agent_model_client,
+        state.tool_executor.clone(),
+        flash_queue.clone(),
+    );
 
-        let agent_task = AgentTask::new(
-            agent_config,
-            coordinator.bus().clone(),
-            message_queue,
-            agent_model_client,
-            state.tool_executor.clone(),
-            flash_queue.clone(),
-        );
+    coordinator.spawn_task("agent", |_| agent_task.run());
 
-        coordinator.spawn_task("agent", |_| agent_task.run());
+    // Create and spawn spectator task
+    let spectator_model = ModelClient::new(
+        spectator_model_url.clone(),
+        spectator_model_name.clone(),
+        Duration::from_secs(60),
+    )?;
 
-        // Create and spawn spectator task
-        let spectator_model = ModelClient::new(
-            spectator_model_url.clone(),
-            spectator_model_name.clone(),
-            Duration::from_secs(60),
-        )?;
+    let spectator_config = SpectatorConfig::from_workspace(
+        agent_workspace,
+        spectator_model_url,
+        spectator_model_name,
+    );
 
-        let spectator_config = SpectatorConfig::from_workspace(
-            agent_workspace,
-            spectator_model_url,
-            spectator_model_name,
-        );
+    let spectator_task = SpectatorTask::new(
+        spectator_config,
+        coordinator.bus().clone(),
+        spectator_model,
+        None, // vector_store - TODO: integrate
+        flash_queue,
+    );
 
-        let spectator_task = SpectatorTask::new(
-            spectator_config,
-            coordinator.bus().clone(),
-            spectator_model,
-            None, // vector_store - TODO: integrate
-            flash_queue,
-        );
+    coordinator.spawn_task("spectator", |_| spectator_task.run());
 
-        coordinator.spawn_task("spectator", |_| spectator_task.run());
+    tracing::info!("Spawned agent and spectator tasks via coordinator");
 
-        tracing::info!("Spawned agent and spectator tasks via coordinator");
-
-        tokio::spawn(async move {
-            // Keep coordinator alive until shutdown
-            // In a full implementation, this would listen for shutdown signals
-            loop {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
-            }
-        });
-    } else {
-        // Old loop (default, stable)
-        let mut agent_loop = AgentLoop::new(
-            loop_rx,
-            message_queue,
-            model_client,
-            state.tool_executor.clone(),
-            db_arc,
-            snowflake_gen,
-            heartbeat_scheduler,
-            context_rotation,
-            loop_config,
-            state.metrics.clone(),
-            state.policy.clone(),
-        );
-        tokio::spawn(async move {
-            agent_loop.run().await;
-            // Log if the loop exits (shouldn't happen in normal operation)
-            tracing::error!("Agent loop exited unexpectedly");
-        });
-    }
+    tokio::spawn(async move {
+        // Keep coordinator alive until shutdown
+        // In a full implementation, this would listen for shutdown signals
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    });
 
     // Create router
     let app = create_router(state);

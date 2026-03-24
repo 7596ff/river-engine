@@ -1,4 +1,9 @@
 //! Agent loop module - the heart of the agent
+//!
+//! **DEPRECATED**: Use coordinator + agent task instead. See `agent/task.rs`.
+//! This module is kept for backwards compatibility but will be removed in a future release.
+
+#![deprecated(note = "Use coordinator + agent task instead. See agent/task.rs")]
 
 pub mod state;
 pub mod queue;
