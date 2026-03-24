@@ -23,3 +23,4 @@ pub mod policy;
 pub mod preferences;
 pub mod watchdog;
 pub mod embeddings;
+pub mod flash;
