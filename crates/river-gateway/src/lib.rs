@@ -25,3 +25,4 @@ pub mod watchdog;
 pub mod embeddings;
 pub mod flash;
 pub mod agent;
+pub mod coordinator;
