@@ -4,6 +4,7 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct VectorStore {
     conn: Arc<Mutex<Connection>>,
 }

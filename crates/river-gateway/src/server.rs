@@ -4,6 +4,7 @@ use crate::agent::{AgentTask, AgentTaskConfig};
 use crate::api::create_router;
 use crate::coordinator::Coordinator;
 use crate::db::init_db;
+use crate::embeddings::{SyncService, VectorStore};
 use crate::flash::FlashQueue;
 use crate::spectator::{SpectatorTask, SpectatorConfig};
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
@@ -91,6 +92,42 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         };
         Some(RedisClient::new(redis_config).await?)
     } else {
+        None
+    };
+
+    // Create vector store and run initial sync if embeddings are configured
+    let embeddings_dir = config.workspace.join("embeddings");
+    let vector_store = if config.embedding_url.is_some() {
+        let vectors_db_path = config.data_dir.join("vectors.db");
+        match VectorStore::open(&vectors_db_path) {
+            Ok(store) => {
+                tracing::info!("Opened vector store at {:?}", vectors_db_path);
+
+                // Run initial sync
+                let sync_service = SyncService::new(embeddings_dir.clone(), store.clone());
+                match sync_service.full_sync().await {
+                    Ok(stats) => {
+                        tracing::info!(
+                            updated = stats.updated,
+                            skipped = stats.skipped,
+                            errors = stats.errors,
+                            "Initial embedding sync complete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Initial embedding sync failed: {}", e);
+                    }
+                }
+
+                Some(Arc::new(store))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to open vector store: {}", e);
+                None
+            }
+        }
+    } else {
+        tracing::info!("Embeddings not configured - vector store disabled");
         None
     };
 
@@ -383,7 +420,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         spectator_config,
         coordinator.bus().clone(),
         spectator_model,
-        None, // vector_store - TODO: integrate
+        vector_store,
         flash_queue,
     );
 
