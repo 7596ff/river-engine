@@ -8,15 +8,16 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use river_adapter::{SendOptions, SendRequest as AdapterSendRequest, SendResponse};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::channels::ChannelState;
 use crate::client::DiscordSender;
 
-/// Send message request from gateway
+/// Discord-specific send request (extends adapter SendRequest)
 #[derive(Debug, Deserialize)]
-pub struct SendRequest {
+pub struct DiscordSendRequest {
     pub channel: String,
     #[serde(default)]
     pub content: Option<String>,
@@ -30,7 +31,7 @@ pub struct SendRequest {
     pub reaction: Option<String>,
 }
 
-impl SendRequest {
+impl DiscordSendRequest {
     /// Validate the request
     pub fn validate(&self) -> Result<(), &'static str> {
         // Must have content or reaction
@@ -50,16 +51,21 @@ impl SendRequest {
 
         Ok(())
     }
-}
 
-/// Send message response
-#[derive(Debug, Serialize)]
-pub struct SendResponse {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    /// Convert to adapter SendRequest (for logging/forwarding)
+    pub fn to_adapter_request(&self) -> Option<AdapterSendRequest> {
+        self.content.as_ref().map(|content| AdapterSendRequest {
+            channel: self.channel.clone(),
+            content: content.clone(),
+            options: SendOptions {
+                reply_to: self.reply_to.clone(),
+                thread_id: self.thread_id.clone(),
+                metadata: serde_json::json!({
+                    "create_thread": self.create_thread,
+                }),
+            },
+        })
+    }
 }
 
 /// Add channel request
@@ -85,6 +91,7 @@ pub struct ListChannelsResponse {
 /// Health check response
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
+    pub healthy: bool,
     pub status: &'static str,
     pub discord: &'static str,
     pub gateway: &'static str,
@@ -169,24 +176,26 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 }
 
 async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let discord = if state
+    let discord_connected = state
         .discord_connected
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let gateway_reachable = state
+        .gateway_reachable
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let discord = if discord_connected {
         "connected"
     } else {
         "disconnected"
     };
-    let gateway = if state
-        .gateway_reachable
-        .load(std::sync::atomic::Ordering::Relaxed)
-    {
+    let gateway = if gateway_reachable {
         "reachable"
     } else {
         "unreachable"
     };
 
     Json(HealthResponse {
+        healthy: discord_connected,
         status: "ok",
         discord,
         gateway,
@@ -196,7 +205,7 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
 
 async fn handle_send(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<SendRequest>,
+    Json(req): Json<DiscordSendRequest>,
 ) -> Result<Json<SendResponse>, (StatusCode, Json<SendResponse>)> {
     // Validate request
     if let Err(e) = req.validate() {
@@ -477,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_send_request_validation_valid_content() {
-        let req = SendRequest {
+        let req = DiscordSendRequest {
             channel: "123".to_string(),
             content: Some("hello".to_string()),
             reply_to: None,
@@ -490,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_send_request_validation_valid_reaction() {
-        let req = SendRequest {
+        let req = DiscordSendRequest {
             channel: "123".to_string(),
             content: None,
             reply_to: None,
@@ -503,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_send_request_validation_no_content_or_reaction() {
-        let req = SendRequest {
+        let req = DiscordSendRequest {
             channel: "123".to_string(),
             content: None,
             reply_to: None,
@@ -519,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_send_request_validation_both_content_and_reaction() {
-        let req = SendRequest {
+        let req = DiscordSendRequest {
             channel: "123".to_string(),
             content: Some("hello".to_string()),
             reply_to: None,
@@ -535,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_send_request_validation_reply_and_thread() {
-        let req = SendRequest {
+        let req = DiscordSendRequest {
             channel: "123".to_string(),
             content: Some("hello".to_string()),
             reply_to: Some("msg1".to_string()),
