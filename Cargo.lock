@@ -1692,12 +1692,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "river-adapter"
+version = "0.1.4"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "river-core"
 version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "river-db"
+version = "0.1.4"
+dependencies = [
+ "chrono",
+ "river-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1737,6 +1762,7 @@ dependencies = [
  "regex",
  "reqwest",
  "river-core",
+ "river-db",
  "rusqlite",
  "sd-notify",
  "serde",
@@ -1785,6 +1811,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "which",
+]
+
+[[package]]
+name = "river-tools"
+version = "0.1.4"
+dependencies = [
+ "chrono",
+ "glob",
+ "regex",
+ "reqwest",
+ "river-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
