@@ -246,7 +246,10 @@ Both tracks must complete before Phase 4.
 
 ## Next Steps
 
-1. Write detailed implementation plan for Phase 0 (extract crates: tools, db, adapter)
-2. Write detailed implementation plan for Phase 0.5 (Discord refactor)
-3. Write detailed implementation plans for Phases 1-3 (can parallelize)
-4. Proceed through Phases 4-7 sequentially
+1. ~~Write detailed implementation plan for Phase 0 (extract crates: tools, db, adapter)~~ ✓
+2. ~~Write detailed implementation plan for Phase 0.5 (Discord refactor)~~ ✓
+3. ~~Write detailed implementation plans for Phases 1-3 (can parallelize)~~ ✓
+4. ~~Write detailed implementation plans for Phases 4-7~~ ✓
+5. **Execute Phase 0** — extract river-tools, river-db
+6. Execute Phase 0.5 (Communication track) in parallel with Phases 1-3 (Cognition track)
+7. Proceed through Phases 4-7 sequentially after tracks converge

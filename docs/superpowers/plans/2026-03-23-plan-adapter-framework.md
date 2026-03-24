@@ -1,8 +1,14 @@
 # Adapter Framework
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **⚠️ SUPERSEDED:** This plan has been merged into Phase 0 and Phase 0.5:
+> - **Phase 0** (`2026-03-23-plan-phase0-extract-crates.md`) — Creates river-adapter crate (Tasks 1-2 from here)
+> - **Phase 0.5** (`2026-03-23-plan-phase0.5-discord-refactor.md`) — Gateway integration + Discord refactor (Tasks 3-5 from here)
+>
+> **Do not execute this plan.** Use Phase 0 and Phase 0.5 instead.
 
-**Goal:** Create the `river-adapter` crate with shared types, trait, feature flags, and OpenAPI generation. Refactor `river-discord` to use shared types and self-register with the gateway.
+---
+
+**Original goal:** Create the `river-adapter` crate with shared types, trait, feature flags, and OpenAPI generation. Refactor `river-discord` to use shared types and self-register with the gateway.
 
 **Architecture:** New `river-adapter` crate defines the contract between gateway and adapters. Gateway stores adapters in a registry keyed by name. Adapters are external processes communicating via HTTP. Discord is the reference implementation.
 

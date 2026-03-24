@@ -33,6 +33,11 @@ The essential architecture. What makes River *River*.
 
 **Spec:** `docs/specs/gateway-restructure-meta-plan.md`
 
+**Plans:**
+- Phase 0: `docs/superpowers/plans/2026-03-23-plan-phase0-extract-crates.md`
+- Phase 0.5: `docs/superpowers/plans/2026-03-23-plan-phase0.5-discord-refactor.md`
+- Phase 1-7: `docs/superpowers/plans/2026-03-23-plan-phase*.md`
+
 | Phase | Status | Deliverable |
 |-------|--------|-------------|
 | Phase 0: Extract crates | 🔴 | river-tools, river-db, river-adapter |

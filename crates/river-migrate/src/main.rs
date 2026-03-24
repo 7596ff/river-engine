@@ -738,7 +738,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if !applied {
-        conn.execute_batch(include_str!("../../river-gateway/src/db/migrations/001_messages.sql"))?;
+        conn.execute_batch(include_str!("../../river-db/src/migrations/001_messages.sql"))?;
         conn.execute("INSERT INTO migrations (name) VALUES ('001_messages')", [])?;
     }
 
@@ -749,7 +749,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if !applied {
-        conn.execute_batch(include_str!("../../river-gateway/src/db/migrations/002_memories.sql"))?;
+        conn.execute_batch(include_str!("../../river-db/src/migrations/002_memories.sql"))?;
         conn.execute("INSERT INTO migrations (name) VALUES ('002_memories')", [])?;
     }
 
