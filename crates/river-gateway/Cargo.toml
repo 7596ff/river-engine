@@ -38,6 +38,9 @@ toml = "0.8"
 fred.workspace = true
 sd-notify = "0.4"
 urlencoding = "2.1"
+notify = { version = "7.0", default-features = false, features = ["macos_kqueue"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3.10"
