@@ -22,3 +22,4 @@ pub mod logging;
 pub mod policy;
 pub mod preferences;
 pub mod watchdog;
+pub mod embeddings;
