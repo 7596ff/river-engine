@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let event_handler = EventHandler::new(channels.clone(), gateway_client.clone());
 
     // Create HTTP server state
-    let http_state = AppState::new(channels.clone());
+    let http_state = AppState::new(channels.clone(), config.listen_port);
 
     // Set up Discord sender for outbound messages
     http_state.set_discord(discord.sender()).await;
