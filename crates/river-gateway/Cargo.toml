@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 river-core = { path = "../river-core" }
 river-db = { path = "../river-db" }
+river-tools = { path = "../river-tools" }
 tokio.workspace = true
 axum.workspace = true
 tower.workspace = true

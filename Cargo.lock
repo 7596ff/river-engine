@@ -1763,6 +1763,7 @@ dependencies = [
  "reqwest",
  "river-core",
  "river-db",
+ "river-tools",
  "rusqlite",
  "sd-notify",
  "serde",

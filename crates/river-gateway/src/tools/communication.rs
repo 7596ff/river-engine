@@ -3,7 +3,7 @@
 //! These tools allow the agent to send messages through configured communication adapters.
 
 use crate::conversations::{Author, Message, WriteOp};
-use crate::tools::{Tool, ToolResult};
+use river_tools::{Tool, ToolResult};
 use river_core::RiverError;
 use serde_json::Value;
 use std::collections::HashMap;

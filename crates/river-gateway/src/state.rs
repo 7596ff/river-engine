@@ -70,7 +70,8 @@ impl AppState {
         policy: Arc<RwLock<HealthPolicy>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
-        let executor = ToolExecutor::new(registry).with_metrics(metrics.clone());
+        // Note: Metrics tracking is handled at the loop/handler level
+        let executor = ToolExecutor::new(registry);
 
         Self {
             snowflake_gen,

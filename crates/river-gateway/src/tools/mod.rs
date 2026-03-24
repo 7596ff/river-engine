@@ -1,34 +1,30 @@
-//! Tool system
+//! Tool system — re-exports from river-tools + gateway-specific tools
 
-mod registry;
-mod executor;
-mod file;
-mod shell;
-mod memory;
+// Gateway-specific tools (depend on gateway internals)
 mod communication;
-mod web;
-mod model;
-mod scheduling;
-mod logging;
+mod memory;
 mod subagent;
 mod sync;
 
-pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
-pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
-pub use file::{ReadTool, WriteTool, EditTool, GlobTool, GrepTool};
-pub use shell::BashTool;
-pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool};
+// Re-export everything from river-tools
+pub use river_tools::{
+    Tool, ToolRegistry, ToolSchema, ToolResult,
+    ToolExecutor, ToolCall, ToolCallResponse,
+    ReadTool, WriteTool, EditTool, GlobTool, GrepTool,
+    BashTool,
+    WebFetchTool, WebSearchTool,
+    ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool,
+    ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool,
+    LogReadTool,
+};
+
+// Re-export gateway-specific tools
 pub use communication::{
     AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool,
     ReadChannelTool
 };
 pub use sync::SyncConversationTool;
-pub use web::{WebFetchTool, WebSearchTool};
-pub use model::{
-    ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool
-};
-pub use scheduling::{ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool};
-pub use logging::LogReadTool;
+pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool};
 pub use subagent::{
     SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
     InternalSendTool, InternalReceiveTool, WaitForSubagentTool
