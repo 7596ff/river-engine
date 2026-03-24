@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
     Json, Router,
@@ -12,6 +12,7 @@ use river_adapter::{SendOptions, SendRequest as AdapterSendRequest, SendResponse
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::adapter::discord_adapter_info;
 use crate::channels::ChannelState;
 use crate::client::DiscordSender;
 
@@ -111,6 +112,17 @@ fn default_limit() -> u64 {
     50
 }
 
+fn default_history_limit() -> usize {
+    50
+}
+
+/// History endpoint query parameters
+#[derive(Debug, Deserialize)]
+pub struct HistoryParams {
+    #[serde(default = "default_history_limit")]
+    pub limit: usize,
+}
+
 /// Read message response
 #[derive(Debug, Serialize)]
 pub struct ReadMessage {
@@ -136,15 +148,19 @@ pub struct AppState {
     pub discord: Arc<RwLock<Option<DiscordSender>>>,
     pub discord_connected: std::sync::atomic::AtomicBool,
     pub gateway_reachable: std::sync::atomic::AtomicBool,
+    pub port: u16,
+    pub bot_id: RwLock<Option<String>>,
 }
 
 impl AppState {
-    pub fn new(channels: Arc<ChannelState>) -> Arc<Self> {
+    pub fn new(channels: Arc<ChannelState>, port: u16) -> Arc<Self> {
         Arc::new(Self {
             channels,
             discord: Arc::new(RwLock::new(None)),
             discord_connected: std::sync::atomic::AtomicBool::new(false),
             gateway_reachable: std::sync::atomic::AtomicBool::new(false),
+            port,
+            bot_id: RwLock::new(None),
         })
     }
 
@@ -161,18 +177,29 @@ impl AppState {
         self.gateway_reachable
             .store(reachable, std::sync::atomic::Ordering::Relaxed);
     }
+
+    pub async fn set_bot_id(&self, bot_id: String) {
+        *self.bot_id.write().await = Some(bot_id);
+    }
 }
 
 /// Create the HTTP router
 pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/capabilities", get(capabilities))
         .route("/send", post(handle_send))
         .route("/read", get(handle_read))
         .route("/channels", get(list_channels))
         .route("/channels", post(add_channel))
         .route("/channels/{id}", delete(remove_channel))
+        .route("/history/{channel}", get(history))
         .with_state(state)
+}
+
+async fn capabilities(State(state): State<Arc<AppState>>) -> Json<river_adapter::AdapterInfo> {
+    let bot_id = state.bot_id.read().await.clone();
+    Json(discord_adapter_info(state.port, bot_id))
 }
 
 async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
@@ -480,6 +507,80 @@ async fn handle_read(
     Ok(Json(messages))
 }
 
+/// Convert a ReadMessage to a river_adapter::IncomingEvent
+fn read_message_to_event(msg: ReadMessage, channel: &str) -> river_adapter::IncomingEvent {
+    river_adapter::IncomingEvent {
+        adapter: "discord".into(),
+        event_type: river_adapter::EventType::MessageCreate,
+        channel: channel.to_string(),
+        channel_name: None,
+        author: river_adapter::Author {
+            id: msg.author_id,
+            name: msg.author_name,
+            is_bot: msg.is_bot,
+        },
+        content: msg.content,
+        message_id: msg.id,
+        timestamp: chrono::DateTime::from_timestamp(msg.timestamp, 0)
+            .unwrap_or_else(chrono::Utc::now),
+        metadata: serde_json::json!({
+            "reactions": msg.reactions,
+        }),
+    }
+}
+
+async fn history(
+    State(state): State<Arc<AppState>>,
+    Path(channel): Path<String>,
+    Query(params): Query<HistoryParams>,
+) -> Result<Json<Vec<river_adapter::IncomingEvent>>, (StatusCode, Json<SendResponse>)> {
+    let discord_guard = state.discord.read().await;
+    let Some(ref discord) = *discord_guard else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("discord client not initialized".to_string()),
+            }),
+        ));
+    };
+
+    let channel_id: u64 = channel.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("invalid channel id".to_string()),
+            }),
+        )
+    })?;
+
+    let limit = params.limit.min(100) as u16;
+
+    let messages = discord
+        .read_messages(channel_id, limit, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(SendResponse {
+                    success: false,
+                    message_id: None,
+                    error: Some(format!("discord api error: {}", e)),
+                }),
+            )
+        })?;
+
+    let events: Vec<river_adapter::IncomingEvent> = messages
+        .into_iter()
+        .map(|msg| read_message_to_event(msg, &channel))
+        .collect();
+
+    Ok(Json(events))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,7 +666,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![1, 2, 3], None);
-        let state = AppState::new(channels);
+        let state = AppState::new(channels, 3001);
         state.set_discord_connected(true);
         state.set_gateway_reachable(true);
 
@@ -585,7 +686,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![111, 222], None);
-        let state = AppState::new(channels);
+        let state = AppState::new(channels, 3001);
 
         let app = create_router(state);
         let response = app
@@ -608,7 +709,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels.clone());
+        let state = AppState::new(channels.clone(), 3001);
 
         let app = create_router(state);
         let response = app
@@ -673,7 +774,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![111], None);
-        let state = AppState::new(channels);
+        let state = AppState::new(channels, 3001);
 
         let app = create_router(state);
         let response = app
@@ -696,7 +797,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels);
+        let state = AppState::new(channels, 3001);
 
         let app = create_router(state);
         let response = app
@@ -720,7 +821,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels);
+        let state = AppState::new(channels, 3001);
 
         let app = create_router(state);
         let response = app
