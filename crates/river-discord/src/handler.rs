@@ -1,7 +1,9 @@
 //! Discord event handling
 
 use crate::channels::ChannelState;
-use crate::gateway::{Author, EventMetadata, GatewayClient, IncomingEvent};
+use crate::gateway::GatewayClient;
+use chrono::{DateTime, Utc};
+use river_adapter::{Author, EventType, IncomingEvent};
 use std::sync::Arc;
 use twilight_model::channel::message::EmojiReactionType;
 use twilight_model::gateway::payload::incoming::{MessageCreate, ReactionAdd};
@@ -29,25 +31,28 @@ impl EventHandler {
         }
 
         // Build the event
+        // Convert Twilight timestamp to chrono DateTime
+        let timestamp: DateTime<Utc> = DateTime::from_timestamp(msg.timestamp.as_secs(), 0)
+            .unwrap_or_else(Utc::now);
+
         let event = IncomingEvent {
-            adapter: "discord",
-            event_type: "message".to_string(),
+            adapter: "discord".into(),
+            event_type: EventType::MessageCreate,
             channel: channel_id.to_string(),
             channel_name: None, // TODO: Cache channel names from Discord
-            guild_id: msg.guild_id.map(|id| id.get().to_string()),
-            guild_name: None, // TODO: Cache guild names from Discord
             author: Author {
                 id: msg.author.id.get().to_string(),
                 name: msg.author.name.clone(),
+                is_bot: msg.author.bot,
             },
             content: msg.content.clone(),
             message_id: msg.id.get().to_string(),
-            metadata: EventMetadata {
-                guild_id: msg.guild_id.map(|id| id.get().to_string()),
-                // If message has/created a thread, capture its ID
-                thread_id: msg.thread.as_ref().map(|t| t.id.get().to_string()),
-                reply_to: msg.referenced_message.as_ref().map(|m| m.id.get().to_string()),
-            },
+            timestamp,
+            metadata: serde_json::json!({
+                "guild_id": msg.guild_id.map(|id| id.get().to_string()),
+                "thread_id": msg.thread.as_ref().map(|t| t.id.get().to_string()),
+                "reply_to": msg.referenced_message.as_ref().map(|m| m.id.get().to_string()),
+            }),
         };
 
         // Send to gateway
@@ -88,24 +93,27 @@ impl EventHandler {
             EmojiReactionType::Unicode { name } => name.clone(),
         };
 
+        // Get whether the user is a bot (from member info if available)
+        let is_bot = reaction.member.as_ref()
+            .map(|m| m.user.bot)
+            .unwrap_or(false);
+
         let event = IncomingEvent {
-            adapter: "discord",
-            event_type: "reaction_add".to_string(),
+            adapter: "discord".into(),
+            event_type: EventType::ReactionAdd,
             channel: channel_id.to_string(),
             channel_name: None, // TODO: Cache channel names from Discord
-            guild_id: reaction.guild_id.map(|id| id.get().to_string()),
-            guild_name: None, // TODO: Cache guild names from Discord
             author: Author {
                 id: user_id,
                 name: user_name,
+                is_bot,
             },
             content: emoji,
             message_id: reaction.message_id.get().to_string(),
-            metadata: EventMetadata {
-                guild_id: reaction.guild_id.map(|id| id.get().to_string()),
-                thread_id: None,
-                reply_to: None,
-            },
+            timestamp: Utc::now(), // Reactions don't have timestamps in Discord
+            metadata: serde_json::json!({
+                "guild_id": reaction.guild_id.map(|id| id.get().to_string()),
+            }),
         };
 
         if let Err(e) = self.gateway.send_incoming(event).await {
