@@ -1,45 +1,23 @@
 //! HTTP client for river-gateway communication
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use river_adapter::IncomingEvent;
+use serde::Deserialize;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
 
-/// Message author info
-#[derive(Debug, Serialize)]
-pub struct Author {
-    pub id: String,
-    pub name: String,
-}
-
-/// Metadata for incoming events
-#[derive(Debug, Serialize, Default)]
-pub struct EventMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reply_to: Option<String>,
-}
-
-/// Incoming event sent to gateway
-#[derive(Debug, Serialize)]
-pub struct IncomingEvent {
-    pub adapter: &'static str,
-    pub event_type: String,
-    pub channel: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_name: Option<String>,
-    pub author: Author,
-    pub content: String,
-    pub message_id: String,
-    pub metadata: EventMetadata,
+/// Build metadata JSON for Discord events
+pub fn discord_metadata(
+    guild_id: Option<String>,
+    thread_id: Option<String>,
+    reply_to: Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "guild_id": guild_id,
+        "thread_id": thread_id,
+        "reply_to": reply_to,
+    })
 }
 
 /// Response from gateway /incoming endpoint
@@ -141,42 +119,48 @@ impl std::fmt::Display for GatewayError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_adapter::{Author, EventType};
 
     #[test]
     fn test_incoming_event_serialization() {
         let event = IncomingEvent {
-            adapter: "discord",
-            event_type: "message".to_string(),
+            adapter: "discord".into(),
+            event_type: EventType::MessageCreate,
             channel: "123456".to_string(),
             channel_name: Some("general".to_string()),
-            guild_id: Some("guild1".to_string()),
-            guild_name: None,
             author: Author {
                 id: "user123".to_string(),
                 name: "TestUser".to_string(),
+                is_bot: false,
             },
             content: "Hello world".to_string(),
             message_id: "msg789".to_string(),
-            metadata: EventMetadata {
-                guild_id: Some("guild1".to_string()),
-                thread_id: None,
-                reply_to: None,
-            },
+            timestamp: chrono::Utc::now(),
+            metadata: serde_json::json!({
+                "guild_id": "guild1",
+            }),
         };
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"adapter\":\"discord\""));
-        assert!(json.contains("\"event_type\":\"message\""));
-        assert!(json.contains("\"guild_id\":\"guild1\""));
-        assert!(json.contains("\"channel_name\":\"general\""));
-        // thread_id and guild_name should be skipped (None)
-        assert!(!json.contains("thread_id"));
-        assert!(!json.contains("guild_name"));
+        assert!(json.contains("MessageCreate"));
     }
 
     #[test]
     fn test_gateway_client_creation() {
         let client = GatewayClient::new("http://localhost:3000".to_string());
         assert_eq!(client.base_url, "http://localhost:3000");
+    }
+
+    #[test]
+    fn test_discord_metadata() {
+        let metadata = discord_metadata(
+            Some("guild123".to_string()),
+            Some("thread456".to_string()),
+            None,
+        );
+        assert_eq!(metadata["guild_id"], "guild123");
+        assert_eq!(metadata["thread_id"], "thread456");
+        assert!(metadata["reply_to"].is_null());
     }
 }
