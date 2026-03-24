@@ -26,3 +26,4 @@ pub mod embeddings;
 pub mod flash;
 pub mod agent;
 pub mod coordinator;
+pub mod spectator;

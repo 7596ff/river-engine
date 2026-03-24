@@ -5,6 +5,7 @@ use crate::api::create_router;
 use crate::coordinator::Coordinator;
 use crate::db::init_db;
 use crate::flash::FlashQueue;
+use crate::spectator::{SpectatorTask, SpectatorConfig};
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
@@ -53,6 +54,10 @@ pub struct ServerConfig {
     pub adapters: Vec<(String, String, Option<String>)>,
     /// Use new coordinator-based agent (experimental)
     pub use_coordinator: bool,
+    /// Spectator model URL (defaults to same as agent)
+    pub spectator_model_url: Option<String>,
+    /// Spectator model name (defaults to same as agent)
+    pub spectator_model_name: Option<String>,
 }
 
 /// Initialize and run the gateway server
@@ -348,15 +353,23 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         let mut coordinator = Coordinator::new();
         let flash_queue = Arc::new(FlashQueue::new(20));
 
+        // Determine spectator model (defaults to same as agent)
+        let spectator_model_url = config.spectator_model_url
+            .clone()
+            .unwrap_or_else(|| agent_model_url.clone());
+        let spectator_model_name = config.spectator_model_name
+            .clone()
+            .unwrap_or_else(|| agent_model_name.clone());
+
         // Create model client for agent task
         let agent_model_client = ModelClient::new(
-            agent_model_url,
-            agent_model_name,
+            agent_model_url.clone(),
+            agent_model_name.clone(),
             Duration::from_secs(120),
         )?;
 
         let agent_config = AgentTaskConfig {
-            workspace: agent_workspace,
+            workspace: agent_workspace.clone(),
             embeddings_dir: config.workspace.join("embeddings"),
             context_limit: agent_context_limit,
             max_tool_calls: 50,
@@ -371,10 +384,35 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
             message_queue,
             agent_model_client,
             state.tool_executor.clone(),
-            flash_queue,
+            flash_queue.clone(),
         );
 
         coordinator.spawn_task("agent", |_| agent_task.run());
+
+        // Create and spawn spectator task
+        let spectator_model = ModelClient::new(
+            spectator_model_url.clone(),
+            spectator_model_name.clone(),
+            Duration::from_secs(60),
+        )?;
+
+        let spectator_config = SpectatorConfig::from_workspace(
+            agent_workspace,
+            spectator_model_url,
+            spectator_model_name,
+        );
+
+        let spectator_task = SpectatorTask::new(
+            spectator_config,
+            coordinator.bus().clone(),
+            spectator_model,
+            None, // vector_store - TODO: integrate
+            flash_queue,
+        );
+
+        coordinator.spawn_task("spectator", |_| spectator_task.run());
+
+        tracing::info!("Spawned agent and spectator tasks via coordinator");
 
         tokio::spawn(async move {
             // Keep coordinator alive until shutdown

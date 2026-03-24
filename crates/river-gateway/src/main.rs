@@ -81,6 +81,14 @@ struct Args {
     /// Use experimental coordinator-based agent task
     #[arg(long)]
     use_coordinator: bool,
+
+    /// Spectator model server URL (defaults to same as agent)
+    #[arg(long)]
+    spectator_model_url: Option<String>,
+
+    /// Spectator model name (defaults to same as agent)
+    #[arg(long)]
+    spectator_model_name: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -241,6 +249,8 @@ async fn main() -> anyhow::Result<()> {
         context_limit: args.context_limit,
         adapters: adapter_configs,
         use_coordinator: args.use_coordinator,
+        spectator_model_url: args.spectator_model_url,
+        spectator_model_name: args.spectator_model_name,
     };
 
     run(config).await
