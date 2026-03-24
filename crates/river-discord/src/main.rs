@@ -4,9 +4,11 @@ use river_discord::{
     client::DiscordClient,
     commands::{handle_interaction, register_commands},
     config::{Args, DiscordConfig},
+    discord_adapter_info,
     gateway::GatewayClient,
     handler::EventHandler,
     outbound::{create_router, AppState},
+    register_with_gateway,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -61,6 +63,25 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("HTTP server listening on {}", addr);
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
+    });
+
+    // Self-register with gateway (non-blocking, non-fatal)
+    let adapter_info = discord_adapter_info(config.listen_port, Some(application_id.to_string()));
+    let gateway_url = config.gateway_url.clone();
+    tokio::spawn(async move {
+        for attempt in 1..=3 {
+            match register_with_gateway(&gateway_url, adapter_info.clone()).await {
+                Ok(()) => {
+                    tracing::info!("Registered with gateway on attempt {}", attempt);
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to register with gateway (attempt {}): {}", attempt, e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64)).await;
+                }
+            }
+        }
+        tracing::warn!("Failed to register with gateway after 3 attempts (continuing anyway)");
     });
 
     // Spawn gateway health check loop
