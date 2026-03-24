@@ -1,5 +1,7 @@
 //! River Gateway - Agent Runtime
 
+pub mod adapters;
+pub use adapters::AdapterRegistry;
 pub mod config;
 pub mod db;
 pub mod session;

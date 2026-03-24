@@ -1,5 +1,6 @@
 //! Shared application state
 
+use crate::adapters::AdapterRegistry;
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub metrics: Arc<RwLock<AgentMetrics>>,
     /// Health policy for self-healing
     pub policy: Arc<RwLock<HealthPolicy>>,
+    /// Registry of connected adapters
+    pub adapter_registry: Arc<AdapterRegistry>,
 }
 
 /// Gateway configuration (runtime)
@@ -86,6 +89,7 @@ impl AppState {
             subagent_manager,
             metrics,
             policy,
+            adapter_registry: Arc::new(AdapterRegistry::new()),
         }
     }
 }

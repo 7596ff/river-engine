@@ -5,6 +5,7 @@ use crate::metrics::{get_rss_bytes, LoopStateLabel};
 use crate::policy::HealthStatus;
 use crate::r#loop::LoopEvent;
 use crate::state::AppState;
+use river_adapter::{RegisterRequest, RegisterResponse};
 use axum::{
     extract::State,
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
@@ -135,6 +136,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health_check))
         .route("/incoming", post(handle_incoming))
         .route("/tools", get(list_tools))
+        .route("/adapters/register", post(register_adapter))
         .with_state(state)
 }
 
@@ -301,6 +303,31 @@ async fn list_tools(
     Json(executor.schemas())
 }
 
+async fn register_adapter(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterRequest>,
+) -> Result<Json<RegisterResponse>, StatusCode> {
+    // Validate authentication
+    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+        tracing::warn!(
+            adapter = %request.adapter.name,
+            "Authentication failed for adapter registration"
+        );
+        return Err(status);
+    }
+
+    tracing::info!(
+        adapter = %request.adapter.name,
+        version = %request.adapter.version,
+        url = %request.adapter.url,
+        features = ?request.adapter.features,
+        "Registering adapter"
+    );
+
+    let response = state.adapter_registry.register(request.adapter).await;
+    Ok(Json(response))
+}
 
 #[cfg(test)]
 mod tests {

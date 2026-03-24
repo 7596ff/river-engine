@@ -1762,6 +1762,7 @@ dependencies = [
  "glob",
  "regex",
  "reqwest",
+ "river-adapter",
  "river-core",
  "river-db",
  "river-tools",
