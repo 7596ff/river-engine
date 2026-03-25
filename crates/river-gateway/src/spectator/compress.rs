@@ -169,6 +169,55 @@ impl Compressor {
         Ok(moment)
     }
 
+    /// Count moves for a channel
+    pub async fn count_moves(&self, channel: &str) -> Result<usize, String> {
+        let sanitized = channel.replace(['/', '\\', ' '], "-");
+        let moves_path = self.moves_dir().join(format!("{}.md", sanitized));
+
+        let content = tokio::fs::read_to_string(&moves_path).await
+            .unwrap_or_default();
+
+        Ok(content.lines().filter(|l| l.starts_with("Move ")).count())
+    }
+
+    /// Get all channels with moves
+    pub async fn list_channels(&self) -> Result<Vec<String>, String> {
+        let moves_dir = self.moves_dir();
+        if !moves_dir.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut channels = Vec::new();
+        let mut entries = tokio::fs::read_dir(&moves_dir).await
+            .map_err(|e| format!("Failed to read moves directory: {}", e))?;
+
+        while let Some(entry) = entries.next_entry().await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "md") {
+                if let Some(stem) = path.file_stem() {
+                    let name = stem.to_string_lossy().to_string();
+                    // Exclude archive files
+                    if !name.contains("-archive-") {
+                        channels.push(name);
+                    }
+                }
+            }
+        }
+
+        Ok(channels)
+    }
+
+    /// Read moves content for compression
+    pub async fn read_moves(&self, channel: &str) -> Result<String, String> {
+        let sanitized = channel.replace(['/', '\\', ' '], "-");
+        let moves_path = self.moves_dir().join(format!("{}.md", sanitized));
+
+        tokio::fs::read_to_string(&moves_path).await
+            .map_err(|e| format!("Failed to read moves: {}", e))
+    }
+
     /// Clear old moves after creating a moment
     pub async fn archive_moves(&self, channel: &str) -> Result<(), String> {
         let sanitized = channel.replace(['/', '\\', ' '], "-");
