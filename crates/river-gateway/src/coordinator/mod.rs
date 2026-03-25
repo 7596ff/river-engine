@@ -74,6 +74,11 @@ impl Coordinator {
     pub fn task_count(&self) -> usize {
         self.tasks.len()
     }
+
+    /// Check if a named task is running (was spawned and not finished)
+    pub fn is_running(&self, name: &str) -> bool {
+        self.tasks.iter().any(|t| t.name == name && !t.handle.is_finished())
+    }
 }
 
 impl Default for Coordinator {
