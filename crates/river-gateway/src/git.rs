@@ -27,6 +27,12 @@ pub enum GitCommitResult {
     Error(String),
 }
 
+/// Git author for the agent (acting self)
+pub const AGENT_AUTHOR: &str = "agent <agent@river-engine>";
+
+/// Git author for the spectator (observing self)
+pub const SPECTATOR_AUTHOR: &str = "spectator <spectator@river-engine>";
+
 /// Git operations for workspace management
 pub struct GitOps {
     workspace: std::path::PathBuf,
@@ -166,6 +172,82 @@ impl GitOps {
         if !commit_output.status.success() {
             let stderr = String::from_utf8_lossy(&commit_output.stderr);
             // Check if it's "nothing to commit" which is not really an error
+            if stderr.contains("nothing to commit") {
+                return GitCommitResult::NoChanges;
+            }
+            return GitCommitResult::Error(format!("git commit failed: {}", stderr));
+        }
+
+        // Get the commit hash
+        let hash_output = Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(&self.workspace)
+            .output();
+
+        let commit_hash = match hash_output {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => "unknown".to_string(),
+        };
+
+        GitCommitResult::Committed { files, commit_hash }
+    }
+
+    /// Commit all changes with a specific message and author
+    ///
+    /// Author format: "name <email>" e.g. "agent <agent@river-engine>"
+    /// Use AGENT_AUTHOR or SPECTATOR_AUTHOR constants.
+    pub fn commit_as(&self, message: &str, author: &str) -> GitCommitResult {
+        // Check for conflicts first
+        match self.has_conflicts() {
+            Ok(conflicts) if !conflicts.is_empty() => {
+                return GitCommitResult::Conflicts {
+                    conflicting_files: conflicts,
+                };
+            }
+            Err(e) => {
+                tracing::warn!("Failed to check for conflicts: {}", e);
+            }
+            _ => {}
+        }
+
+        // Check if there are changes
+        let files = match self.changed_files() {
+            Ok(f) if f.is_empty() => return GitCommitResult::NoChanges,
+            Ok(f) => f,
+            Err(e) => return GitCommitResult::Error(e),
+        };
+
+        // Stage all changes
+        let add_output = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&self.workspace)
+            .output();
+
+        if let Err(e) = add_output {
+            return GitCommitResult::Error(format!("Failed to run git add: {}", e));
+        }
+
+        let add_output = add_output.unwrap();
+        if !add_output.status.success() {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            return GitCommitResult::Error(format!("git add failed: {}", stderr));
+        }
+
+        // Commit with specified author
+        let commit_output = Command::new("git")
+            .args(["commit", "--author", author, "-m", message])
+            .current_dir(&self.workspace)
+            .output();
+
+        if let Err(e) = commit_output {
+            return GitCommitResult::Error(format!("Failed to run git commit: {}", e));
+        }
+
+        let commit_output = commit_output.unwrap();
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
             if stderr.contains("nothing to commit") {
                 return GitCommitResult::NoChanges;
             }
@@ -365,5 +447,75 @@ mod tests {
 
         let files = git.changed_files().unwrap();
         assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_commit_as_with_author() {
+        let dir = setup_git_repo();
+        let git = GitOps::new(dir.path());
+
+        // Create initial commit
+        fs::write(dir.path().join("test.txt"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Make a change
+        fs::write(dir.path().join("note.md"), "# Observation").unwrap();
+
+        // Commit as spectator
+        let result = git.commit_as("observe: room note", SPECTATOR_AUTHOR);
+        assert!(matches!(result, GitCommitResult::Committed { .. }));
+
+        // Verify author in git log
+        let log_output = Command::new("git")
+            .args(["log", "-1", "--format=%an <%ae>"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let author = String::from_utf8_lossy(&log_output.stdout);
+        assert_eq!(author.trim(), "spectator <spectator@river-engine>");
+    }
+
+    #[test]
+    fn test_commit_as_agent() {
+        let dir = setup_git_repo();
+        let git = GitOps::new(dir.path());
+
+        // Create initial commit
+        fs::write(dir.path().join("test.txt"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Make a change
+        fs::write(dir.path().join("code.rs"), "fn main() {}").unwrap();
+
+        // Commit as agent
+        let result = git.commit_as("feat: add main function", AGENT_AUTHOR);
+        assert!(matches!(result, GitCommitResult::Committed { .. }));
+
+        // Verify author in git log
+        let log_output = Command::new("git")
+            .args(["log", "-1", "--format=%an <%ae>"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let author = String::from_utf8_lossy(&log_output.stdout);
+        assert_eq!(author.trim(), "agent <agent@river-engine>");
     }
 }
