@@ -18,8 +18,9 @@ Run the full river-engine stack with Docker Compose.
 cp .env.example .env
 # Edit .env with your Discord guild ID, channel IDs, etc.
 
-# 2. Create directories
-mkdir -p data workspace models secrets
+# 2. Create directories and copy workspace files
+mkdir -p data models secrets
+cp -r workspace ./workspace
 
 # 3. Add Discord bot token
 echo "your-bot-token" > secrets/discord-token
@@ -82,9 +83,26 @@ ANTHROPIC_API_KEY=sk-ant-...
 | Directory | Contents |
 |-----------|----------|
 | `./data/` | SQLite database, logs |
-| `./workspace/` | Conversations, inbox |
+| `./workspace/` | Agent workspace (see below) |
 | `./models/` | Ollama model cache |
 | `./secrets/` | Discord token |
+
+### Workspace Structure
+
+```
+workspace/
+├── actor/
+│   ├── AGENTS.md      # Actor operations guide
+│   ├── IDENTITY.md    # Actor identity (editable by agent)
+│   └── RULES.md       # Actor constraints
+├── spectator/
+│   ├── AGENTS.md      # Spectator operations guide
+│   ├── IDENTITY.md    # Spectator identity
+│   └── RULES.md       # Spectator constraints
+├── conversations/     # Message history per channel
+├── embeddings/        # Semantic memories, moves, moments
+└── thinking/          # Session continuity state
+```
 
 ## Health Checks
 
