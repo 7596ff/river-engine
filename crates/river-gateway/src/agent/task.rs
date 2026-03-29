@@ -4,6 +4,7 @@
 //! turn cycle. Receives events from the coordinator bus and emits lifecycle
 //! events for the spectator to observe.
 
+use crate::agent::channel::ChannelContext;
 use crate::agent::context::{ContextAssembler, ContextBudget};
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
@@ -73,7 +74,7 @@ pub struct AgentTask {
     context_assembler: ContextAssembler,
     flash_queue: Arc<FlashQueue>,
     turn_count: u64,
-    current_channel: String,
+    channel_context: Option<ChannelContext>,
     /// Conversation messages for context (accumulated across turns)
     conversation: Vec<ChatMessage>,
     /// Last known prompt token count
@@ -103,7 +104,7 @@ impl AgentTask {
             context_assembler,
             flash_queue,
             turn_count: 0,
-            current_channel: "default".into(),
+            channel_context: None,
             conversation: Vec::new(),
             last_prompt_tokens: 0,
         }
@@ -175,14 +176,20 @@ impl AgentTask {
         // ========== WAKE ==========
         self.flash_queue.tick_turn().await;
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
-            channel: self.current_channel.clone(),
+            channel: self.channel_context
+                .as_ref()
+                .map(|c| c.display_name().to_string())
+                .unwrap_or_else(|| "unset".to_string()),
             turn_number: self.turn_count,
             timestamp: turn_start,
         }));
 
         tracing::info!(
             turn = self.turn_count,
-            channel = %self.current_channel,
+            channel = %self.channel_context
+                .as_ref()
+                .map(|c| c.display_name())
+                .unwrap_or("unset"),
             is_heartbeat = is_heartbeat,
             "Turn started"
         );
@@ -204,8 +211,12 @@ impl AgentTask {
 
         // ========== ASSEMBLE CONTEXT ==========
         let system_prompt = self.build_system_prompt().await;
+        let channel_name = self.channel_context
+            .as_ref()
+            .map(|c| c.display_name().to_string())
+            .unwrap_or_else(|| "default".to_string());
         let context = self.context_assembler.assemble(
-            &self.current_channel,
+            &channel_name,
             &system_prompt,
             &self.conversation,
             &self.flash_queue,
@@ -332,7 +343,10 @@ impl AgentTask {
         );
 
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
-            channel: self.current_channel.clone(),
+            channel: self.channel_context
+                .as_ref()
+                .map(|c| c.display_name().to_string())
+                .unwrap_or_else(|| "unset".to_string()),
             turn_number: self.turn_count,
             transcript_summary: transcript_summary.clone(),
             tool_calls: stats.tool_calls,
@@ -461,24 +475,31 @@ impl AgentTask {
     }
 
     /// Switch to a different channel
-    pub fn switch_channel(&mut self, channel: String) {
-        let old = std::mem::replace(&mut self.current_channel, channel.clone());
+    pub fn set_channel_context(&mut self, context: ChannelContext) {
+        let old = self.channel_context
+            .as_ref()
+            .map(|c| c.display_name().to_string())
+            .unwrap_or_else(|| "unset".to_string());
+        let new = context.display_name().to_string();
+
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched {
             from: old.clone(),
-            to: channel,
+            to: new.clone(),
             timestamp: Utc::now(),
         }));
-        tracing::info!(from = %old, to = %self.current_channel, "Channel switched");
+
+        tracing::info!(from = %old, to = %new, "Channel switched");
+        self.channel_context = Some(context);
+    }
+
+    /// Get current channel context
+    pub fn channel_context(&self) -> Option<&ChannelContext> {
+        self.channel_context.as_ref()
     }
 
     /// Get current turn count
     pub fn turn_count(&self) -> u64 {
         self.turn_count
-    }
-
-    /// Get current channel
-    pub fn current_channel(&self) -> &str {
-        &self.current_channel
     }
 
     /// Get last known prompt token count
@@ -490,8 +511,10 @@ impl AgentTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::channel::ChannelContext;
     use crate::coordinator::Coordinator;
     use crate::tools::ToolRegistry;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn test_config(workspace: &TempDir) -> AgentTaskConfig {
@@ -580,9 +603,19 @@ mod tests {
             flash_queue,
         );
 
-        assert_eq!(task.current_channel(), "default");
-        task.switch_channel("general".into());
-        assert_eq!(task.current_channel(), "general");
+        assert!(task.channel_context().is_none());
+
+        let ctx = ChannelContext {
+            path: PathBuf::from("conversations/discord/general.txt"),
+            adapter: "discord".to_string(),
+            channel_id: "123".to_string(),
+            channel_name: Some("general".to_string()),
+            guild_id: None,
+        };
+        task.set_channel_context(ctx);
+
+        assert!(task.channel_context().is_some());
+        assert_eq!(task.channel_context().unwrap().display_name(), "general");
 
         let event = event_rx.try_recv();
         assert!(matches!(event, Ok(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched { .. }))));
