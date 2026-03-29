@@ -69,6 +69,20 @@ impl DiscordSendRequest {
     }
 }
 
+/// Typing indicator request
+#[derive(Debug, Deserialize)]
+pub struct TypingRequest {
+    pub channel: String,
+}
+
+/// Typing response
+#[derive(Debug, Serialize)]
+pub struct TypingResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Add channel request
 #[derive(Debug, Deserialize)]
 pub struct AddChannelRequest {
@@ -189,6 +203,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health_check))
         .route("/capabilities", get(capabilities))
         .route("/send", post(handle_send))
+        .route("/typing", post(handle_typing))
         .route("/read", get(handle_read))
         .route("/channels", get(list_channels))
         .route("/channels", post(add_channel))
@@ -379,6 +394,55 @@ async fn handle_send(
     Ok(Json(SendResponse {
         success: true,
         message_id: Some(message_id.to_string()),
+        error: None,
+    }))
+}
+
+/// Handle typing indicator request
+async fn handle_typing(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<TypingRequest>,
+) -> Result<Json<TypingResponse>, (StatusCode, Json<TypingResponse>)> {
+    // Get Discord sender
+    let discord_guard = state.discord.read().await;
+    let Some(ref discord) = *discord_guard else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(TypingResponse {
+                success: false,
+                error: Some("discord client not initialized".to_string()),
+            }),
+        ));
+    };
+
+    let channel_id: u64 = request.channel.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(TypingResponse {
+                success: false,
+                error: Some("Invalid channel ID".to_string()),
+            }),
+        )
+    })?;
+
+    discord
+        .trigger_typing(channel_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, channel_id = %request.channel, "Failed to send typing indicator");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TypingResponse {
+                    success: false,
+                    error: Some(format!("Failed to send typing indicator: {}", e)),
+                }),
+            )
+        })?;
+
+    tracing::info!(channel_id = %request.channel, "Typing indicator sent");
+
+    Ok(Json(TypingResponse {
+        success: true,
         error: None,
     }))
 }

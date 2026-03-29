@@ -131,6 +131,18 @@ impl DiscordSender {
             })
             .collect())
     }
+
+    /// Send a typing indicator to a channel
+    pub async fn trigger_typing(
+        &self,
+        channel_id: u64,
+    ) -> anyhow::Result<()> {
+        use twilight_model::id::{marker::ChannelMarker, Id};
+
+        let channel: Id<ChannelMarker> = Id::new(channel_id);
+        self.http.create_typing_trigger(channel).await?;
+        Ok(())
+    }
 }
 
 /// Discord client with gateway shard (for receiving events)
