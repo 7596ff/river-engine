@@ -148,25 +148,44 @@ impl Message {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Conversation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ConversationMeta>,
     pub messages: Vec<Message>,
 }
 
 impl Conversation {
     /// Serialize conversation to custom human-readable format
     pub fn to_string(&self) -> String {
-        self.messages
+        let mut result = String::new();
+
+        // Emit frontmatter if present
+        if let Some(ref meta) = self.meta {
+            result.push_str(format::FRONTMATTER_DELIMITER);
+            result.push('\n');
+            // serde_yaml adds trailing newline
+            result.push_str(&serde_yaml::to_string(meta).unwrap_or_default());
+            result.push_str(format::FRONTMATTER_DELIMITER);
+            result.push('\n');
+        }
+
+        // Emit messages
+        let messages: Vec<String> = self.messages
             .iter()
             .map(|msg| format::format_message(msg))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect();
+        result.push_str(&messages.join("\n"));
+
+        result
     }
 
-    /// Parse conversation from custom format
+    /// Parse conversation from custom format (with optional frontmatter)
     pub fn from_str(s: &str) -> Result<Self, ParseError> {
+        let (meta, body) = Self::split_frontmatter(s)?;
+
         let mut messages = Vec::new();
         let mut current_message: Option<Message> = None;
 
-        for line in s.lines() {
+        for line in body.lines() {
             if line.trim().is_empty() {
                 continue;
             }
@@ -204,7 +223,37 @@ impl Conversation {
             messages.push(msg);
         }
 
-        Ok(Conversation { messages })
+        Ok(Conversation { meta, messages })
+    }
+
+    /// Split frontmatter from body content
+    fn split_frontmatter(s: &str) -> Result<(Option<ConversationMeta>, &str), ParseError> {
+        let trimmed = s.trim_start();
+
+        if !trimmed.starts_with(format::FRONTMATTER_DELIMITER) {
+            return Ok((None, s));
+        }
+
+        // Find the closing delimiter
+        let after_first = &trimmed[format::FRONTMATTER_DELIMITER.len()..];
+        let after_first = after_first.trim_start_matches('\n');
+
+        if let Some(end_idx) = after_first.find(&format!("\n{}", format::FRONTMATTER_DELIMITER)) {
+            let yaml_content = &after_first[..end_idx];
+            let body_start = end_idx + format::FRONTMATTER_DELIMITER.len() + 1;
+            let body = if body_start < after_first.len() {
+                after_first[body_start..].trim_start_matches('\n')
+            } else {
+                ""
+            };
+
+            let meta: ConversationMeta = serde_yaml::from_str(yaml_content)
+                .map_err(|e| ParseError(format!("Invalid frontmatter YAML: {}", e)))?;
+
+            Ok((Some(meta), body))
+        } else {
+            Err(ParseError("Unclosed frontmatter (missing closing ---)".to_string()))
+        }
     }
 
     pub fn apply_message(&mut self, msg: Message) {
@@ -520,5 +569,52 @@ mod tests {
                 assert_eq!(orig_react.unknown_count, parsed_react.unknown_count);
             }
         }
+    }
+
+    #[test]
+    fn test_conversation_with_frontmatter_roundtrip() {
+        let input = r#"---
+adapter: discord
+channel_id: "789012"
+channel_name: general
+---
+[ ] 2026-03-23 14:30:00 msg123 <alice:111> hey, can you help?
+[>] 2026-03-23 14:30:15 msg124 <river:999> Sure!
+"#;
+
+        let convo = Conversation::from_str(input).expect("Failed to parse");
+
+        assert!(convo.meta.is_some());
+        let meta = convo.meta.as_ref().unwrap();
+        assert_eq!(meta.adapter, "discord");
+        assert_eq!(meta.channel_id, "789012");
+        assert_eq!(meta.channel_name, Some("general".to_string()));
+
+        assert_eq!(convo.messages.len(), 2);
+        assert_eq!(convo.messages[0].author.name, "alice");
+        assert_eq!(convo.messages[1].direction, MessageDirection::Outgoing);
+
+        // Roundtrip
+        let serialized = convo.to_string();
+        let reparsed = Conversation::from_str(&serialized).expect("Failed to reparse");
+        assert_eq!(reparsed.meta, convo.meta);
+        assert_eq!(reparsed.messages.len(), convo.messages.len());
+    }
+
+    #[test]
+    fn test_conversation_without_frontmatter() {
+        let input = "[ ] 2026-03-23 14:30:00 msg123 <alice:111> hey\n";
+        let convo = Conversation::from_str(input).expect("Failed to parse");
+
+        assert!(convo.meta.is_none());
+        assert_eq!(convo.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_conversation_unclosed_frontmatter_error() {
+        let input = "---\nadapter: discord\n[ ] msg";
+        let result = Conversation::from_str(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().0.contains("Unclosed frontmatter"));
     }
 }

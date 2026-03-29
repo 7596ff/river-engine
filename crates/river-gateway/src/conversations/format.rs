@@ -17,6 +17,9 @@
 
 use super::{Author, Message, MessageDirection, Reaction};
 
+/// YAML frontmatter delimiter
+pub const FRONTMATTER_DELIMITER: &str = "---";
+
 /// Parse a direction marker from a string
 pub fn parse_direction_marker(s: &str) -> Option<MessageDirection> {
     match s {
