@@ -84,7 +84,7 @@ ORCHESTRATOR_PORT=5000
 OLLAMA_PORT=11434
 ```
 
-**Note:** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are read from environment by the orchestrator when proxying to external APIs.
+**Note:** `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY` are read from environment by the gateway when using external APIs.
 
 ---
 

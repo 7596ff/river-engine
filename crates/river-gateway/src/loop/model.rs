@@ -42,9 +42,7 @@ impl ModelClient {
         // Check for API key in environment based on provider
         let api_key = match provider {
             Provider::Anthropic => std::env::var("ANTHROPIC_API_KEY").ok(),
-            Provider::OpenAI => std::env::var("OPENROUTER_API_KEY")
-                .or_else(|_| std::env::var("OPENAI_API_KEY"))
-                .ok(),
+            Provider::OpenAI => std::env::var("OPENROUTER_API_KEY").ok(),
         };
 
         if api_key.is_some() {
@@ -52,7 +50,7 @@ impl ModelClient {
         } else {
             let env_var = match provider {
                 Provider::Anthropic => "ANTHROPIC_API_KEY",
-                Provider::OpenAI => "OPENROUTER_API_KEY or OPENAI_API_KEY",
+                Provider::OpenAI => "OPENROUTER_API_KEY",
             };
             tracing::warn!("No API key found in {} environment variable(s)", env_var);
         }
