@@ -92,15 +92,19 @@ in {
   };
 
   # Agent submodule options (function that takes name)
+  # Note: workspace must contain actor/ and spectator/ subdirectories with AGENTS.md, IDENTITY.md, RULES.md
+  # Copy from river-engine/workspace/ or create your own.
   mkAgentOptions = { name, ... }: {
     enable = mkEnableOption "this River agent";
-    workspace = mkOption { type = types.path; description = "Workspace directory."; };
+    workspace = mkOption { type = types.path; description = "Workspace directory (must contain actor/ and spectator/ subdirs)."; };
     dataDir = mkOption { type = types.path; description = "Data directory for database."; };
     agentName = mkOption { type = types.str; default = name; description = "Agent name for Redis namespacing."; };
     port = mkOption { type = types.port; default = 3000; description = "Gateway port."; };
     contextLimit = mkOption { type = types.int; default = 131072; description = "Context window size in tokens."; };
     modelUrl = mkOption { type = types.nullOr types.str; default = null; description = "Model server URL."; };
     modelName = mkOption { type = types.nullOr types.str; default = null; description = "Model name."; };
+    spectatorModelUrl = mkOption { type = types.nullOr types.str; default = null; description = "Spectator model server URL (defaults to modelUrl)."; };
+    spectatorModelName = mkOption { type = types.nullOr types.str; default = null; description = "Spectator model name (defaults to modelName)."; };
     orchestratorUrl = mkOption { type = types.nullOr types.str; default = null; description = "Orchestrator URL."; };
     embeddingUrl = mkOption { type = types.nullOr types.str; default = null; description = "Embedding server URL."; };
     redisUrl = mkOption { type = types.nullOr types.str; default = null; description = "Redis URL."; };
@@ -202,6 +206,10 @@ in {
     "--redis-url" cfg.redisUrl
   ] ++ lib.optionals (cfg.authTokenFile != null) [
     "--auth-token-file" (toString cfg.authTokenFile)
+  ] ++ lib.optionals (cfg.spectatorModelUrl != null) [
+    "--spectator-model-url" cfg.spectatorModelUrl
+  ] ++ lib.optionals (cfg.spectatorModelName != null) [
+    "--spectator-model-name" cfg.spectatorModelName
   ] ++ adapterFlags);
 
   # Command builder: discord
