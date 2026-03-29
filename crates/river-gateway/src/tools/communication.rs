@@ -561,6 +561,95 @@ impl Tool for ReadChannelTool {
     }
 }
 
+/// Switch the agent's current channel
+pub struct SwitchChannelTool {
+    workspace: PathBuf,
+    channel_context_tx: mpsc::Sender<crate::agent::ChannelContext>,
+}
+
+impl SwitchChannelTool {
+    pub fn new(
+        workspace: PathBuf,
+        channel_context_tx: mpsc::Sender<crate::agent::ChannelContext>,
+    ) -> Self {
+        Self {
+            workspace,
+            channel_context_tx,
+        }
+    }
+}
+
+impl Tool for SwitchChannelTool {
+    fn name(&self) -> &str {
+        "switch_channel"
+    }
+
+    fn description(&self) -> &str {
+        "Switch to a different channel for subsequent speak commands"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to conversation file (e.g., 'conversations/discord/myserver/general.txt')"
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        let path_str = args["path"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing 'path' parameter"))?;
+
+        let path = self.workspace.join(path_str);
+
+        info!(path = %path.display(), "Switching channel");
+
+        // Read and parse conversation file
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            error!(path = %path.display(), error = %e, "Failed to read conversation file");
+            RiverError::tool(format!("Conversation file not found: {}", path_str))
+        })?;
+
+        let conversation = crate::conversations::Conversation::from_str(&content).map_err(|e| {
+            error!(path = %path.display(), error = %e.0, "Failed to parse conversation");
+            RiverError::tool(format!("Failed to parse conversation: {}", e.0))
+        })?;
+
+        let meta = conversation.meta.ok_or_else(|| {
+            error!(path = %path.display(), "Conversation file missing frontmatter");
+            RiverError::tool("Conversation file missing routing metadata")
+        })?;
+
+        // Create channel context
+        let context = crate::agent::ChannelContext::from_conversation(
+            PathBuf::from(path_str),
+            &meta,
+        );
+
+        let channel_name = context.display_name().to_string();
+
+        // Send to agent task
+        let tx = self.channel_context_tx.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                tx.send(context).await.map_err(|e| {
+                    RiverError::tool(format!("Failed to update channel context: {}", e))
+                })
+            })
+        })?;
+
+        info!(channel = %channel_name, "Switched to channel");
+
+        Ok(ToolResult::success(format!("Switched to channel: {}", channel_name)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,5 +741,48 @@ mod tests {
 
         assert_eq!(tool.name(), "context_status");
         assert_eq!(tool.description(), "Get current context window usage");
+    }
+
+    #[test]
+    fn test_switch_channel_tool_schema() {
+        let (tx, _rx) = mpsc::channel(1);
+        let tool = SwitchChannelTool::new(PathBuf::from("/workspace"), tx);
+
+        assert_eq!(tool.name(), "switch_channel");
+        let params = tool.parameters();
+        assert!(params["properties"]["path"].is_object());
+        assert_eq!(params["required"], serde_json::json!(["path"]));
+    }
+
+    #[test]
+    fn test_switch_channel_file_not_found() {
+        let (tx, _rx) = mpsc::channel(1);
+        let tool = SwitchChannelTool::new(PathBuf::from("/nonexistent"), tx);
+
+        let result = tool.execute(serde_json::json!({
+            "path": "conversations/missing.txt"
+        }));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_switch_channel_missing_frontmatter() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let conv_path = temp.path().join("convo.txt");
+        std::fs::write(&conv_path, "[ ] 2026-03-28 10:00:00 msg1 <alice:111> hello\n").unwrap();
+
+        let (tx, _rx) = mpsc::channel(1);
+        let tool = SwitchChannelTool::new(temp.path().to_path_buf(), tx);
+
+        let result = tool.execute(serde_json::json!({
+            "path": "convo.txt"
+        }));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("missing routing metadata"));
     }
 }
