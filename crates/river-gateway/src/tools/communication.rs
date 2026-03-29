@@ -650,6 +650,126 @@ impl Tool for SwitchChannelTool {
     }
 }
 
+/// Send message to the current channel
+pub struct SpeakTool {
+    registry: Arc<RwLock<AdapterRegistry>>,
+    http_client: reqwest::Client,
+    workspace: PathBuf,
+    agent_name: String,
+    agent_id: String,
+    writer_tx: mpsc::Sender<WriteOp>,
+    channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
+}
+
+impl SpeakTool {
+    pub fn new(
+        registry: Arc<RwLock<AdapterRegistry>>,
+        workspace: PathBuf,
+        agent_name: String,
+        agent_id: String,
+        writer_tx: mpsc::Sender<WriteOp>,
+        channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
+    ) -> Self {
+        Self {
+            registry,
+            http_client: reqwest::Client::new(),
+            workspace,
+            agent_name,
+            agent_id,
+            writer_tx,
+            channel_context,
+        }
+    }
+
+    fn agent_author(&self) -> Author {
+        Author {
+            name: self.agent_name.clone(),
+            id: self.agent_id.clone(),
+        }
+    }
+}
+
+impl Tool for SpeakTool {
+    fn name(&self) -> &str {
+        "speak"
+    }
+
+    fn description(&self) -> &str {
+        "Send a message to the current channel"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Message content to send"
+                },
+                "reply_to": {
+                    "type": "string",
+                    "description": "Optional message ID to reply to"
+                }
+            },
+            "required": ["content"]
+        })
+    }
+
+    fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
+        let content = args["content"]
+            .as_str()
+            .ok_or_else(|| RiverError::tool("Missing 'content' parameter"))?;
+        let reply_to = args["reply_to"].as_str();
+
+        info!(
+            content_len = content.len(),
+            reply_to = ?reply_to,
+            "SpeakTool: Sending message"
+        );
+
+        let registry = self.registry.clone();
+        let http_client = self.http_client.clone();
+        let writer_tx = self.writer_tx.clone();
+        let workspace = self.workspace.clone();
+        let agent_author = self.agent_author();
+        let channel_context = self.channel_context.clone();
+        let content = content.to_string();
+        let reply_to = reply_to.map(|s| s.to_string());
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Get channel context
+                let ctx_guard = channel_context.read().await;
+                let ctx = ctx_guard.as_ref().ok_or_else(|| {
+                    error!("SpeakTool: No channel selected");
+                    RiverError::tool("No channel selected. Use switch_channel first.")
+                })?;
+
+                let adapter = ctx.adapter.clone();
+                let channel_id = ctx.channel_id.clone();
+                let conversation_path = workspace.join(&ctx.path);
+
+                drop(ctx_guard); // Release lock before async call
+
+                let registry = registry.read().await;
+
+                send_to_adapter(
+                    &http_client,
+                    &registry,
+                    &adapter,
+                    &channel_id,
+                    &content,
+                    reply_to.as_deref(),
+                    &writer_tx,
+                    &conversation_path,
+                    agent_author,
+                )
+                .await
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,5 +904,51 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("missing routing metadata"));
+    }
+
+    #[tokio::test]
+    async fn test_speak_tool_schema() {
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let (tx, _rx) = mpsc::channel(1);
+        let channel_context = Arc::new(RwLock::new(None));
+
+        let tool = SpeakTool::new(
+            registry,
+            PathBuf::from("/workspace"),
+            "agent".to_string(),
+            "agent_001".to_string(),
+            tx,
+            channel_context,
+        );
+
+        assert_eq!(tool.name(), "speak");
+        let params = tool.parameters();
+        assert!(params["properties"]["content"].is_object());
+        assert!(params["properties"]["reply_to"].is_object());
+        assert_eq!(params["required"], serde_json::json!(["content"]));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_speak_without_channel_selected() {
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let (tx, _rx) = mpsc::channel(1);
+        let channel_context = Arc::new(RwLock::new(None)); // No channel set
+
+        let tool = SpeakTool::new(
+            registry,
+            PathBuf::from("/workspace"),
+            "agent".to_string(),
+            "agent_001".to_string(),
+            tx,
+            channel_context,
+        );
+
+        let result = tool.execute(serde_json::json!({
+            "content": "Hello!"
+        }));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("No channel selected"));
     }
 }
