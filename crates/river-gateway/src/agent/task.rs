@@ -434,9 +434,9 @@ impl AgentTask {
     async fn build_system_prompt(&self) -> String {
         let mut parts = Vec::new();
 
-        // Load identity files
+        // Load identity files from actor subdirectory
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
-            let path = self.config.workspace.join(filename);
+            let path = self.config.workspace.join("actor").join(filename);
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 parts.push(content);
             }
@@ -654,7 +654,8 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt_with_identity() {
         let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
+        std::fs::create_dir_all(temp.path().join("actor")).unwrap();
+        std::fs::write(temp.path().join("actor/IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
 
         let config = test_config(&temp);
         let coord = Coordinator::new();

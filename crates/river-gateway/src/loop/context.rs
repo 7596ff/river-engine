@@ -136,9 +136,9 @@ impl ContextBuilder {
     async fn build_system_prompt(&self, workspace: &Path) -> String {
         let mut parts = Vec::new();
 
-        // Load workspace files
+        // Load workspace files from actor subdirectory
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
-            if let Ok(content) = tokio::fs::read_to_string(workspace.join(filename)).await {
+            if let Ok(content) = tokio::fs::read_to_string(workspace.join("actor").join(filename)).await {
                 parts.push(content);
             }
         }

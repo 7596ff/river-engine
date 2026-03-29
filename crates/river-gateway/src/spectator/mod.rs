@@ -32,6 +32,8 @@ pub struct SpectatorConfig {
     pub model_url: String,
     /// Model name (e.g., "llama-3-8b" or "claude-sonnet")
     pub model_name: String,
+    /// Agents operations guide path
+    pub agents_path: PathBuf,
     /// Identity file path
     pub identity_path: PathBuf,
     /// Rules file path
@@ -45,6 +47,7 @@ impl SpectatorConfig {
     pub fn from_workspace(workspace: PathBuf, model_url: String, model_name: String) -> Self {
         Self {
             embeddings_dir: workspace.join("embeddings"),
+            agents_path: workspace.join("spectator/AGENTS.md"),
             identity_path: workspace.join("spectator/IDENTITY.md"),
             rules_path: workspace.join("spectator/RULES.md"),
             workspace,
@@ -304,25 +307,34 @@ impl SpectatorTask {
         }
     }
 
-    /// Load spectator identity and rules
+    /// Load spectator agents guide, identity, and rules
     async fn load_identity(&self) -> String {
-        let identity = tokio::fs::read_to_string(&self.config.identity_path).await
-            .unwrap_or_else(|_| {
-                tracing::warn!(path = %self.config.identity_path.display(), "Identity file not found");
-                "You observe. You do not act.".to_string()
-            });
+        let mut parts = Vec::new();
 
-        let rules = tokio::fs::read_to_string(&self.config.rules_path).await
-            .unwrap_or_else(|_| {
-                tracing::warn!(path = %self.config.rules_path.display(), "Rules file not found");
-                String::new()
-            });
-
-        if rules.is_empty() {
-            identity
+        // Load AGENTS.md (operations guide)
+        if let Ok(agents) = tokio::fs::read_to_string(&self.config.agents_path).await {
+            parts.push(agents);
         } else {
-            format!("{}\n\n---\n\n{}", identity, rules)
+            tracing::warn!(path = %self.config.agents_path.display(), "Agents file not found");
         }
+
+        // Load IDENTITY.md
+        match tokio::fs::read_to_string(&self.config.identity_path).await {
+            Ok(identity) => parts.push(identity),
+            Err(_) => {
+                tracing::warn!(path = %self.config.identity_path.display(), "Identity file not found");
+                parts.push("You observe. You do not act.".to_string());
+            }
+        }
+
+        // Load RULES.md
+        if let Ok(rules) = tokio::fs::read_to_string(&self.config.rules_path).await {
+            parts.push(rules);
+        } else {
+            tracing::warn!(path = %self.config.rules_path.display(), "Rules file not found");
+        }
+
+        parts.join("\n\n---\n\n")
     }
 }
 
@@ -358,6 +370,7 @@ mod tests {
 
         assert_eq!(config.workspace, PathBuf::from("/workspace"));
         assert_eq!(config.embeddings_dir, PathBuf::from("/workspace/embeddings"));
+        assert_eq!(config.agents_path, PathBuf::from("/workspace/spectator/AGENTS.md"));
         assert_eq!(config.identity_path, PathBuf::from("/workspace/spectator/IDENTITY.md"));
         assert_eq!(config.rules_path, PathBuf::from("/workspace/spectator/RULES.md"));
     }
@@ -451,6 +464,7 @@ mod tests {
         // Create identity files
         let spectator_dir = temp.path().join("spectator");
         tokio::fs::create_dir_all(&spectator_dir).await.unwrap();
+        tokio::fs::write(spectator_dir.join("AGENTS.md"), "# Spectator Guide").await.unwrap();
         tokio::fs::write(spectator_dir.join("IDENTITY.md"), "I observe").await.unwrap();
         tokio::fs::write(spectator_dir.join("RULES.md"), "Never act").await.unwrap();
 
@@ -463,6 +477,7 @@ mod tests {
         let spectator = SpectatorTask::new(config, bus, model, None, flash_queue);
         let identity = spectator.load_identity().await;
 
+        assert!(identity.contains("# Spectator Guide"));
         assert!(identity.contains("I observe"));
         assert!(identity.contains("Never act"));
     }
