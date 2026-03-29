@@ -1,0 +1,220 @@
+{
+  "main": {
+    "id": "1f38d9cb44366197",
+    "type": "split",
+    "children": [
+      {
+        "id": "389e5c213ac6ed17",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c94e11a79564083c",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/superpowers/specs/2026-03-29-typing-indicators-design.md",
+                "mode": "preview",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "2026-03-29-typing-indicators-design"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "1c6de37c528b15fa",
+    "type": "split",
+    "children": [
+      {
+        "id": "88df9f6734040ad1",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "498a3deda48d2948",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "dede0be6c075d7da",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "dd7d808cdb4bb9c5",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "127130e3c0403f56",
+    "type": "split",
+    "children": [
+      {
+        "id": "be38a89720b0ac7a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c932c07e597323f4",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "docs/superpowers/specs/2026-03-29-typing-indicators-design.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for 2026-03-29-typing-indicators-design"
+            }
+          },
+          {
+            "id": "fbe8989f73731f74",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "docs/superpowers/specs/2026-03-29-typing-indicators-design.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from 2026-03-29-typing-indicators-design"
+            }
+          },
+          {
+            "id": "5940ff2edb980766",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "e66cdb5cb9cd2eed",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "53d98c93b497780d",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "docs/superpowers/specs/2026-03-29-typing-indicators-design.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of 2026-03-29-typing-indicators-design"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "c94e11a79564083c",
+  "lastOpenFiles": [
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/work-products.bin",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/query-cache.bin",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/metadata.rmeta",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/f4dykhi5feqhjxk56yhypxbjw.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/f053zsdcxn1363x9uam76tci0.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/eysj8rr3g6ahwu4z147spxmgp.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/ewnlznrw8iwjahcrsqxjolaad.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/ethyh5lmw3lyez59x51qswf8u.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/esd2jzl8ei3zw19sghjzzuzd0.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/eqaa98c7hfidlfzp664ltzuk8.o",
+    "target/debug/incremental/river_gateway-3tnw5y6dj71fz/s-hh43a9cdg5-09a74vz-67io5mt8t562pq0vxb47ddcyr/eq1pwpi5j4ocf4jdcgmp1ix3y.o",
+    "docs/superpowers/plans/2026-03-29-plan-typing-indicators.md",
+    "docs/specs/timezone-support.md",
+    "docs/superpowers/specs/2026-03-29-typing-indicators-design.md",
+    "target/doc/static.files/rust-logo-9a9549ea.svg",
+    "target/doc/static.files/favicon-32x32-eab170b8.png",
+    "target/doc/static.files/favicon-044be391.svg",
+    "target/doc/static.files/SourceSerif4-LICENSE-a2cfd9d5.md",
+    "docs/superpowers/plans/2026-03-28-plan-utterances.md",
+    "docs/superpowers/specs/2026-03-28-utterances-design.md",
+    "docs/snowflake-generation.md",
+    "docs/roadmap.md",
+    "docs/research/context-management-brainstorm.md",
+    "docs/specs/reviews/2026-03-23-adapter-framework-review.md",
+    "docs/specs/adapter-framework-design.md",
+    "docs/specs/chats.md",
+    "docs/specs/gateway-restructure-meta-plan.md",
+    "docs/specs/context-assembly-design.md",
+    "docs/specs/monitoring.md",
+    "docs/superpowers/specs/2026-03-23-conversations-design.md",
+    "docs/superpowers/specs/2026-03-23-iyou-architecture-design.md"
+  ]
+}

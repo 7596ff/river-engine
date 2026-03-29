@@ -2,8 +2,7 @@
 
 ## Overview
 
-- **[roadmap.md](roadmap.md)** - Project roadmap and status
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Comprehensive system architecture
+- **[roadmap.md](roadmap.md)** - Project roadmap and status (source of truth)
 - **[DESIGN-PHILOSOPHY.md](DESIGN-PHILOSOPHY.md)** - Design principles and philosophy
 - **[MIGRATION-GUIDE.md](MIGRATION-GUIDE.md)** - Guide for migrating agents into River Engine
 - **[snowflake-generation.md](snowflake-generation.md)** - Snowflake ID system reference
@@ -38,8 +37,8 @@ Implementation plans in `superpowers/plans/`:
 
 ## Status
 
-- **[STATUS.md](superpowers/STATUS.md)** - Current implementation status
-- **[FUTURE.md](superpowers/FUTURE.md)** - Future development roadmap
+- **[roadmap.md](roadmap.md)** - Feature roadmap and status (source of truth)
+- **[STATUS.md](superpowers/STATUS.md)** - Implementation details and test counts
 
 ## Quick Links
 

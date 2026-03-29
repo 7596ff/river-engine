@@ -5,8 +5,9 @@
 use crate::conversations::{Author, WriteOp};
 use river_tools::{Tool, ToolResult};
 use river_core::RiverError;
+use river_adapter::Feature;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -21,6 +22,8 @@ pub struct AdapterConfig {
     pub outbound_url: String,
     /// Read URL (for fetching channel history), optional
     pub read_url: Option<String>,
+    /// Supported features
+    pub features: HashSet<Feature>,
 }
 
 /// Registry of configured adapters
@@ -48,6 +51,13 @@ impl AdapterRegistry {
 
     pub fn names(&self) -> Vec<&str> {
         self.adapters.keys().map(|s| s.as_str()).collect()
+    }
+
+    pub fn supports(&self, name: &str, feature: Feature) -> bool {
+        self.adapters
+            .get(name)
+            .map(|c| c.features.contains(&feature))
+            .unwrap_or(false)
     }
 }
 
@@ -782,11 +792,31 @@ mod tests {
             name: "discord".to_string(),
             outbound_url: "http://localhost:8080/outbound".to_string(),
             read_url: Some("http://localhost:8080/read".to_string()),
+            features: HashSet::new(),
         });
 
         assert!(registry.get("discord").is_some());
         assert!(registry.get("slack").is_none());
         assert_eq!(registry.names().len(), 1);
+    }
+
+    #[test]
+    fn test_adapter_registry_supports() {
+        let mut registry = AdapterRegistry::new();
+
+        let mut features = HashSet::new();
+        features.insert(Feature::TypingIndicator);
+
+        registry.register(AdapterConfig {
+            name: "discord".to_string(),
+            outbound_url: "http://localhost:8080/send".to_string(),
+            read_url: None,
+            features,
+        });
+
+        assert!(registry.supports("discord", Feature::TypingIndicator));
+        assert!(!registry.supports("discord", Feature::Reactions));
+        assert!(!registry.supports("nonexistent", Feature::TypingIndicator));
     }
 
     #[test]

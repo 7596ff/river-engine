@@ -9,7 +9,7 @@
 ---
 
 ## 1. Executive Summary
-
+		
 River Engine evolves from a monolithic gateway with a single agent loop into a **coordinator + peer tasks** architecture. Two cognitive perspectives — **Agent (I)** and **Spectator (You)** — run as concurrent tasks within the gateway, communicating via an event bus. Memory moves from direct SQLite embeddings to a **zettelkasten** (filesystem + sqlite-vec). A new **adapter framework** decouples platform integrations from the core.
 
 **Three simultaneous shifts:**
@@ -191,7 +191,7 @@ The spectator is the observing self. It:
 Via events on the coordinator's event bus:
 
 **Agent → Spectator:**
-| Event | Payload |
+| Event | Payload|
 |-------|---------|
 | `TurnStarted` | channel, context summary |
 | `TurnComplete` | transcript |

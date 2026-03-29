@@ -228,6 +228,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
                 name: name.clone(),
                 outbound_url: outbound_url.clone(),
                 read_url: read_url.clone(),
+                features: std::collections::HashSet::new(),
             });
         }
         if config.adapters.is_empty() {

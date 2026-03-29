@@ -1,6 +1,11 @@
 # River Engine Implementation Status
 
-**Last Updated:** 2026-03-23
+**Last Updated:** 2026-03-28
+
+> **Feature status:** See [`docs/roadmap.md`](../roadmap.md) for the canonical feature roadmap.
+> This document tracks implementation details, test counts, and technical notes.
+
+---
 
 ## Completed
 
@@ -108,49 +113,103 @@
   - CUDA-optional llama-cpp
   - All River binaries
 
-## Next Up: I/You Architecture Restructure
+### I/You Architecture Restructure ✅
 
 **Master Spec:** `docs/superpowers/specs/2026-03-23-iyou-architecture-design.md`
 
-### Implementation Plans (dependency order)
+All 8 phases completed:
 
-| # | Phase | Plan | Depends On | Est. Scope |
-|---|-------|------|------------|------------|
-| 1 | **Phase 0: Extract Crates** | `plans/2026-03-23-plan-phase0-extract-crates.md` | — | ~40 steps |
-| 2 | **Phase 1: Embeddings** | `plans/2026-03-23-plan-phase1-embeddings.md` | Phase 0 | ~30 steps |
-| 3 | **Phase 2: Flash Queue** | `plans/2026-03-23-plan-phase2-flash-queue.md` | Phase 0 | ~10 steps |
-| 4 | **Phase 3: Context Assembly** | `plans/2026-03-23-plan-phase3-context-assembly.md` | Phase 1, 2 | ~15 steps |
-| 5 | **Phase 4: Coordinator** | `plans/2026-03-23-plan-phase4-coordinator.md` | Phase 3 | ~15 steps |
-| 6 | **Phase 5: Agent Task** | `plans/2026-03-23-plan-phase5-agent-task.md` | Phase 4 | ~20 steps |
-| 7 | **Phase 6: Spectator** | `plans/2026-03-23-plan-phase6-spectator.md` | Phase 5 | ~20 steps |
-| 8 | **Phase 7: Integration** | `plans/2026-03-23-plan-phase7-integration.md` | Phase 6 | ~20 steps |
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 0 | Extract Crates (`river-db`, `river-tools`, `river-migrate`, `river-adapter`) | ✅ |
+| Phase 1 | Embeddings (VectorStore, SyncService) | ✅ |
+| Phase 2 | Flash Queue (priority-based memory retrieval) | ✅ |
+| Phase 3 | Context Assembly (hot/warm/cold tiers) | ✅ |
+| Phase 4 | Coordinator (task spawning, event bus) | ✅ |
+| Phase 5 | Agent Task (I - acting self, turn cycle) | ✅ |
+| Phase 6 | Spectator Task (You - observing self, compression, curation) | ✅ |
+| Phase 7 | Integration (coordinator default, git authorship, compression triggers) | ✅ |
 
-### Independent Track
-
-| # | Plan | Depends On | Est. Scope |
-|---|------|------------|------------|
-| — | **Adapter Framework** | `plans/2026-03-23-plan-adapter-framework.md` | None (parallel) | ~25 steps |
-
-### Dependency Graph
-
+Architecture:
 ```
-Phase 0 ──► Phase 1 ──┐
-              │        ├──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6 ──► Phase 7
-Phase 0 ──► Phase 2 ──┘
-
-(Independent) Adapter Framework
+Coordinator
+├── Agent Task (I - acting self)
+│   ├── Turn cycle: wake → think → act → settle
+│   ├── Context assembly (hot/warm/cold)
+│   ├── Tool execution with stats
+│   └── Emits: TurnStarted, TurnComplete, NoteWritten, ContextPressure
+│
+├── Spectator Task (You - observing self)
+│   ├── Observes agent events
+│   ├── Compressor: moves → moments
+│   ├── Curator: semantic search → flashes
+│   ├── RoomWriter: session observations
+│   └── Emits: MovesUpdated, Warning
+│
+└── Event Bus (broadcast channel)
 ```
 
-### Estimated Total: ~195 steps across 9 plans
+- 544 tests passing (90 core, 308 gateway, 43 orchestrator, 23 discord, 43 tools, 14 db, 3 adapter, 15 integration, 4 doc-tests, 1 migrate)
+
+## In Progress: River Oneshot
+
+**Spec:** `docs/superpowers/specs/2026-03-27-river-oneshot-design.md`
+**Plan:** `crates/river-oneshot/PLAN.md`
+
+Turn-based dual-loop agent CLI. Complements gateway's always-on model.
+
+### Architecture
+- Two concurrent loops: reasoning (LLM) + execution (skills)
+- Both complete every cycle, first ready wins, other cached
+- Memory via river-db (SQLite + vector store)
+- Native Rust skills
+
+### Phases
+1. [x] Skeleton - project setup, types, CLI
+2. [x] Single Loop - Claude provider, message assembly
+3. [ ] Dual Loop - skills, both loops completing
+4. [ ] Memory & Embeddings - vector store integration
+5. [ ] Polish - error handling, other providers
+
+---
+
+## Next Up: Qualitative Review & Production Testing
+
+**Review Plan:** `docs/superpowers/plans/2026-03-25-plan-qualitative-review.md`
+
+### Tasks
+
+1. **Qualitative Review** - Run extended sessions, evaluate:
+   - Moves capture and formatting
+   - Moments compression quality
+   - Room notes coherence
+   - Flash relevance
+   - Spectator voice consistency
+   - System stability
+
+2. **Production Testing** - Test with real adapters and conversations
+
+3. **Tuning** - Adjust thresholds based on findings:
+   - Compression interval (currently 10 turns)
+   - Compression pressure threshold (currently 80%)
+   - Moves threshold for moments (currently 15)
+   - Flash similarity threshold (currently 0.6)
 
 ## Key Files
 
 - **Spec:** `docs/superpowers/specs/2026-03-16-river-engine-design.md`
-- **Plans:** `docs/superpowers/plans/2026-03-16-plan-*.md`
+- **I/You Spec:** `docs/superpowers/specs/2026-03-23-iyou-architecture-design.md`
+- **Oneshot Spec:** `docs/superpowers/specs/2026-03-27-river-oneshot-design.md`
+- **Plans:** `docs/superpowers/plans/`
 - **Core:** `crates/river-core/src/`
 - **Gateway:** `crates/river-gateway/src/`
+- **DB:** `crates/river-db/src/`
+- **Tools:** `crates/river-tools/src/`
+- **Migrate:** `crates/river-migrate/src/`
+- **Adapter:** `crates/river-adapter/src/`
 - **Orchestrator:** `crates/river-orchestrator/src/`
 - **Discord:** `crates/river-discord/src/`
+- **Oneshot:** `crates/river-oneshot/src/`
 - **Nix Modules:** `nix/`
 
 ## Test Commands
