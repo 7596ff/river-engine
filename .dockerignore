@@ -1,0 +1,13 @@
+target/
+.git/
+.gitignore
+*.md
+docs/
+tests/
+.env
+data/
+workspace/
+models/
+secrets/
+*.log
+.DS_Store
