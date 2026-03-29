@@ -96,7 +96,7 @@ Discord adapter already declares `Feature::TypingIndicator` in `discord_adapter_
 
 ## 5. Feature Checking
 
-The gateway checks adapter capabilities before calling:
+The tool checks adapter capabilities before calling:
 
 ```rust
 if registry.supports(&adapter_name, Feature::TypingIndicator) {
@@ -106,7 +106,7 @@ if registry.supports(&adapter_name, Feature::TypingIndicator) {
 }
 ```
 
-This requires the `AdapterRegistry` to track feature sets, which it already does via `AdapterInfo.features`.
+**Required change:** Add `features: HashSet<Feature>` to `AdapterConfig` in `tools/communication.rs`. When adapters register via `/adapters/register`, populate this from `AdapterInfo.features`. Add a `supports()` method to `AdapterRegistry`.
 
 ---
 
@@ -114,7 +114,7 @@ This requires the `AdapterRegistry` to track feature sets, which it already does
 
 | File | Changes |
 |------|---------|
-| `crates/river-gateway/src/tools/communication.rs` | Add `TypingTool` struct |
+| `crates/river-gateway/src/tools/communication.rs` | Add `TypingTool`, add `features` to `AdapterConfig`, add `supports()` to `AdapterRegistry` |
 | `crates/river-discord/src/outbound.rs` | Add `/typing` endpoint handler |
 
 ---
