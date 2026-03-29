@@ -780,6 +780,112 @@ impl Tool for SpeakTool {
     }
 }
 
+/// Send typing indicator to the current channel
+pub struct TypingTool {
+    registry: Arc<RwLock<AdapterRegistry>>,
+    http_client: reqwest::Client,
+    channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
+}
+
+impl TypingTool {
+    pub fn new(
+        registry: Arc<RwLock<AdapterRegistry>>,
+        channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
+    ) -> Self {
+        Self {
+            registry,
+            http_client: reqwest::Client::new(),
+            channel_context,
+        }
+    }
+}
+
+impl Tool for TypingTool {
+    fn name(&self) -> &str {
+        "typing"
+    }
+
+    fn description(&self) -> &str {
+        "Send a typing indicator to the current channel"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    fn execute(&self, _args: Value) -> Result<ToolResult, RiverError> {
+        let registry = self.registry.clone();
+        let http_client = self.http_client.clone();
+        let channel_context = self.channel_context.clone();
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Get channel context
+                let ctx_guard = channel_context.read().await;
+                let ctx = ctx_guard.as_ref().ok_or_else(|| {
+                    error!("TypingTool: No channel selected");
+                    RiverError::tool("No channel selected. Use switch_channel first.")
+                })?;
+
+                let adapter = ctx.adapter.clone();
+                let channel_id = ctx.channel_id.clone();
+
+                drop(ctx_guard); // Release lock before async call
+
+                let registry = registry.read().await;
+
+                // Check if adapter supports typing
+                if !registry.supports(&adapter, Feature::TypingIndicator) {
+                    debug!(adapter = %adapter, "Adapter doesn't support typing indicators");
+                    return Ok(ToolResult::success("Typing indicator sent"));
+                }
+
+                let config = registry.get(&adapter).ok_or_else(|| {
+                    RiverError::tool(format!("Adapter '{}' not registered", adapter))
+                })?;
+
+                // Build typing URL (same base as outbound, but /typing endpoint)
+                let typing_url = config.outbound_url
+                    .trim_end_matches("/send")
+                    .to_string() + "/typing";
+
+                let payload = serde_json::json!({
+                    "channel": channel_id,
+                });
+
+                info!(
+                    url = %typing_url,
+                    adapter = %adapter,
+                    channel_id = %channel_id,
+                    "Sending typing indicator"
+                );
+
+                let response = http_client
+                    .post(&typing_url)
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        error!(error = %e, "Typing indicator request failed");
+                        RiverError::tool(format!("Failed to send typing indicator: {}", e))
+                    })?;
+
+                if response.status().is_success() {
+                    Ok(ToolResult::success("Typing indicator sent"))
+                } else {
+                    // Silent failure - just log and return success
+                    warn!(status = %response.status(), "Typing indicator returned non-success");
+                    Ok(ToolResult::success("Typing indicator sent"))
+                }
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,5 +1086,59 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("No channel selected"));
+    }
+
+    #[test]
+    fn test_typing_tool_schema() {
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let channel_context = Arc::new(RwLock::new(None));
+
+        let tool = TypingTool::new(registry, channel_context);
+
+        assert_eq!(tool.name(), "typing");
+        assert_eq!(tool.description(), "Send a typing indicator to the current channel");
+        let params = tool.parameters();
+        assert_eq!(params["properties"], serde_json::json!({}));
+        assert_eq!(params["required"], serde_json::json!([]));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_typing_without_channel_selected() {
+        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
+        let channel_context = Arc::new(RwLock::new(None)); // No channel set
+
+        let tool = TypingTool::new(registry, channel_context);
+
+        let result = tool.execute(serde_json::json!({}));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("No channel selected"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_typing_unsupported_adapter_silent_success() {
+        let mut registry = AdapterRegistry::new();
+        registry.register(AdapterConfig {
+            name: "test".to_string(),
+            outbound_url: "http://localhost:9999/send".to_string(),
+            read_url: None,
+            features: HashSet::new(), // No TypingIndicator feature
+        });
+
+        let registry = Arc::new(RwLock::new(registry));
+        let channel_context = Arc::new(RwLock::new(Some(crate::agent::ChannelContext {
+            path: PathBuf::from("test.txt"),
+            adapter: "test".to_string(),
+            channel_id: "123".to_string(),
+            channel_name: Some("test".to_string()),
+            guild_id: None,
+        })));
+
+        let tool = TypingTool::new(registry, channel_context);
+
+        let result = tool.execute(serde_json::json!({}));
+
+        assert!(result.is_ok());
     }
 }
