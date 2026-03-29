@@ -112,7 +112,7 @@ The shiny stuff. Build after core works.
 |---------|--------|-------|
 | Utterances | 🟢 | `speak` tool + `switch_channel` for channel-aware messaging |
 | Silent work | 🔴 | Background processing, no user output |
-| Typing indicators | 🔴 | Show typing while agent thinks |
+| Typing indicators | 🟢 | `typing` tool shows typing while agent thinks |
 | Hooks expansion | 🔴 | Message lifecycle phases (received → processed → sent) |
 
 **Utterances:** The agent thinks (internal stream), then *utters* (deliberate speech). Messages arrive when the agent chooses to speak.
