@@ -2,7 +2,7 @@
 //!
 //! These tools allow the agent to send messages through configured communication adapters.
 
-use crate::conversations::{Author, Message, WriteOp};
+use crate::conversations::{Author, WriteOp};
 use river_tools::{Tool, ToolResult};
 use river_core::RiverError;
 use serde_json::Value;
@@ -48,6 +48,117 @@ impl AdapterRegistry {
 
     pub fn names(&self) -> Vec<&str> {
         self.adapters.keys().map(|s| s.as_str()).collect()
+    }
+}
+
+/// Send a message through an adapter (shared by speak and send_message)
+async fn send_to_adapter(
+    http_client: &reqwest::Client,
+    registry: &AdapterRegistry,
+    adapter: &str,
+    channel_id: &str,
+    content: &str,
+    reply_to: Option<&str>,
+    writer_tx: &mpsc::Sender<WriteOp>,
+    conversation_path: &std::path::Path,
+    agent_author: Author,
+) -> Result<ToolResult, RiverError> {
+    let config = registry
+        .get(adapter)
+        .ok_or_else(|| {
+            error!(
+                adapter = %adapter,
+                available = ?registry.names(),
+                "Unknown adapter"
+            );
+            RiverError::tool(format!("Adapter '{}' not registered", adapter))
+        })?;
+
+    let payload = serde_json::json!({
+        "channel": channel_id,
+        "content": content,
+        "reply_to": reply_to,
+    });
+
+    info!(
+        url = %config.outbound_url,
+        adapter = %adapter,
+        channel_id = %channel_id,
+        content_len = content.len(),
+        "Sending message to adapter"
+    );
+
+    let response = http_client
+        .post(&config.outbound_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, url = %config.outbound_url, "HTTP request failed");
+            RiverError::tool(format!("Failed to send message: {}", e))
+        })?;
+
+    let status = response.status();
+
+    if status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+
+        info!(adapter = %adapter, channel_id = %channel_id, "Message sent successfully");
+
+        // Extract message_id from adapter response
+        let message_id = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("out-{}", chrono::Utc::now().timestamp_millis()));
+
+        // Record outgoing message
+        let msg = crate::conversations::Message::outgoing(&message_id, agent_author, content);
+
+        if let Err(e) = writer_tx
+            .send(WriteOp::Message {
+                path: conversation_path.to_path_buf(),
+                msg,
+            })
+            .await
+        {
+            warn!("Failed to record outgoing message: {}", e);
+        }
+
+        Ok(ToolResult::success(format!(
+            "Message sent to {} via {}",
+            channel_id, adapter
+        )))
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        error!(
+            status = %status,
+            body = %body,
+            adapter = %adapter,
+            channel_id = %channel_id,
+            "Adapter returned error"
+        );
+
+        // Record failed message
+        let msg = crate::conversations::Message::failed(
+            agent_author,
+            &format!("Adapter returned error {}", status),
+            content,
+        );
+
+        if let Err(e) = writer_tx
+            .send(WriteOp::Message {
+                path: conversation_path.to_path_buf(),
+                msg,
+            })
+            .await
+        {
+            warn!("Failed to record failed message: {}", e);
+        }
+
+        Err(RiverError::tool(format!(
+            "Adapter returned error {}: {}",
+            status, body
+        )))
     }
 }
 
@@ -122,182 +233,55 @@ impl Tool for SendMessageTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        info!(
-            args = %serde_json::to_string(&args).unwrap_or_default(),
-            "SendMessageTool::execute called"
-        );
-
         let adapter = args["adapter"]
             .as_str()
-            .ok_or_else(|| {
-                error!("SendMessageTool: Missing 'adapter' parameter");
-                RiverError::tool("Missing 'adapter' parameter")
-            })?;
-        let channel = args["channel"]
+            .ok_or_else(|| RiverError::tool("Missing 'adapter' parameter"))?;
+        let channel_id = args["channel"]
             .as_str()
-            .ok_or_else(|| {
-                error!("SendMessageTool: Missing 'channel' parameter");
-                RiverError::tool("Missing 'channel' parameter")
-            })?;
+            .ok_or_else(|| RiverError::tool("Missing 'channel' parameter"))?;
         let content = args["content"]
             .as_str()
-            .ok_or_else(|| {
-                error!("SendMessageTool: Missing 'content' parameter");
-                RiverError::tool("Missing 'content' parameter")
-            })?;
+            .ok_or_else(|| RiverError::tool("Missing 'content' parameter"))?;
         let reply_to = args["reply_to"].as_str();
 
         info!(
             adapter = %adapter,
-            channel = %channel,
+            channel_id = %channel_id,
             content_len = content.len(),
-            content_preview = %content.chars().take(100).collect::<String>(),
-            reply_to = ?reply_to,
             "SendMessageTool: Sending message"
         );
 
-        // Block on async operation
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
         let writer_tx = self.writer_tx.clone();
         let workspace = self.workspace.clone();
         let agent_author = self.agent_author();
         let adapter = adapter.to_string();
-        let channel = channel.to_string();
+        let channel_id = channel_id.to_string();
         let content = content.to_string();
         let reply_to = reply_to.map(|s| s.to_string());
 
-        // Use tokio runtime handle to block on async
-        let result = tokio::task::block_in_place(|| {
+        // Build conversation path from adapter/channel
+        let conversation_path = workspace.join(format!("conversations/{}/{}.txt", adapter, channel_id));
+
+        tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = registry.read().await;
-                debug!(
-                    available_adapters = ?registry.names(),
-                    "SendMessageTool: Looking up adapter in registry"
-                );
 
-                let config = registry
-                    .get(&adapter)
-                    .ok_or_else(|| {
-                        error!(
-                            adapter = %adapter,
-                            available = ?registry.names(),
-                            "SendMessageTool: Unknown adapter"
-                        );
-                        RiverError::tool(format!("Unknown adapter: {}", adapter))
-                    })?;
-
-                let payload = serde_json::json!({
-                    "channel": channel,
-                    "content": content,
-                    "reply_to": reply_to,
-                });
-
-                info!(
-                    url = %config.outbound_url,
-                    payload = %serde_json::to_string(&payload).unwrap_or_default(),
-                    "SendMessageTool: Sending HTTP request to adapter"
-                );
-
-                let response = http_client
-                    .post(&config.outbound_url)
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            error = %e,
-                            url = %config.outbound_url,
-                            "SendMessageTool: HTTP request failed"
-                        );
-                        RiverError::tool(format!("Failed to send message: {}", e))
-                    })?;
-
-                let status = response.status();
-                debug!(status = %status, "SendMessageTool: Received HTTP response");
-
-                if status.is_success() {
-                    let body = response.text().await.unwrap_or_default();
-
-                    info!(
-                        adapter = %adapter,
-                        channel = %channel,
-                        "SendMessageTool: Message sent successfully"
-                    );
-
-                    // Record outgoing message
-                    // Try to extract message_id from adapter response, fall back to timestamp-based ID
-                    let message_id = serde_json::from_str::<serde_json::Value>(&body)
-                        .ok()
-                        .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| format!("out-{}", chrono::Utc::now().timestamp_millis()));
-
-                    let conv_path = crate::conversations::path::build_discord_path(
-                        &workspace,
-                        None, // Guild info not available in current flow
-                        None,
-                        &channel,
-                        &channel, // Use channel ID as name (simplified)
-                    );
-
-                    let msg = Message::outgoing(
-                        &message_id,
-                        agent_author.clone(),
-                        &content,
-                    );
-
-                    if let Err(e) = writer_tx.send(WriteOp::Message {
-                        path: conv_path,
-                        msg,
-                    }).await {
-                        warn!("Failed to record outgoing message: {}", e);
-                    }
-
-                    Ok(ToolResult::success(format!(
-                        "Message sent to {} via {}",
-                        channel, adapter
-                    )))
-                } else {
-                    let body = response.text().await.unwrap_or_default();
-                    error!(
-                        status = %status,
-                        body = %body,
-                        adapter = %adapter,
-                        channel = %channel,
-                        "SendMessageTool: Adapter returned error"
-                    );
-
-                    // Record failed message
-                    let conv_path = crate::conversations::path::build_discord_path(
-                        &workspace,
-                        None,
-                        None,
-                        &channel,
-                        &channel,
-                    );
-
-                    let msg = Message::failed(
-                        agent_author.clone(),
-                        &format!("Adapter returned error {}", status),
-                        &content,
-                    );
-
-                    if let Err(e) = writer_tx.send(WriteOp::Message {
-                        path: conv_path,
-                        msg,
-                    }).await {
-                        warn!("Failed to record failed message: {}", e);
-                    }
-
-                    Err(RiverError::tool(format!(
-                        "Adapter returned error {}: {}",
-                        status, body
-                    )))
-                }
+                send_to_adapter(
+                    &http_client,
+                    &registry,
+                    &adapter,
+                    &channel_id,
+                    &content,
+                    reply_to.as_deref(),
+                    &writer_tx,
+                    &conversation_path,
+                    agent_author,
+                )
+                .await
             })
-        });
-
-        result
+        })
     }
 }
 
