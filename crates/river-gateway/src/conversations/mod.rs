@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod format;
+pub mod meta;
 pub mod path;
 pub mod writer;
+
+pub use meta::ConversationMeta;
 
 pub const CONVERSATIONS_DIR: &str = "conversations";
 
