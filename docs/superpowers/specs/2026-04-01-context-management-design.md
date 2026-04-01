@@ -1,0 +1,283 @@
+# Context Management Crate — Design Spec
+
+> river-context: Worker-side library for assembling context from workspace data
+>
+> Authors: Cass, Claude
+> Date: 2026-04-01
+
+## Overview
+
+The context management crate (`river-context`) provides a pure function that assembles a flat message timeline from workspace data. The worker uses this crate to build its context each turn.
+
+**Key characteristics:**
+- Worker-side (worker has direct workspace access)
+- Stateless, pure function (one input = one output)
+- Rule-based reorganization (reordering, injection, grouping)
+- Estimates tokens, refuses if over budget
+
+## Core API
+
+```rust
+pub fn build_context(request: ContextRequest) -> Result<ContextResponse, ContextError>;
+```
+
+### Request
+
+```rust
+pub struct ContextRequest {
+    /// Channels: [0] is current, rest are last 4 by recency
+    pub channels: Vec<ChannelContext>,
+    /// Global flashes, interspersed by timestamp
+    pub flashes: Vec<Flash>,
+    /// Global tool history, last 20 exchanges
+    pub tool_history: Vec<ToolExchange>,
+    /// Token limit (estimate-based)
+    pub max_tokens: usize,
+    /// Current time for TTL filtering (ISO8601)
+    pub now: String,
+}
+```
+
+### Response
+
+```rust
+pub struct ContextResponse {
+    /// Flat timeline of messages
+    pub messages: Vec<Message>,
+    /// Estimated token count
+    pub estimated_tokens: usize,
+}
+```
+
+### Errors
+
+```rust
+pub enum ContextError {
+    /// Assembled context exceeds max_tokens
+    OverBudget { estimated: usize, limit: usize },
+    /// No channels provided
+    EmptyChannels,
+}
+```
+
+## Types
+
+### Message
+
+The universal output container. All context items serialize to this format for JSONL round-tripping.
+
+```rust
+pub struct Message {
+    pub role: Role,
+    pub content: ContextItem,
+}
+
+pub enum Role {
+    User,
+    Assistant,
+    System,
+}
+```
+
+### ContextItem
+
+The content enum preserves type information through serialization.
+
+```rust
+pub enum ContextItem {
+    Text(TextContent),
+    Moment(Moment),
+    Move(Move),
+    Flash(Flash),
+    Embedding(Embedding),
+    ToolCall(ToolCall),
+    ToolResult(ToolResult),
+}
+```
+
+### Content Types
+
+All content types have an `id` field. IDs contain timestamps (extracted for ordering).
+
+```rust
+pub struct TextContent {
+    pub id: String,
+    pub text: String,
+    pub author: Option<Author>,
+}
+
+pub struct Moment {
+    pub id: String,
+    pub content: String,
+    pub move_range: (String, String),  // (start_move_id, end_move_id)
+}
+
+pub struct Move {
+    pub id: String,
+    pub content: String,
+    pub message_range: (String, String),  // (start_message_id, end_message_id)
+}
+
+pub struct Flash {
+    pub id: String,
+    pub content: String,
+    pub source: String,
+    pub expires_at: String,  // ISO8601
+}
+
+pub struct Embedding {
+    pub id: String,
+    pub content: String,
+    pub source: String,
+    pub expires_at: String,  // ISO8601
+}
+
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+pub struct ToolResult {
+    pub id: String,
+    pub content: String,
+    pub success: bool,
+}
+
+pub struct Author {
+    pub id: String,
+    pub name: String,
+}
+```
+
+### Channel Types
+
+```rust
+pub struct ChannelContext {
+    pub channel: Channel,
+    pub moments: Vec<Moment>,
+    pub moves: Vec<Move>,
+    pub messages: Vec<TextContent>,
+    pub embeddings: Vec<Embedding>,
+}
+
+pub struct Channel {
+    pub adapter: String,   // "discord", "slack"
+    pub id: String,        // channel identifier
+    pub name: String,      // human-readable name
+}
+
+pub struct ToolExchange {
+    pub id: String,
+    pub call: ToolCall,
+    pub result: ToolResult,
+}
+```
+
+## Assembly Rules
+
+The crate assembles a flat `Vec<Message>` following these rules:
+
+### Ordering
+
+```
+[Other channels: moments + moves only, by channel recency]
+[Last channel: moments + moves + embeddings, by timestamp]
+[Tool history: last 20 exchanges]
+[Current channel: moments + moves + messages + embeddings, by timestamp]
+[Flashes: interspersed globally by timestamp]
+```
+
+### Per-Channel Rules
+
+| Channel | Moments | Moves | Messages | Embeddings |
+|---------|---------|-------|----------|------------|
+| Other (not current, not last) | Yes | Yes | No | No |
+| Last | Yes | Yes | No | Yes |
+| Current | Yes | Yes | Yes | Yes |
+
+### Interspersing
+
+- **Flashes:** Merge globally by ID timestamp
+- **Embeddings:** Merge within their channel by ID timestamp
+- **Tool history:** Insert as a block before current channel content
+
+### TTL Filtering
+
+- Flashes with `expires_at < now` are excluded
+- Embeddings with `expires_at < now` are excluded
+
+## Token Estimation
+
+The crate estimates tokens using a simple heuristic (~4 characters per token):
+
+```rust
+fn estimate_tokens(chars: usize) -> usize {
+    (chars + 3) / 4
+}
+```
+
+Each message adds ~4 tokens of overhead for role/structure.
+
+During assembly, the crate sums token estimates. If the total exceeds `max_tokens`, it returns `ContextError::OverBudget`.
+
+**Note:** The worker validates against actual token counts from the model API response. The crate's estimate is a fast pre-check, not the source of truth.
+
+## Crate Structure
+
+```
+river-context/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs          # pub fn build_context, re-exports
+│   ├── types.rs        # Message, ContextItem, Role, all content types
+│   ├── request.rs      # ContextRequest, ChannelContext
+│   ├── response.rs     # ContextResponse, ContextError
+│   ├── assembly.rs     # the assembly logic (ordering, interspersing)
+│   ├── tokens.rs       # estimate_tokens implementations
+│   └── id.rs           # extract timestamp from ID for ordering
+```
+
+### Dependencies
+
+Minimal:
+- `serde` + `serde_json` — serialization
+- `thiserror` — error types
+
+No async, no IO, no external services. Pure computation.
+
+## Integration
+
+### Worker Usage
+
+The worker:
+1. Loads its JSONL from workspace
+2. Gathers moments, moves, flashes, embeddings from workspace files
+3. Calls `build_context(request)`
+4. Receives flat `Vec<Message>` ready for LLM
+
+### Spectator Relationship
+
+The spectator is a separate worker that:
+- Writes moments and moves to workspace
+- Pushes flashes via the flash mechanism
+- Does not use this crate directly
+
+The context crate assembles from what the spectator has written. It does not perform compression.
+
+### Size Management
+
+Size is negotiated between orchestrator and worker:
+1. Worker tracks token usage from model API responses
+2. Worker hits limit → calls summary → exits
+3. Orchestrator spawns fresh worker with summary as seed
+4. JSONL resets
+
+The crate's role is limited to refusing over-budget contexts. It does not compress or drop content.
+
+## Related Documents
+
+- `docs/WORKER-DESIGN.md` — Worker architecture
+- `docs/ORCHESTRATOR-DESIGN.md` — Orchestrator architecture
+- `docs/research/context-management-brainstorm.md` — Philosophy and cognition model
+- `docs/archive/specs/context-assembly-design.md` — Earlier I/You architecture design
