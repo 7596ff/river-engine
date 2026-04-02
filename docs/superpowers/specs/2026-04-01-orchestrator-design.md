@@ -222,6 +222,10 @@ pub enum ProcessEntry {
         dyad: String,            // which dyad this adapter serves
         features: Vec<u16>,      // FeatureId as u16
     },
+    EmbedService {
+        endpoint: String,
+        name: String,            // service name (e.g., "embed")
+    },
 }
 
 // Side imported from river-adapter
@@ -318,6 +322,31 @@ fn validate_adapter_features(features: &[u16]) -> Result<Vec<FeatureId>, Registr
 
 Registration rejected if required features missing or unknown feature IDs provided.
 
+**Embed service registration request:**
+```json
+{
+  "endpoint": "http://localhost:52350",
+  "embed": {
+    "name": "embed"
+  }
+}
+```
+
+**Embed service registration response:**
+```json
+{
+  "accepted": true,
+  "model": {
+    "endpoint": "http://localhost:11434/api/embeddings",
+    "name": "nomic-embed-text",
+    "api_key": "...",
+    "dimensions": 768
+  }
+}
+```
+
+Orchestrator looks up embed model config by name (from `embed.model` in config) and returns it.
+
 ### Registry Push
 
 When registry changes, orchestrator pushes full registry to every live process:
@@ -336,7 +365,12 @@ Each process keeps a local copy for direct routing (e.g., peer-to-peer flash).
 1. Parse CLI args, load config file
 2. Resolve env vars in config (API keys, tokens)
 3. Bind HTTP server to configured port
-4. For each dyad in config:
+4. If embed config present:
+   a. Spawn embed service: `river-embed --orchestrator http://...:4000 --name embed`
+   b. Embed service binds port 0, registers with orchestrator
+   c. Orchestrator responds with embed model config
+   d. Push registry with embed endpoint to all processes
+5. For each dyad in config:
    a. Spawn left worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side left`
    b. Spawn right worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side right`
    c. Workers bind port 0, register with orchestrator
@@ -346,9 +380,9 @@ Each process keeps a local copy for direct routing (e.g., peer-to-peer flash).
       - Adapter binds port 0, registers with orchestrator (including features)
       - Orchestrator validates required features, rejects if missing
       - Push updated registry to all processes
-5. Actor waits for first `/notify` from adapters to start loop
-6. Spectator waits for first `/flash` from actor to start loop
-7. Orchestrator enters supervision loop
+6. Actor waits for first `/notify` from adapters to start loop
+7. Spectator waits for first `/flash` from actor to start loop
+8. Orchestrator enters supervision loop
 
 ## Process Supervision
 
@@ -506,17 +540,29 @@ See Registration section above.
   "processes": [
     {
       "endpoint": "http://localhost:52341",
-      "name": "river",
+      "dyad": "river",
+      "side": "left",
       "baton": "actor",
-      "partner": "river-spectator",
+      "model": "large",
+      "ground": { "name": "alice", "id": "123456", "channel": { "adapter": "discord", "id": "dm-alice-123" } }
+    },
+    {
+      "endpoint": "http://localhost:52342",
+      "dyad": "river",
+      "side": "right",
+      "baton": "spectator",
       "model": "default",
       "ground": { "name": "alice", "id": "123456", "channel": { "adapter": "discord", "id": "dm-alice-123" } }
     },
     {
       "endpoint": "http://localhost:52343",
       "type": "discord",
-      "worker_name": "river",
+      "dyad": "river",
       "features": [0, 1, 10, 11, 12, 20, 40]
+    },
+    {
+      "endpoint": "http://localhost:52350",
+      "name": "embed"
     }
   ]
 }
@@ -528,7 +574,8 @@ See Registration section above.
 {
   "status": "ok",
   "workers": 2,
-  "adapters": 1
+  "adapters": 1,
+  "embed_services": 1
 }
 ```
 

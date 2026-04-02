@@ -203,6 +203,32 @@ pub struct Notification {
 - `sleeping` = `start_sleeping` from registration
 - `pending_*` = empty
 
+**Service discovery from registry:**
+
+```rust
+impl Registry {
+    /// Find embed service endpoint (None if not registered)
+    pub fn embed_endpoint(&self) -> Option<&str> {
+        self.processes.iter().find_map(|p| match p {
+            ProcessEntry::EmbedService { endpoint, .. } => Some(endpoint.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Find adapter endpoint by type
+    pub fn adapter_endpoint(&self, adapter_type: &str) -> Option<&str> {
+        self.processes.iter().find_map(|p| match p {
+            ProcessEntry::Adapter { endpoint, r#type, .. } if r#type == adapter_type => {
+                Some(endpoint.as_str())
+            }
+            _ => None,
+        })
+    }
+}
+```
+
+Embedding tools check `registry.embed_endpoint()` and return `EmbedServerUnreachable` if None.
+
 ## The Main Loop
 
 ```rust
