@@ -120,8 +120,8 @@ pub struct Move {
 
 pub struct Flash {
     pub id: String,
+    pub from: String,        // sender worker name
     pub content: String,
-    pub source: String,
     pub expires_at: String,  // ISO8601
 }
 
