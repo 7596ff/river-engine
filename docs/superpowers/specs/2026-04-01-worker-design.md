@@ -670,6 +670,52 @@ Enables crash recovery — worker loads existing context on restart.
 
 ## Error Handling
 
+### Tool Errors
+
+All tool errors use a standard enum returned to the LLM:
+
+```rust
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "code", content = "details")]
+pub enum ToolError {
+    // File operations
+    FileNotFound { path: String },
+    IsDirectory { path: String },
+    PermissionDenied { path: String },
+
+    // Write operations
+    MissingParameter { name: String },
+
+    // Adapter operations
+    AdapterNotFound { adapter: String },
+    AdapterUnreachable { adapter: String },
+    SendFailed { reason: String },
+    UnsupportedOperation { operation: String },
+
+    // Flash operations
+    TargetNotFound { target: String },
+    TargetUnreachable { target: String },
+
+    // Embed operations
+    EmbedServerUnreachable,
+    InvalidCursor { cursor: String },
+
+    // Model operations
+    UnknownModel { model: String },
+
+    // Role operations
+    PartnerUnreachable,
+    SwitchInProgress,
+    PartnerRejected { reason: String },
+
+    // Bash
+    CommandTimeout { seconds: u64 },
+    InvalidDirectory { path: String },
+}
+```
+
+Tool results include either success content or a `ToolError` JSON object.
+
 **Malformed tool calls:**
 - Retry with backoff: 1 minute, 2 minutes, 5 minutes
 - Inject system message explaining error on each retry

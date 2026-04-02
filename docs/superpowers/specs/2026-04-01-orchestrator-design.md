@@ -288,11 +288,35 @@ Orchestrator looks up dyad config and returns configuration for this side.
 **Adapter registration response:**
 ```json
 {
-  "accepted": true
+  "accepted": true,
+  "worker_endpoint": "http://localhost:52341",
+  "validated_features": [0, 1, 10, 11, 12, 20, 40]
 }
 ```
 
-Orchestrator validates adapters have required features (SendMessage=0, ReceiveMessage=1). Registration rejected if missing.
+**Feature validation:**
+
+```rust
+use river_adapter::FeatureId;
+
+fn validate_adapter_features(features: &[u16]) -> Result<Vec<FeatureId>, RegistrationError> {
+    let parsed: Vec<FeatureId> = features.iter()
+        .map(|&f| FeatureId::try_from(f))
+        .collect::<Result<_, _>>()?;
+
+    // Required features
+    if !parsed.contains(&FeatureId::SendMessage) {
+        return Err(RegistrationError::MissingFeature(FeatureId::SendMessage));
+    }
+    if !parsed.contains(&FeatureId::ReceiveMessage) {
+        return Err(RegistrationError::MissingFeature(FeatureId::ReceiveMessage));
+    }
+
+    Ok(parsed)
+}
+```
+
+Registration rejected if required features missing or unknown feature IDs provided.
 
 ### Registry Push
 
