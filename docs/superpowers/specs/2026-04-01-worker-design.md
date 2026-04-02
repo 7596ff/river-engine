@@ -637,12 +637,27 @@ pub struct Usage {
 
 ## Context Persistence
 
-Context stored in `workspace/{worker_name}/context.jsonl`.
+Context stored in `workspace/{side}/context.jsonl` (e.g., `workspace/left/context.jsonl`).
+
+### JSONL Format
+
+Each line is a JSON object representing a `Message` from `river-context`:
+
+```jsonl
+{"role":"user","content":{"Text":{"id":"...","text":"hello","author":{"id":"123","name":"alice","bot":false}}}}
+{"role":"assistant","content":{"ToolCall":{"id":"...","name":"speak","arguments":{"content":"Hi!"}}}}
+{"role":"user","content":{"ToolResult":{"call_id":"...","content":"sent","success":true}}}
+{"role":"assistant","content":{"Text":{"id":"...","text":"I said hi.","author":null}}}
+```
+
+The `content` field is a `ContextItem` enum variant (Text, ToolCall, ToolResult, Flash, etc.).
+
+### Persistence Functions
 
 ```rust
-pub fn load_context(workspace: &Path, name: &str) -> Vec<Message>;
-pub fn append_to_context(workspace: &Path, name: &str, message: &Message);
-pub fn save_context(workspace: &Path, name: &str, messages: &[Message]);
+pub fn load_context(workspace: &Path, side: &str) -> Vec<Message>;
+pub fn append_to_context(workspace: &Path, side: &str, message: &Message);
+pub fn save_context(workspace: &Path, side: &str, messages: &[Message]);
 ```
 
 **Persistence timing:**
@@ -666,6 +681,11 @@ Enables crash recovery — worker loads existing context on restart.
 **Adapter unreachable:**
 - Return error to model as tool result
 - Worker does not crash
+
+**Embed server unreachable:**
+- Return error to model as tool result (`embed_server_unreachable`)
+- Worker continues without embedding search capability
+- Model decides whether to retry or proceed without embeddings
 
 **LLM unreachable:**
 - Exit with `Error` status

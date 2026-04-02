@@ -331,13 +331,14 @@ CREATE TABLE chunks (
 );
 
 -- Vector storage (sqlite-vec)
+-- Dimension is configured from model config, not hardcoded
 CREATE VIRTUAL TABLE chunks_vec USING vec0(
     id TEXT PRIMARY KEY,
-    embedding FLOAT[768]
+    embedding FLOAT[{dimensions}]  -- e.g., 768 for nomic-embed-text
 );
 ```
 
-The embedding dimension (768 in example) is configured from the model config.
+The table is created at startup using the `dimensions` value from the model config. The 768 shown above is an example.
 
 ### Search Query
 

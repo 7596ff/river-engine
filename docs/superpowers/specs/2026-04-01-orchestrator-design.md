@@ -373,6 +373,19 @@ pub enum ExitStatus {
 
 The orchestrator manages wake timers — worker process doesn't stay alive during the wait.
 
+**Summary persistence:**
+
+Orchestrator stores worker summaries in memory, keyed by `(dyad, side)`:
+
+```rust
+struct OrchestratorState {
+    summaries: HashMap<(String, Side), String>,  // (dyad, side) -> summary
+    wake_timers: HashMap<(String, Side), Instant>,
+}
+```
+
+When a worker exits with a summary, orchestrator stores it. On respawn, orchestrator includes the stored summary as `initial_message`. Summaries are lost if orchestrator restarts — worker falls back to loading from workspace JSONL.
+
 ## Model Switching
 
 Workers can request a different model mid-session via `request_model` tool.
