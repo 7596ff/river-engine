@@ -377,7 +377,7 @@ pub async fn handle_notify(
 
 **Behavior:**
 1. Parse event (using `river-adapter::InboundEvent`)
-2. Write to `workspace/chats/{adapter}/{channel_id}-{channel_name}.jsonl`
+2. Write to `workspace/conversations/{adapter}/{channel_id}-{channel_name}.jsonl`
 3. Batch notification for next status message
 4. If sleeping and channel in watch_list: wake
 

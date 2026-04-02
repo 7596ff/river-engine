@@ -13,7 +13,7 @@ workspace/
 │   ├── agents.md
 │   ├── identity.md
 │   └── rules.md
-├── chats/                      # chat history by adapter/channel (see chats.md)
+├── conversations/              # chat history by adapter/channel (see chats.md)
 ├── embeddings/                 # declarative embedding sync folder (see embedding-architecture.md)
 ├── memory/                     # memory maintenance instructions
 ├── notes/                      # personal notes
