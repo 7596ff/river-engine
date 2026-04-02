@@ -491,7 +491,6 @@ Enables crash recovery — worker loads existing context on restart.
 pub struct WorkerOutput {
     pub status: ExitStatus,
     pub summary: String,
-    pub last_messages: Vec<Message>,
 }
 
 pub enum ExitStatus {
