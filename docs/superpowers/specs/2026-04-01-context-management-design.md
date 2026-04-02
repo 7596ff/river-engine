@@ -144,28 +144,19 @@ pub struct ToolResult {
     pub success: bool,
 }
 
-pub struct Author {
-    pub id: String,
-    pub name: String,
-    pub bot: bool,
-}
+// Author imported from river-adapter
+pub use river_adapter::{Author, Channel};
 ```
 
 ### Channel Types
 
 ```rust
 pub struct ChannelContext {
-    pub channel: Channel,
+    pub channel: Channel,       // from river-adapter
     pub moments: Vec<Moment>,
     pub moves: Vec<Move>,
     pub messages: Vec<TextContent>,
     pub embeddings: Vec<Embedding>,
-}
-
-pub struct Channel {
-    pub adapter: String,        // "discord", "slack"
-    pub id: String,             // channel identifier
-    pub name: Option<String>,   // human-readable name (if known)
 }
 
 pub struct ToolExchange {
@@ -243,6 +234,7 @@ river-context/
 ### Dependencies
 
 Minimal:
+- `river-adapter` — Author and Channel types
 - `serde` + `serde_json` — serialization
 - `thiserror` — error types
 

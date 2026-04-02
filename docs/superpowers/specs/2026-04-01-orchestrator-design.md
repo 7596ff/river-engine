@@ -85,14 +85,23 @@ JSON config file with env var substitution (`$VAR_NAME` syntax) for secrets.
       "name": "claude-sonnet-4-20250514",
       "api_key": "$ANTHROPIC_API_KEY",
       "context_limit": 200000
+    },
+    "embed": {
+      "endpoint": "http://localhost:11434/api/embeddings",
+      "name": "nomic-embed-text",
+      "api_key": "$OLLAMA_API_KEY",
+      "dimensions": 768
     }
   },
-  "workers": {
+  "embed": {
+    "model": "embed"
+  },
+  "dyads": {
     "river": {
-      "role": "actor",
-      "partner": "river-spectator",
-      "model": "default",
       "workspace": "/home/user/workspace/river",
+      "left_model": "large",
+      "right_model": "default",
+      "left_starts_as": "actor",
       "ground": {
         "name": "alice",
         "id": "123456",
@@ -109,12 +118,6 @@ JSON config file with env var substitution (`$VAR_NAME` syntax) for secrets.
           }
         }
       ]
-    },
-    "river-spectator": {
-      "role": "spectator",
-      "partner": "river",
-      "model": "default",
-      "workspace": "/home/user/workspace/river"
     }
   },
   "port": 4000
@@ -126,7 +129,8 @@ JSON config file with env var substitution (`$VAR_NAME` syntax) for secrets.
 ```rust
 pub struct Config {
     pub models: HashMap<String, ModelConfig>,
-    pub workers: HashMap<String, WorkerConfig>,
+    pub embed: Option<EmbedConfig>,
+    pub dyads: HashMap<String, DyadConfig>,
     pub port: u16,
 }
 
@@ -134,15 +138,20 @@ pub struct ModelConfig {
     pub endpoint: String,
     pub name: String,
     pub api_key: String,        // supports $ENV_VAR syntax
-    pub context_limit: usize,
+    pub context_limit: Option<usize>,   // for LLM models
+    pub dimensions: Option<usize>,      // for embedding models
 }
 
-pub struct WorkerConfig {
-    pub role: Role,
-    pub partner: Option<String>,
+pub struct EmbedConfig {
     pub model: String,          // references key in models map
+}
+
+pub struct DyadConfig {
     pub workspace: PathBuf,
-    pub ground: Option<Ground>,
+    pub left_model: String,           // references key in models map
+    pub right_model: String,          // references key in models map
+    pub left_starts_as: Role,         // which role left worker starts in
+    pub ground: Ground,
     pub adapters: Vec<AdapterConfig>,
 }
 
@@ -154,25 +163,29 @@ pub enum Role {
 }
 ```
 
-### Actor/Spectator Communication
+### Dyad Model
 
-Spectators have no external adapters — they don't communicate with Discord, Slack, etc. directly.
+A dyad is a pair of workers (left and right) that share a workspace. The orchestrator spawns both workers for each dyad.
 
-**Current mechanism (flash only):**
-- Spectator shares workspace with actor (same `workspace` path)
-- Actor flashes spectator for attention
+**Key properties:**
+- Both workers share the same workspace
+- Each worker has a fixed model assignment (`left_model`, `right_model`)
+- Each worker has a fixed identity (`workspace/left/identity.md`, `workspace/right/identity.md`)
+- Workers can switch roles via `switch_roles` tool
+- Role determines behavior (`workspace/roles/actor.md`, `workspace/roles/spectator.md`)
+
+**Communication:**
+- Workers flash each other for attention (peer-to-peer)
 - Spectator reads workspace files (conversations, context)
 - Spectator writes summaries, moments, moves to workspace
-- Spectator flashes actor with updates
+- Actor handles external communication (adapters)
 - Spectator wakes on flash, not external notifications
 
-**Future: Internal backchannel**
-A file-based adapter (`river-file-adapter`) will provide persistent internal monologue between actor, spectator, and ground. This enables:
-- Append-only conversation log between workers
-- Ground (human operator) can read/write to the backchannel
-- History preserved across context rotations
-
-The file adapter will be specced separately.
+**Role switching:**
+- Either worker can call `switch_roles`
+- Both workers coordinate the swap
+- Left loads spectator role, right loads actor role (or vice versa)
+- Identities and contexts stay with their workers
 
 ```rust
 
@@ -204,18 +217,25 @@ pub struct Registry {
 pub enum ProcessEntry {
     Worker {
         endpoint: String,
-        name: String,
-        role: Role,
-        partner: Option<String>,
+        dyad: String,            // dyad name (e.g., "river")
+        side: Side,              // "left" or "right"
+        role: Role,              // current role (actor or spectator)
         model: String,
-        ground: Option<Ground>,
+        ground: Ground,
     },
     Adapter {
         endpoint: String,
         r#type: String,
-        worker_name: String,
-        features: Vec<u16>,  // FeatureId as u16
+        dyad: String,            // which dyad this adapter serves
+        features: Vec<u16>,      // FeatureId as u16
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Left,
+    Right,
 }
 ```
 
@@ -226,17 +246,20 @@ pub enum ProcessEntry {
 {
   "endpoint": "http://localhost:52341",
   "worker": {
-    "name": "river",
-    "role": "actor",
-    "partner": "river-spectator"
+    "dyad": "river",
+    "side": "left"
   }
 }
 ```
+
+Orchestrator looks up dyad config and returns configuration for this side.
 
 **Worker registration response:**
 ```json
 {
   "accepted": true,
+  "role": "actor",
+  "partner_endpoint": "http://localhost:52342",
   "model": {
     "endpoint": "https://api.anthropic.com/v1",
     "name": "claude-sonnet-4-20250514",
@@ -249,13 +272,18 @@ pub enum ProcessEntry {
     "adapter": "discord",
     "channel": "dm-alice-123"
   },
+  "workspace": "/home/user/workspace/river",
   "initial_message": null,
   "start_sleeping": false
 }
 ```
 
+- `role` — initial role (actor or spectator, based on `left_starts_as` config)
+- `partner_endpoint` — endpoint of the other worker in dyad (null if not yet registered)
+- `ground` — the human operator contact info
+- `workspace` — path to shared workspace
 - `initial_message` — populated when respawning after `ContextExhausted` or timed `Done`, contains the previous summary
-- `start_sleeping` — true when respawning after `Done { wake_after: None }`, worker should call `sleep(None)` immediately after loading context
+- `start_sleeping` — true when respawning after `Done { wake_after_minutes: None }`, worker should call `sleep(None)` immediately after loading context
 
 **Adapter registration request:**
 ```json
@@ -296,17 +324,19 @@ Each process keeps a local copy for direct routing (e.g., peer-to-peer flash).
 1. Parse CLI args, load config file
 2. Resolve env vars in config (API keys, tokens)
 3. Bind HTTP server to configured port
-4. For each worker in config:
-   a. Spawn worker binary: `river-worker --orchestrator http://...:4000 --name {name} --workspace {path}`
-   b. Worker binds port 0, registers with orchestrator
-   c. Orchestrator responds with ModelConfig + Ground
-   d. For each adapter in worker config:
+4. For each dyad in config:
+   a. Spawn left worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side left`
+   b. Spawn right worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side right`
+   c. Workers bind port 0, register with orchestrator
+   d. Orchestrator responds with ModelConfig, role, ground, workspace
+   e. For each adapter in dyad config:
       - Spawn adapter binary with config JSON as arg
       - Adapter binds port 0, registers with orchestrator (including features)
       - Orchestrator validates required features, rejects if missing
       - Push updated registry to all processes
-5. Workers wait for first `/notify` from adapters to start loop
-6. Orchestrator enters supervision loop
+5. Actor waits for first `/notify` from adapters to start loop
+6. Spectator waits for first `/flash` from actor to start loop
+7. Orchestrator enters supervision loop
 
 ## Process Supervision
 
@@ -338,7 +368,7 @@ pub struct WorkerOutput {
 }
 
 pub enum ExitStatus {
-    Done { wake_after: Option<Duration> },  // None = wait for notifications
+    Done { wake_after_minutes: Option<u64> },  // None = wait for notifications
     ContextExhausted,
     Error(String),
 }
@@ -348,8 +378,8 @@ pub enum ExitStatus {
 
 | Exit Status | Action |
 |-------------|--------|
-| `Done { wake_after: None }` | Respawn immediately with `start_sleeping: true`. Worker loads context, calls `sleep(None)`. Wakes only on watched channel notifications. |
-| `Done { wake_after: Some(30m) }` | Orchestrator waits 30 minutes, then respawns worker with `initial_message` set to summary. |
+| `Done { wake_after_minutes: None }` | Respawn immediately with `start_sleeping: true`. Worker loads context, calls `sleep(None)`. Wakes only on watched channel notifications. |
+| `Done { wake_after_minutes: Some(30) }` | Orchestrator waits 30 minutes, then respawns worker with `initial_message` set to summary. |
 | `ContextExhausted` | Respawn immediately with `initial_message` set to summary. |
 | `Error` | Respawn immediately. Worker loads existing workspace JSONL. |
 
@@ -433,7 +463,7 @@ See Registration section above.
 {
   "worker_name": "river",
   "output": {
-    "status": { "Done": { "wake_after": null } },
+    "status": { "Done": { "wake_after_minutes": null } },
     "summary": "Completed task X, waiting for user response."
   }
 }

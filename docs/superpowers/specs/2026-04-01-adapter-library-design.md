@@ -407,6 +407,13 @@ pub struct Author {
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct Channel {
+    pub adapter: String,
+    pub id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct Attachment {
     pub id: String,
     pub filename: String,
@@ -552,6 +559,7 @@ use utoipa::OpenApi;
 
         // Supporting
         Author,
+        Channel,
         Attachment,
     ))
 )]
