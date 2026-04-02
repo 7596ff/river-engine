@@ -196,7 +196,7 @@ pub struct Notification {
 
 **Initial state (from config + registration):**
 - `dyad`, `side` = from CLI args
-- `role`, `partner_endpoint`, `ground`, `workspace` = from orchestrator
+- `baton`, `partner_endpoint`, `ground`, `workspace` = from orchestrator
 - `current_channel` = ground channel
 - `watch_list` = empty
 - `model_config` = from orchestrator
@@ -393,7 +393,7 @@ pub struct CreateMoveTool {
     pub end_message_id: String,          // last message in range (platform ID)
 }
 // Worker generates snowflake ID (SnowflakeType::Move)
-// Writes Move to workspace/moves/{channel_id}.jsonl
+// Writes Move to workspace/moves/{adapter}_{channel_id}.jsonl
 
 /// Create a moment (summarizes a range of moves)
 pub struct CreateMomentTool {
@@ -403,16 +403,18 @@ pub struct CreateMomentTool {
     pub end_move_id: String,             // last move in range (snowflake ID)
 }
 // Worker generates snowflake ID (SnowflakeType::Moment)
-// Writes Moment to workspace/moments/{channel_id}.jsonl
+// Writes Moment to workspace/moments/{adapter}_{channel_id}.jsonl
 
 /// Send to another worker (peer-to-peer)
 pub struct CreateFlashTool {
-    pub target: String,         // target worker name
+    pub target_dyad: String,    // target dyad name
+    pub target_side: Side,      // target side (left or right)
     pub content: String,        // message content
     pub ttl_minutes: Option<u32>, // time-to-live, default 60
 }
 // Worker generates snowflake ID, calculates expires_at from TTL
-// Looks up target endpoint from registry, sends Flash directly
+// Looks up target endpoint from registry by (dyad, side), sends Flash directly
+// For partner: use own dyad, opposite side
 
 /// Switch LLM model
 pub struct RequestModelTool {
@@ -1189,7 +1191,8 @@ Send message to another worker (peer-to-peer).
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| target | string | yes | Target worker name |
+| target_dyad | string | yes | Target dyad name |
+| target_side | string | yes | Target side: "left" or "right" |
 | content | string | yes | Message content |
 | ttl_minutes | integer | no | Time-to-live in minutes (default: 60) |
 
@@ -1200,11 +1203,16 @@ Send message to another worker (peer-to-peer).
 
 **Side effects:**
 - Generates snowflake ID (`SnowflakeType::Flash`)
-- Looks up target endpoint from registry
+- Looks up target endpoint from registry by (dyad, side)
 - POSTs Flash directly to target worker
 
+**Example:** To flash partner, use own dyad and opposite side:
+```json
+{ "target_dyad": "river", "target_side": "right", "content": "User seems frustrated" }
+```
+
 **Errors:**
-- `target_not_found` — No worker with that name in registry
+- `target_not_found` — No worker with that (dyad, side) in registry
 - `target_unreachable` — Cannot reach target worker
 
 ---

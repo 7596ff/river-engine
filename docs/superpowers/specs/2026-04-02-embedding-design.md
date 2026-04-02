@@ -148,14 +148,17 @@ The orchestrator config includes embed service configuration:
 
 ## HTTP API
 
+Endpoints exposed by the embed service:
+
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/register` | Register with orchestrator |
 | POST | `/index` | Index file content |
 | DELETE | `/source/{path}` | Remove file's chunks |
 | POST | `/search` | Start search, return first result + cursor |
 | POST | `/next` | Continue search with cursor |
 | GET | `/health` | Health check |
+
+Note: During startup, embed service calls orchestrator's `POST /register` to register itself and receive model config.
 
 ### POST /index
 

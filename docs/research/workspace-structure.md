@@ -21,14 +21,14 @@ workspace/
 │       │   └── {channel_id}-{channel_name}.txt
 │       └── dm/
 │           └── {user_id}-{user_name}.txt
-├── moves/                    # message summaries by channel
-│   └── {channel_id}.jsonl
-├── moments/                  # move summaries by channel
-│   └── {channel_id}.jsonl
-├── embeddings/               # files to embed (watched by worker)
-├── memory/                   # memory maintenance instructions
-├── notes/                    # personal notes
-└── artifacts/                # agent generated artifacts
+├── moves/                    # message summaries by adapter/channel
+│   └── {adapter}_{channel_id}.jsonl
+├── moments/                  # move summaries by adapter/channel
+│   └── {adapter}_{channel_id}.jsonl
+├── embeddings/               # files to embed (worker notifies embed server on write)
+├── memory/                   # long-term memory instructions (spectator-maintained)
+├── notes/                    # personal notes and drafts
+└── artifacts/                # agent-generated files (code, diagrams, etc.)
 ```
 
 ## Dyad Model

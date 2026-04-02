@@ -507,7 +507,8 @@ See Registration section above.
 ```json
 // Request
 {
-  "worker_name": "river",
+  "dyad": "river",
+  "side": "left",
   "model": "large"
 }
 
@@ -589,7 +590,8 @@ Worker                 Orchestrator                Partner
 ```json
 // Request
 {
-  "worker_name": "river",
+  "dyad": "river",
+  "side": "left",
   "output": {
     "status": { "Done": { "wake_after_minutes": null } },
     "summary": "Completed task X, waiting for user response."
