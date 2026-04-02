@@ -82,6 +82,7 @@ pub struct WorkerConfig {
 
 pub struct Ground {
     pub name: String,
+    pub id: String,
     pub adapter: String,
     pub channel: String,
 }
@@ -91,6 +92,7 @@ pub struct ModelConfig {
     pub endpoint: String,
     pub name: String,
     pub api_key: String,
+    pub context_limit: usize,
 }
 ```
 
@@ -122,10 +124,23 @@ pub struct ModelConfig {
   "model": {
     "endpoint": "https://api.anthropic.com/v1",
     "name": "claude-sonnet-4-20250514",
-    "api_key": "sk-..."
-  }
+    "api_key": "sk-...",
+    "context_limit": 200000
+  },
+  "ground": {
+    "name": "alice",
+    "id": "123456",
+    "adapter": "discord",
+    "channel": "dm-alice-123"
+  },
+  "initial_message": null,
+  "start_sleeping": false
 }
 ```
+
+- `ground` — the human operator contact info (null if no ground configured)
+- `initial_message` — summary from previous session (for `ContextExhausted` or timed `Done` respawn)
+- `start_sleeping` — true when respawning after `Done { wake_after: None }`, worker should call `sleep(None)` immediately
 
 ## Worker State
 
@@ -150,7 +165,8 @@ pub struct WorkerState {
 
 pub struct ChannelRef {
     pub adapter: String,
-    pub channel: String,
+    pub id: String,
+    pub name: Option<String>,
 }
 
 pub struct Notification {
@@ -475,7 +491,7 @@ pub struct WorkerOutput {
 }
 
 pub enum ExitStatus {
-    Done,
+    Done { wake_after: Option<Duration> },  // None = wait for notifications
     ContextExhausted,
     Error(String),
 }

@@ -49,6 +49,9 @@ pub enum SnowflakeType {
     Subagent = 0x04,
     ToolCall = 0x05,
     Context = 0x06,
+    Flash = 0x07,
+    Move = 0x08,
+    Moment = 0x09,
 }
 
 /// Thread-safe generator for a single birth
@@ -107,7 +110,7 @@ GET /id/{type}?birth={birth}
 ```
 
 **Path parameters:**
-- `type` — One of: `message`, `embedding`, `session`, `subagent`, `tool_call`, `context`
+- `type` — One of: `message`, `embedding`, `session`, `subagent`, `tool_call`, `context`, `flash`, `move`, `moment`
 
 **Query parameters:**
 - `birth` — AgentBirth as u64 (36-bit packed value)
