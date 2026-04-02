@@ -641,23 +641,25 @@ Context stored in `workspace/{side}/context.jsonl` (e.g., `workspace/left/contex
 
 ### JSONL Format
 
-Each line is a JSON object representing a `Message` from `river-context`:
+Each line is an OpenAI-compatible message. This format is used directly by the LLM — no conversion needed.
 
 ```jsonl
-{"role":"user","content":{"Text":{"id":"...","text":"hello","author":{"id":"123","name":"alice","bot":false}}}}
-{"role":"assistant","content":{"ToolCall":{"id":"...","name":"speak","arguments":{"content":"Hi!"}}}}
-{"role":"user","content":{"ToolResult":{"call_id":"...","content":"sent","success":true}}}
-{"role":"assistant","content":{"Text":{"id":"...","text":"I said hi.","author":null}}}
+{"role":"user","content":"hello"}
+{"role":"assistant","tool_calls":[{"id":"call_abc","type":"function","function":{"name":"speak","arguments":"{\"content\":\"Hi!\"}"}}]}
+{"role":"tool","tool_call_id":"call_abc","content":"sent"}
+{"role":"assistant","content":"I said hi."}
 ```
 
-The `content` field is a `ContextItem` enum variant (Text, ToolCall, ToolResult, Flash, etc.).
+Tool calls use OpenAI's native format with `tool_calls` array and `function` wrapper. Tool results use `role: "tool"` with `tool_call_id` reference.
 
 ### Persistence Functions
 
 ```rust
-pub fn load_context(workspace: &Path, side: &str) -> Vec<Message>;
-pub fn append_to_context(workspace: &Path, side: &str, message: &Message);
-pub fn save_context(workspace: &Path, side: &str, messages: &[Message]);
+use river_context::OpenAIMessage;
+
+pub fn load_context(workspace: &Path, side: &str) -> Vec<OpenAIMessage>;
+pub fn append_to_context(workspace: &Path, side: &str, message: &OpenAIMessage);
+pub fn save_context(workspace: &Path, side: &str, messages: &[OpenAIMessage]);
 ```
 
 **Persistence timing:**
