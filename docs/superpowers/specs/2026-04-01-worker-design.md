@@ -448,7 +448,7 @@ pub struct Usage {
 }
 ```
 
-**OpenAI-compatible:** Posts to `{endpoint}/chat/completions`.
+**OpenAI-compatible:** Posts to `{endpoint}/chat/completions`. Endpoints must be OpenAI-compatible (OpenAI, Ollama, vLLM, etc.). For other providers (Anthropic, Google), use `river-router` as a translation proxy.
 
 ## Context Persistence
 
