@@ -525,81 +525,114 @@ workspace/conversations/{adapter}/{guild_id}-{guild_name}/{channel_id}-{channel_
 workspace/conversations/{adapter}/dm/{user_id}-{user_name}.txt
 ```
 
+### Hybrid Format
+
+The conversation file has two sections: a **sorted section** (compacted history) and an **append-only tail** (recent events). This gives fast writes and fast reads.
+
+```
+# === Compacted (sorted by timestamp, statuses baked in) ===
+[x] 2026-03-21T14:25:00Z 1234567889 <alice:111> previous message
+[x] 2026-03-21T14:30:00Z 1234567890 <alice:111> hey, can you help me?
+[>] 2026-03-21T14:30:15Z 1234567891 <river:999> Sure! What do you need?
+[x] 2026-03-21T14:30:30Z 1234567892 <alice:111> I'm trying to deploy...
+
+# === Tail (append-only since last compaction) ===
+[+] 2026-03-21T14:35:00Z 1234567893 <alice:111> any ideas?
+[r] 2026-03-21T14:35:30Z 1234567893
+[+] 2026-03-21T14:36:00Z 1234567894 <alice:111> hello?
+[>] 2026-03-21T14:36:15Z 1234567895 <river:999> Sorry, checking logs now.
+[!] 2026-03-21T14:36:20Z - <river:999> Failed: rate limited
+```
+
+### Line Types
+
+| Prefix | Section | Meaning |
+|--------|---------|---------|
+| `[x]` | Compacted | Incoming, read |
+| `[>]` | Compacted | Outgoing, sent |
+| `[ ]` | Compacted | Incoming, unread (rare after compaction) |
+| `[+]` | Tail | New message arrived |
+| `[r]` | Tail | Read receipt (references message_id) |
+| `[>]` | Tail | Outgoing, sent |
+| `[!]` | Tail | Failed to send |
+
 ### Line Format
 
 ```
 [status] timestamp message_id <author_name:author_id> content
+[r] timestamp message_id
 ```
 
-**Examples:**
-```
-[ ] 2026-03-21T14:30:00Z 1234567890 <alice:111> hey, can you help me?
-[>] 2026-03-21T14:30:15Z 1234567891 <river:999> Sure! What do you need?
-[x] 2026-03-21T14:30:30Z 1234567892 <alice:111> I'm trying to deploy...
-[!] 2026-03-21T14:31:00Z - <river:999> Failed to send: rate limited
-```
+Read receipts (`[r]`) only have timestamp and message_id — no author or content.
 
-### Status Markers
+### Compaction
 
-| Marker | Meaning |
-|--------|---------|
-| `[ ]` | Incoming, unread |
-| `[x]` | Incoming, read |
-| `[>]` | Outgoing (sent by worker) |
-| `[!]` | Failed to send (message_id is `-`) |
+Compaction merges the tail into the sorted section:
+1. Parse tail events
+2. Apply read receipts to messages (`[+]` → `[x]`)
+3. Sort all messages by timestamp
+4. Rewrite file with clean sorted section, empty tail
+
+**Triggers:**
+- Worker startup
+- Tail exceeds 100 lines
+- Explicit request (future: `compact_conversations` tool)
 
 ### Types
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum MessageStatus {
-    Unread,    // [ ]
-    Read,      // [x]
-    Outgoing,  // [>]
-    Failed,    // [!]
+pub enum LineType {
+    // Compacted section
+    Unread,      // [ ]
+    Read,        // [x]
+    Outgoing,    // [>]
+
+    // Tail section
+    Arrived,     // [+]
+    ReadReceipt, // [r]
+    Failed,      // [!]
 }
 
-pub struct ConversationLine {
-    pub status: MessageStatus,
+pub struct MessageLine {
+    pub line_type: LineType,
     pub timestamp: String,       // ISO8601
     pub message_id: String,      // platform message ID, or "-" for failed
-    pub author_name: String,
-    pub author_id: String,
-    pub content: String,
+    pub author_name: Option<String>,  // None for read receipts
+    pub author_id: Option<String>,
+    pub content: Option<String>,
 }
 ```
 
-### Custom Serialization
-
-The line format requires custom `Serialize`/`Deserialize` implementations (not JSON):
+### API
 
 ```rust
-impl ConversationLine {
-    /// Parse a line from the conversation file
-    pub fn parse(line: &str) -> Result<Self, ParseError>;
+impl ConversationFile {
+    /// Load and reconstruct conversation (applies pending read receipts)
+    pub fn load(path: &Path) -> Result<Conversation, IoError>;
 
-    /// Format as a line for the conversation file
-    pub fn format(&self) -> String;
+    /// Append a new message to tail
+    pub fn append_message(path: &Path, msg: &MessageLine) -> Result<(), IoError>;
+
+    /// Append a read receipt to tail
+    pub fn mark_read(path: &Path, message_id: &str) -> Result<(), IoError>;
+
+    /// Compact: merge tail into sorted section
+    pub fn compact(path: &Path) -> Result<(), IoError>;
 }
 
-impl ConversationFile {
-    /// Load all lines from a conversation file
-    pub fn load(path: &Path) -> Result<Vec<ConversationLine>, IoError>;
-
-    /// Append a single line to a conversation file
-    pub fn append(path: &Path, line: &ConversationLine) -> Result<(), IoError>;
-
-    /// Mark a message as read (finds line by message_id, updates status)
-    pub fn mark_read(path: &Path, message_id: &str) -> Result<(), IoError>;
+pub struct Conversation {
+    pub messages: Vec<MessageLine>,  // sorted, with statuses resolved
+    pub needs_compaction: bool,      // tail > 100 lines
 }
 ```
 
 ### Parsing Notes
 
 - Lines are newline-delimited (`\n`)
-- Content may contain any characters except newline (newlines in content should be escaped as `\n` literal)
+- `# ===` lines are section markers (for human readability, ignored by parser)
+- Content may contain any characters except newline (escape as `\\n`)
 - Empty lines are ignored
-- Lines starting with `#` are comments (for manual annotations)
 - Author name may contain spaces; parsing stops at `:` before author_id
 - Timestamp is ISO8601 with timezone (always UTC with `Z` suffix)
 
