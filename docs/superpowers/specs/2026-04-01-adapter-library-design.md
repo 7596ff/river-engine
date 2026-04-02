@@ -450,6 +450,70 @@ pub trait Adapter: Send + Sync {
 }
 ```
 
+## HTTP API
+
+Adapter binaries must expose these HTTP endpoints. The trait methods map directly to endpoints.
+
+| Method | Endpoint | Request Body | Response |
+|--------|----------|--------------|----------|
+| POST | `/start` | `{ "worker_endpoint": "http://..." }` | `{ "ok": true }` |
+| POST | `/execute` | `OutboundRequest` | `OutboundResponse` |
+| GET | `/health` | — | `{ "status": "ok" }` |
+
+### POST /start
+
+Bind adapter to a worker. Adapter begins forwarding inbound events to `{worker_endpoint}/notify`.
+
+```json
+// Request
+{ "worker_endpoint": "http://localhost:52341" }
+
+// Response 200
+{ "ok": true }
+
+// Response 400 (already started)
+{ "ok": false, "error": "already bound to worker" }
+```
+
+### POST /execute
+
+Execute an outbound request. Body is an `OutboundRequest` variant.
+
+```json
+// Request
+{
+  "SendMessage": {
+    "channel": "123456",
+    "content": "Hello!",
+    "reply_to": null
+  }
+}
+
+// Response 200
+{
+  "ok": true,
+  "data": { "MessageSent": { "message_id": "789" } }
+}
+
+// Response 400 (unsupported)
+{
+  "ok": false,
+  "error": { "code": "unsupported_feature", "message": "EditMessage not supported" }
+}
+```
+
+### GET /health
+
+Health check for orchestrator supervision.
+
+```json
+// Response 200
+{ "status": "ok" }
+
+// Response 503 (disconnected from platform)
+{ "status": "error", "message": "websocket disconnected" }
+```
+
 ## Response Types
 
 ```rust

@@ -88,7 +88,7 @@ pub enum Side {
 
 /// Received from orchestrator on registration
 pub struct RegistrationInfo {
-    pub role: Role,
+    pub baton: Baton,
     pub partner_endpoint: Option<String>,
     pub model: ModelConfig,
     pub ground: Ground,
@@ -98,7 +98,7 @@ pub struct RegistrationInfo {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Role {
+pub enum Baton {
     Actor,
     Spectator,
 }
@@ -145,7 +145,7 @@ pub struct ModelConfig {
 ```json
 {
   "accepted": true,
-  "role": "actor",
+  "baton": "actor",
   "partner_endpoint": "http://localhost:52342",
   "model": {
     "endpoint": "https://api.anthropic.com/v1",
@@ -165,7 +165,7 @@ pub struct ModelConfig {
 }
 ```
 
-- `role` — "actor" or "spectator" (initial role based on dyad config)
+- `baton` — "actor" or "spectator" (initial baton based on dyad config)
 - `partner` — name of paired worker (null if no partner)
 - `ground` — the human operator contact info
 - `initial_message` — summary from previous session (for `ContextExhausted` or timed `Done` respawn)
@@ -182,7 +182,7 @@ pub struct WorkerState {
     // Identity (from config + registration)
     pub dyad: String,
     pub side: Side,
-    pub role: Role,
+    pub baton: Baton,
     pub partner_endpoint: Option<String>,
     pub ground: Ground,
     pub workspace: PathBuf,

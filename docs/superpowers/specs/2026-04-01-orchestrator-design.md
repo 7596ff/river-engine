@@ -150,14 +150,14 @@ pub struct DyadConfig {
     pub workspace: PathBuf,
     pub left_model: String,           // references key in models map
     pub right_model: String,          // references key in models map
-    pub left_starts_as: Role,         // which role left worker starts in
+    pub left_starts_as: Baton,        // which baton left worker starts with
     pub ground: Ground,
     pub adapters: Vec<AdapterConfig>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Role {
+pub enum Baton {
     Actor,
     Spectator,
 }
@@ -219,7 +219,7 @@ pub enum ProcessEntry {
         endpoint: String,
         dyad: String,            // dyad name (e.g., "river")
         side: Side,              // "left" or "right"
-        role: Role,              // current role (actor or spectator)
+        baton: Baton,            // current baton (actor or spectator)
         model: String,
         ground: Ground,
     },
@@ -258,7 +258,7 @@ Orchestrator looks up dyad config and returns configuration for this side.
 ```json
 {
   "accepted": true,
-  "role": "actor",
+  "baton": "actor",
   "partner_endpoint": "http://localhost:52342",
   "model": {
     "endpoint": "https://api.anthropic.com/v1",
@@ -278,7 +278,7 @@ Orchestrator looks up dyad config and returns configuration for this side.
 }
 ```
 
-- `role` — initial role (actor or spectator, based on `left_starts_as` config)
+- `baton` — initial baton (actor or spectator, based on `left_starts_as` config)
 - `partner_endpoint` — endpoint of the other worker in dyad (null if not yet registered)
 - `ground` — the human operator contact info
 - `workspace` — path to shared workspace
@@ -328,7 +328,7 @@ Each process keeps a local copy for direct routing (e.g., peer-to-peer flash).
    a. Spawn left worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side left`
    b. Spawn right worker: `river-worker --orchestrator http://...:4000 --dyad {name} --side right`
    c. Workers bind port 0, register with orchestrator
-   d. Orchestrator responds with ModelConfig, role, ground, workspace
+   d. Orchestrator responds with ModelConfig, baton, ground, workspace
    e. For each adapter in dyad config:
       - Spawn adapter binary with config JSON as arg
       - Adapter binds port 0, registers with orchestrator (including features)
@@ -482,7 +482,7 @@ See Registration section above.
     {
       "endpoint": "http://localhost:52341",
       "name": "river",
-      "role": "actor",
+      "baton": "actor",
       "partner": "river-spectator",
       "model": "default",
       "ground": { "name": "alice", "id": "123456", "adapter": "discord", "channel": "dm-alice-123" }
