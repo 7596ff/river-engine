@@ -473,6 +473,35 @@ pub trait Adapter: Send + Sync {
 }
 ```
 
+## Adapter Binary CLI
+
+Adapter binaries follow a standard CLI pattern:
+
+```
+river-{type} --orchestrator <URL> --dyad <NAME> --type <TYPE> [--port <PORT>]
+
+Options:
+  --orchestrator <URL>    Orchestrator endpoint for registration
+  --dyad <NAME>           Dyad this adapter serves
+  --type <TYPE>           Adapter type (must match config)
+  --port <PORT>           Port to bind (default: 0 for OS-assigned)
+```
+
+**Example:**
+```bash
+river-discord --orchestrator http://localhost:4000 --dyad river --type discord
+```
+
+**Startup sequence:**
+1. Parse CLI args
+2. Bind HTTP server to port (0 = OS-assigned)
+3. Register with orchestrator (send dyad, type, features)
+4. Receive config (token, guild_id, etc.) + worker endpoint
+5. Initialize platform connection using received config
+6. Begin forwarding events to worker endpoint
+
+Config (including secrets) comes from orchestrator registration response, not CLI args.
+
 ## HTTP API
 
 Adapter binaries must expose these HTTP endpoints. The trait methods map directly to endpoints.

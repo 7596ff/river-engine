@@ -282,21 +282,29 @@ Orchestrator looks up dyad config and returns configuration for this side.
 {
   "endpoint": "http://localhost:52343",
   "adapter": {
+    "dyad": "river",
     "type": "discord",
-    "worker_name": "river",
     "features": [0, 1, 10, 11, 12, 20, 40]
   }
 }
 ```
+
+Orchestrator looks up adapter config from `dyads[dyad].adapters` by type.
 
 **Adapter registration response:**
 ```json
 {
   "accepted": true,
   "worker_endpoint": "http://localhost:52341",
-  "validated_features": [0, 1, 10, 11, 12, 20, 40]
+  "validated_features": [0, 1, 10, 11, 12, 20, 40],
+  "config": {
+    "token": "actual-discord-token-resolved-from-env",
+    "guild_id": "987654"
+  }
 }
 ```
+
+The `config` field contains adapter-specific configuration from the orchestrator config file, with env vars resolved. Secrets never appear on command line.
 
 **Feature validation:**
 
@@ -376,9 +384,10 @@ Each process keeps a local copy for direct routing (e.g., peer-to-peer flash).
    c. Workers bind port 0, register with orchestrator
    d. Orchestrator responds with ModelConfig, baton, ground, workspace
    e. For each adapter in dyad config:
-      - Spawn adapter binary with config JSON as arg
-      - Adapter binds port 0, registers with orchestrator (including features)
-      - Orchestrator validates required features, rejects if missing
+      - Spawn adapter: `river-{type} --orchestrator http://...:4000 --dyad {name} --type {type}`
+      - Adapter binds port 0, registers with orchestrator (dyad, type, features)
+      - Orchestrator validates required features, responds with config + worker endpoint
+      - Adapter initializes connection to platform using received config
       - Push updated registry to all processes
 6. Actor waits for first `/notify` from adapters to start loop
 7. Spectator waits for first `/flash` from actor to start loop
