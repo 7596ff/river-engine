@@ -72,18 +72,15 @@ Options:
 ## Configuration
 
 ```rust
+// Shared types from river-adapter
+use river_adapter::{Baton, Side, Ground};
+
 /// Built from CLI args
 pub struct WorkerConfig {
     pub orchestrator_endpoint: String,
     pub dyad: String,
     pub side: Side,
     pub port: u16,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    Left,
-    Right,
 }
 
 /// Received from orchestrator on registration
@@ -95,20 +92,6 @@ pub struct RegistrationInfo {
     pub workspace: PathBuf,
     pub initial_message: Option<String>,
     pub start_sleeping: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Baton {
-    Actor,
-    Spectator,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Ground {
-    pub name: String,
-    pub id: String,
-    pub adapter: String,
-    pub channel: String,
 }
 
 /// Received from orchestrator on registration and model switch

@@ -421,6 +421,30 @@ pub struct Attachment {
     pub size: u64,
     pub content_type: Option<String>,
 }
+
+// --- Shared types for orchestrator/worker ---
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Baton {
+    Actor,
+    Spectator,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
+pub struct Ground {
+    pub name: String,      // human operator name
+    pub id: String,        // human operator platform ID
+    pub adapter: String,   // adapter type (discord, slack, etc.)
+    pub channel: String,   // channel ID for reaching human
+}
 ```
 
 ## Adapter Trait
@@ -625,6 +649,9 @@ use utoipa::OpenApi;
         Author,
         Channel,
         Attachment,
+        Baton,
+        Side,
+        Ground,
     ))
 )]
 pub struct AdapterApiDoc;

@@ -46,7 +46,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-river-adapter = { path = "../river-adapter" }  # for FeatureId validation
+river-adapter = { path = "../river-adapter" }  # FeatureId, Baton, Side, Ground
 tokio = { workspace = true }
 axum = { workspace = true }
 reqwest = { workspace = true }
@@ -141,6 +141,8 @@ pub struct ModelConfig {
     pub context_limit: Option<usize>,   // for LLM models
     pub dimensions: Option<usize>,      // for embedding models
 }
+// Validation: orchestrator ensures context_limit is present when sending to workers,
+// and dimensions is present when sending to embed service.
 
 pub struct EmbedConfig {
     pub model: String,          // references key in models map
@@ -155,12 +157,8 @@ pub struct DyadConfig {
     pub adapters: Vec<AdapterConfig>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Baton {
-    Actor,
-    Spectator,
-}
+// Baton imported from river-adapter
+pub use river_adapter::Baton;
 ```
 
 ### Dyad Model
@@ -189,13 +187,8 @@ A dyad is a pair of workers (left and right) that share a workspace. The orchest
 
 ```rust
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Ground {
-    pub name: String,
-    pub id: String,
-    pub adapter: String,
-    pub channel: String,
-}
+// Ground imported from river-adapter
+pub use river_adapter::Ground;
 
 pub struct AdapterConfig {
     pub r#type: String,         // "discord", "slack"
@@ -232,12 +225,8 @@ pub enum ProcessEntry {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Side {
-    Left,
-    Right,
-}
+// Side imported from river-adapter
+pub use river_adapter::Side;
 ```
 
 ### Registration
