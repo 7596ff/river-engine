@@ -105,8 +105,7 @@ JSON config file with env var substitution (`$VAR_NAME` syntax) for secrets.
       "ground": {
         "name": "alice",
         "id": "123456",
-        "adapter": "discord",
-        "channel": "dm-alice-123"
+        "channel": { "adapter": "discord", "id": "dm-alice-123", "name": null }
       },
       "adapters": [
         {
@@ -259,8 +258,7 @@ Orchestrator looks up dyad config and returns configuration for this side.
   "ground": {
     "name": "alice",
     "id": "123456",
-    "adapter": "discord",
-    "channel": "dm-alice-123"
+    "channel": { "adapter": "discord", "id": "dm-alice-123", "name": null }
   },
   "workspace": "/home/user/workspace/river",
   "initial_message": null,
@@ -475,7 +473,7 @@ See Registration section above.
       "baton": "actor",
       "partner": "river-spectator",
       "model": "default",
-      "ground": { "name": "alice", "id": "123456", "adapter": "discord", "channel": "dm-alice-123" }
+      "ground": { "name": "alice", "id": "123456", "channel": { "adapter": "discord", "id": "dm-alice-123" } }
     },
     {
       "endpoint": "http://localhost:52343",

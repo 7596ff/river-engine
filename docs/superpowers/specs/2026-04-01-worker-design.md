@@ -140,8 +140,7 @@ pub struct ModelConfig {
   "ground": {
     "name": "alice",
     "id": "123456",
-    "adapter": "discord",
-    "channel": "dm-alice-123"
+    "channel": { "adapter": "discord", "id": "dm-alice-123", "name": null }
   },
   "workspace": "/home/user/workspace/river",
   "initial_message": null,

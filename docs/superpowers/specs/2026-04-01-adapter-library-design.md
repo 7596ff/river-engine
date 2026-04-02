@@ -442,8 +442,7 @@ pub enum Side {
 pub struct Ground {
     pub name: String,      // human operator name
     pub id: String,        // human operator platform ID
-    pub adapter: String,   // adapter type (discord, slack, etc.)
-    pub channel: String,   // channel ID for reaching human
+    pub channel: Channel,  // channel for reaching human (includes adapter)
 }
 ```
 
