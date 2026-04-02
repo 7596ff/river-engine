@@ -172,6 +172,7 @@ pub struct ChannelRef {
 pub struct Notification {
     pub channel: ChannelRef,
     pub count: usize,
+    pub since_id: Option<String>,  // read events after this ID
 }
 ```
 
@@ -294,20 +295,29 @@ pub struct BashTool {
 ### Communication Tools
 
 ```rust
-/// Send to current channel
+/// Send message to current channel
 pub struct SpeakTool {
-    pub request: OutboundRequest,  // from river-adapter
+    pub content: String,
+    pub reply_to: Option<String>,
 }
-// Worker overwrites the channel field with current_channel before sending
-// Model can provide any channel value (it will be replaced)
+// Uses current_channel for adapter and channel
+// Worker constructs OutboundRequest::SendMessage internally
 
-/// Send to any channel
+/// Send message to any channel
 pub struct SendMessageTool {
+    pub adapter: String,
+    pub channel: String,
+    pub content: String,
+    pub reply_to: Option<String>,
+}
+// Does NOT change current_channel
+
+/// Execute any adapter operation
+pub struct AdapterTool {
     pub adapter: String,
     pub request: OutboundRequest,
 }
-// Uses channel from the OutboundRequest as-is
-// Does NOT change current_channel
+// For edit, delete, react, etc. — full OutboundRequest control
 
 /// Change current channel
 pub struct SwitchChannelTool {
@@ -367,7 +377,7 @@ pub async fn handle_notify(
 
 **Behavior:**
 1. Parse event (using `river-adapter::InboundEvent`)
-2. Write to `workspace/conversations/{adapter}/{channel}.jsonl`
+2. Write to `workspace/chats/{adapter}/{channel_id}-{channel_name}.jsonl`
 3. Batch notification for next status message
 4. If sleeping and channel in watch_list: wake
 

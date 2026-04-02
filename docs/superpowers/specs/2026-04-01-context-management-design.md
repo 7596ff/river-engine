@@ -163,9 +163,9 @@ pub struct ChannelContext {
 }
 
 pub struct Channel {
-    pub adapter: String,   // "discord", "slack"
-    pub id: String,        // channel identifier
-    pub name: String,      // human-readable name
+    pub adapter: String,        // "discord", "slack"
+    pub id: String,             // channel identifier
+    pub name: Option<String>,   // human-readable name (if known)
 }
 
 pub struct ToolExchange {
