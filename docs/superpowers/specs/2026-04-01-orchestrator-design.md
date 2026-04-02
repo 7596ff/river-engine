@@ -493,6 +493,7 @@ Worker uses new model on next LLM call. No restart required.
 |--------|----------|---------|
 | POST | `/register` | Process registration (worker or adapter) |
 | POST | `/model/switch` | Worker requests model change |
+| POST | `/switch_roles` | Worker requests role switch with partner |
 | POST | `/worker/output` | Worker sends exit status + summary |
 | GET | `/registry` | Query current process registry |
 | GET | `/health` | Orchestrator health check |
@@ -523,6 +524,65 @@ See Registration section above.
   "error": "unknown model: extra-large"
 }
 ```
+
+### POST /switch_roles
+
+Orchestrator-mediated role switch between dyad workers. Ensures atomicity.
+
+```json
+// Request
+{
+  "dyad": "river",
+  "side": "left"
+}
+
+// Response 200
+{
+  "switched": true,
+  "your_new_baton": "spectator",
+  "partner_new_baton": "actor"
+}
+
+// Response 409 (partner busy or switch in progress)
+{
+  "error": "partner_busy",
+  "message": "Partner worker is mid-operation"
+}
+
+// Response 503 (partner unreachable)
+{
+  "error": "partner_unreachable"
+}
+```
+
+**Protocol:**
+
+```
+Worker                 Orchestrator                Partner
+   |--POST /switch_roles-->|                           |
+   |                       | [acquire dyad lock]       |
+   |                       |--POST /prepare_switch---->|
+   |                       |<--{"ready":true}----------|
+   |                       |--POST /prepare_switch---->| (to initiator too)
+   |<--prepare_switch------|                           |
+   |--{"ready":true}------>|                           |
+   |                       | [both ready, commit]      |
+   |                       |--POST /commit_switch----->|
+   |<--commit_switch-------|                           |
+   |                       | [update registry]         |
+   |<--{"switched":true}---|                           |
+   |                       | [push registry to all]    |
+```
+
+**Atomicity guarantees:**
+- Dyad lock prevents concurrent switch attempts
+- Both workers must respond "ready" to prepare
+- If either fails prepare, orchestrator aborts (no commit sent)
+- If commit fails, orchestrator marks worker unhealthy for restart
+
+**Race handling:**
+- First switch request acquires lock
+- Concurrent requests get 409 "switch_in_progress"
 
 ### POST /worker/output
 

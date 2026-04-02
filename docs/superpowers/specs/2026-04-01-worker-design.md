@@ -423,9 +423,9 @@ pub struct RequestModelTool {
 
 /// Switch roles with partner worker
 pub struct SwitchRolesTool {}
-// No parameters — coordinates with partner to swap roles
-// Actor becomes spectator, spectator becomes actor
-// Both workers reload their role definition file
+// No parameters — orchestrator coordinates the swap
+// Calls POST /switch_roles on orchestrator
+// Orchestrator handles prepare/commit with both workers
 
 /// Delete file from workspace
 pub struct DeleteTool {
@@ -500,27 +500,53 @@ pub async fn handle_registry(
 
 Updates local registry copy. Used for peer-to-peer flash routing.
 
-### POST /switch_roles
+### POST /prepare_switch
 
-Receive role switch request from partner worker.
+Orchestrator asks worker to prepare for role switch.
 
 ```rust
-pub async fn handle_switch_roles(
+pub async fn handle_prepare_switch(
     State(state): State<WorkerState>,
-) -> Result<Json<SwitchResponse>, StatusCode>
+) -> Result<Json<PrepareResponse>, StatusCode>
 ```
 
 **Behavior:**
-1. Validate not mid-operation (reject if busy)
-2. Swap role: actor ↔ spectator
-3. Reload role definition from `workspace/roles/{new_role}.md`
-4. Notify orchestrator of role change
-5. Return success with new role
+1. Check not mid-tool-execution
+2. Check not mid-LLM-call
+3. Set `switch_pending = true` to block new operations
+4. Return ready or busy
 
 **Response:**
 ```json
-{ "accepted": true, "new_role": "actor" }
+// Ready
+{ "ready": true }
+
+// Busy (mid-operation)
+{ "ready": false, "reason": "tool_executing" }
 ```
+
+### POST /commit_switch
+
+Orchestrator tells worker to execute the role switch.
+
+```rust
+pub async fn handle_commit_switch(
+    State(state): State<WorkerState>,
+) -> Result<Json<CommitResponse>, StatusCode>
+```
+
+**Behavior:**
+1. Swap baton: actor ↔ spectator
+2. Reload role definition from `workspace/roles/{new_baton}.md`
+3. Clear `switch_pending`
+4. Return new baton
+
+**Response:**
+```json
+{ "committed": true, "new_baton": "spectator" }
+```
+
+If worker wasn't in prepared state, returns 409 Conflict.
 
 ### GET /health
 
@@ -1215,7 +1241,7 @@ Switch to a different LLM model.
 
 ### switch_roles
 
-Switch roles with partner worker in the dyad.
+Switch roles with partner worker in the dyad. Orchestrator-mediated for atomicity.
 
 **Parameters:** None
 
@@ -1223,22 +1249,29 @@ Switch roles with partner worker in the dyad.
 ```json
 {
   "switched": true,
-  "new_role": "spectator",
-  "partner_new_role": "actor"
+  "your_new_baton": "spectator",
+  "partner_new_baton": "actor"
 }
 ```
 
+**Protocol:**
+1. Worker calls orchestrator `POST /switch_roles`
+2. Orchestrator sends `POST /prepare_switch` to both workers
+3. Both workers validate (not busy), respond ready
+4. Orchestrator sends `POST /commit_switch` to both workers
+5. Both workers swap batons, reload role files
+6. Orchestrator updates registry, pushes to all
+
 **Side effects:**
-- Coordinates with partner worker via `/switch_roles` endpoint
-- Both workers swap roles atomically
-- Each worker reloads role definition from `workspace/roles/{new_role}.md`
-- Updates `role` in worker state
-- Notifies orchestrator to update registry
+- Orchestrator acquires dyad lock during switch
+- Both workers reload role definition from `workspace/roles/{new_baton}.md`
+- Updates `baton` in worker state
+- Registry updated with new batons
 
 **Errors:**
-- `partner_unreachable` — Cannot reach partner worker
-- `switch_in_progress` — Another switch is already happening
-- `partner_rejected` — Partner declined the switch (e.g., mid-operation)
+- `PartnerUnreachable` — Cannot reach partner worker
+- `SwitchInProgress` — Another switch is already happening (dyad locked)
+- `PartnerRejected` — Partner is mid-operation, cannot switch
 
 ---
 
