@@ -152,6 +152,29 @@ pub enum Role {
     Actor,
     Spectator,
 }
+```
+
+### Actor/Spectator Communication
+
+Spectators have no external adapters — they don't communicate with Discord, Slack, etc. directly.
+
+**Current mechanism (flash only):**
+- Spectator shares workspace with actor (same `workspace` path)
+- Actor flashes spectator for attention
+- Spectator reads workspace files (conversations, context)
+- Spectator writes summaries, moments, moves to workspace
+- Spectator flashes actor with updates
+- Spectator wakes on flash, not external notifications
+
+**Future: Internal backchannel**
+A file-based adapter (`river-file-adapter`) will provide persistent internal monologue between actor, spectator, and ground. This enables:
+- Append-only conversation log between workers
+- Ground (human operator) can read/write to the backchannel
+- History preserved across context rotations
+
+The file adapter will be specced separately.
+
+```rust
 
 pub struct Ground {
     pub name: String,
