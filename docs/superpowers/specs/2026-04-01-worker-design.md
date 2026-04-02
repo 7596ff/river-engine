@@ -103,6 +103,7 @@ pub enum Baton {
     Spectator,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Ground {
     pub name: String,
     pub id: String,
@@ -166,7 +167,7 @@ pub struct ModelConfig {
 ```
 
 - `baton` — "actor" or "spectator" (initial baton based on dyad config)
-- `partner` — name of paired worker (null if no partner)
+- `partner_endpoint` — endpoint of paired worker (null if not yet registered)
 - `ground` — the human operator contact info
 - `initial_message` — summary from previous session (for `ContextExhausted` or timed `Done` respawn)
 - `start_sleeping` — true when respawning after `Done { wake_after_minutes: None }`, worker should call `sleep(None)` immediately
@@ -519,6 +520,16 @@ Health check.
 
 ```rust
 pub async fn handle_health() -> Json<HealthResponse>
+
+#[derive(Serialize)]
+pub struct HealthResponse {
+    pub status: String,  // "ok" or "error"
+}
+```
+
+**Response:**
+```json
+{ "status": "ok" }
 ```
 
 ## Conversation File Format
@@ -685,10 +696,12 @@ pub struct WorkerOutput {
     pub summary: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ExitStatus {
     Done { wake_after_minutes: Option<u64> },  // None = wait for notifications
     ContextExhausted,
-    Error(String),
+    Error { message: String },
 }
 ```
 
@@ -1142,6 +1155,8 @@ Search embeddings, returns first result and cursor.
   "remaining": 12
 }
 ```
+
+- `remaining` — number of additional results available after current position
 
 If no results:
 ```json

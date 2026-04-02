@@ -189,6 +189,7 @@ A dyad is a pair of workers (left and right) that share a workspace. The orchest
 
 ```rust
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Ground {
     pub name: String,
     pub id: String,
@@ -225,7 +226,7 @@ pub enum ProcessEntry {
     },
     Adapter {
         endpoint: String,
-        r#type: String,
+        r#type: String,          // adapter type (discord, slack, etc.)
         dyad: String,            // which dyad this adapter serves
         features: Vec<u16>,      // FeatureId as u16
     },
