@@ -1,6 +1,6 @@
 //! Formatting workspace types to OpenAI messages.
 
-use river_adapter::Channel;
+use river_protocol::Channel;
 
 use crate::openai::OpenAIMessage;
 use crate::workspace::{ChatMessage, Embedding, Flash, Moment, Move};

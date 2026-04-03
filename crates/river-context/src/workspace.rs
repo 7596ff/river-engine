@@ -1,6 +1,6 @@
 //! Workspace types for context assembly.
 
-use river_adapter::Author;
+use river_protocol::Author;
 use serde::{Deserialize, Serialize};
 
 /// A moment summarizing a range of moves.
