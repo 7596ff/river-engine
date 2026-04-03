@@ -679,3 +679,165 @@ fn check_rate_limit(err: &twilight_http::Error) -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use twilight_model::id::Id;
+
+    #[test]
+    fn test_parse_unicode_emoji() {
+        let emoji = parse_emoji("\u{1F44D}"); // thumbs up
+        match emoji {
+            twilight_http::request::channel::reaction::RequestReactionType::Unicode { name } => {
+                assert_eq!(name, "\u{1F44D}");
+            }
+            _ => panic!("Expected unicode emoji"),
+        }
+    }
+
+    #[test]
+    fn test_parse_custom_emoji() {
+        let emoji = parse_emoji("<:rust:123456789>");
+        match emoji {
+            twilight_http::request::channel::reaction::RequestReactionType::Custom { id, name } => {
+                assert_eq!(id, Id::new(123456789));
+                assert_eq!(name, Some("rust"));
+            }
+            _ => panic!("Expected custom emoji"),
+        }
+    }
+
+    #[test]
+    fn test_parse_animated_custom_emoji() {
+        let emoji = parse_emoji("<a:dance:987654321>");
+        match emoji {
+            twilight_http::request::channel::reaction::RequestReactionType::Custom { id, name } => {
+                assert_eq!(id, Id::new(987654321));
+                assert_eq!(name, Some("dance"));
+            }
+            _ => panic!("Expected custom emoji"),
+        }
+    }
+
+    #[test]
+    fn test_format_unicode_emoji() {
+        let emoji = EmojiReactionType::Unicode {
+            name: "\u{1F44D}".into(),
+        };
+        assert_eq!(format_emoji(&emoji), "\u{1F44D}");
+    }
+
+    #[test]
+    fn test_format_custom_emoji() {
+        let emoji = EmojiReactionType::Custom {
+            animated: false,
+            id: Id::new(123456789),
+            name: Some("rust".into()),
+        };
+        assert_eq!(format_emoji(&emoji), "<:rust:123456789>");
+    }
+
+    #[test]
+    fn test_format_custom_emoji_without_name() {
+        let emoji = EmojiReactionType::Custom {
+            animated: false,
+            id: Id::new(123456789),
+            name: None,
+        };
+        assert_eq!(format_emoji(&emoji), "<:emoji:123456789>");
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        use twilight_model::util::Timestamp;
+
+        // 2024-01-01 00:00:00 UTC
+        let ts = Timestamp::from_secs(1704067200).unwrap();
+        let formatted = format_timestamp(ts);
+        assert!(formatted.starts_with("2024-01-01"));
+        assert!(formatted.contains("T"));
+        assert!(formatted.ends_with("Z") || formatted.contains("+"));
+    }
+
+    #[test]
+    fn test_convert_message_delete() {
+        use twilight_model::gateway::payload::incoming::MessageDelete;
+
+        let msg = MessageDelete {
+            channel_id: Id::new(456),
+            id: Id::new(123),
+            guild_id: None,
+        };
+
+        let event = Event::MessageDelete(msg);
+        let result = convert_event("discord", event);
+        assert!(result.is_some());
+
+        let inbound = result.unwrap();
+        assert_eq!(inbound.adapter, "discord");
+        match inbound.metadata {
+            EventMetadata::MessageDelete {
+                channel,
+                message_id,
+            } => {
+                assert_eq!(channel, "456");
+                assert_eq!(message_id, "123");
+            }
+            _ => panic!("Expected MessageDelete event"),
+        }
+    }
+
+    #[test]
+    fn test_convert_typing_start() {
+        use twilight_model::gateway::payload::incoming::TypingStart;
+
+        let typing = TypingStart {
+            channel_id: Id::new(456),
+            user_id: Id::new(789),
+            guild_id: None,
+            member: None,
+            timestamp: 1704067200,
+        };
+
+        let event = Event::TypingStart(Box::new(typing));
+        let result = convert_event("discord", event);
+        assert!(result.is_some());
+
+        let inbound = result.unwrap();
+        match inbound.metadata {
+            EventMetadata::TypingStart { channel, user_id } => {
+                assert_eq!(channel, "456");
+                assert_eq!(user_id, "789");
+            }
+            _ => panic!("Expected TypingStart event"),
+        }
+    }
+
+    #[test]
+    fn test_convert_gateway_close() {
+        use twilight_gateway::CloseFrame;
+
+        let close = Some(CloseFrame {
+            code: 4000,
+            reason: "unknown error".into(),
+        });
+
+        let event = Event::GatewayClose(close);
+        let result = convert_event("discord", event);
+        assert!(result.is_some());
+
+        let inbound = result.unwrap();
+        match inbound.metadata {
+            EventMetadata::ConnectionLost {
+                reason,
+                reconnecting,
+            } => {
+                assert!(reason.contains("4000"));
+                assert!(reason.contains("unknown error"));
+                assert!(reconnecting);
+            }
+            _ => panic!("Expected ConnectionLost event"),
+        }
+    }
+}
