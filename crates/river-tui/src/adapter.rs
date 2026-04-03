@@ -78,7 +78,7 @@ impl AdapterState {
     }
 
     pub fn add_user_message(&mut self, content: &str) -> String {
-        let id = self.generator.next(SnowflakeType::Message).to_string();
+        let id = self.generator.next(SnowflakeType::Message).unwrap().to_string();
         self.messages.push(DisplayMessage::User {
             id: id.clone(),
             content: content.to_string(),
@@ -112,7 +112,7 @@ impl AdapterState {
     }
 
     pub fn generate_message_id(&mut self) -> String {
-        self.generator.next(SnowflakeType::Message).to_string()
+        self.generator.next(SnowflakeType::Message).unwrap().to_string()
     }
 }
 
