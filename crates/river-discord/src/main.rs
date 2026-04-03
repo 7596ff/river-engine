@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
@@ -139,6 +140,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize Discord client
     let discord = Arc::new(DiscordClient::new(discord_config.clone(), args.adapter_type.clone()).await?);
 
+    // Create cancellation token for graceful shutdown
+    let cancel_token = CancellationToken::new();
+
     // Create HTTP state
     let http_state = Arc::new(HttpState {
         state: state.clone(),
@@ -148,23 +152,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Start event forwarding loop (no polling delay)
     let discord_clone = discord.clone();
     let worker_endpoint = registration.worker_endpoint.clone();
+    let cancel_clone = cancel_token.clone();
     let event_task = tokio::spawn(async move {
         let http_client = reqwest::Client::new();
         loop {
-            // Wait for events without polling delay
-            if let Some(event) = discord_clone.recv_event().await {
-                if let Err(e) = http_client
-                    .post(format!("{}/notify", worker_endpoint))
-                    .json(&event)
-                    .timeout(Duration::from_secs(5))
-                    .send()
-                    .await
-                {
-                    tracing::warn!("Failed to forward event to worker: {}", e);
+            tokio::select! {
+                _ = cancel_clone.cancelled() => {
+                    tracing::info!("Event forwarding task cancelled");
+                    break;
                 }
-            } else {
-                // Channel closed, exit
-                break;
+                event = discord_clone.recv_event() => {
+                    if let Some(event) = event {
+                        if let Err(e) = http_client
+                            .post(format!("{}/notify", worker_endpoint))
+                            .json(&event)
+                            .timeout(Duration::from_secs(5))
+                            .send()
+                            .await
+                        {
+                            tracing::warn!("Failed to forward event to worker: {}", e);
+                        }
+                    } else {
+                        // Channel closed, exit
+                        break;
+                    }
+                }
             }
         }
     });
@@ -179,9 +191,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down Discord adapter");
+    tracing::info!("Shutting down Discord adapter gracefully");
 
-    event_task.abort();
+    // Signal cancellation
+    cancel_token.cancel();
+
+    // Wait for tasks to finish (with timeout)
+    let shutdown_timeout = Duration::from_secs(5);
+    tokio::select! {
+        _ = event_task => {
+            tracing::info!("Event task stopped");
+        }
+        _ = tokio::time::sleep(shutdown_timeout) => {
+            tracing::warn!("Event task did not stop in time, aborting");
+        }
+    }
+
+    // Server doesn't need graceful shutdown, just stop accepting connections
     server.abort();
 
     Ok(())
