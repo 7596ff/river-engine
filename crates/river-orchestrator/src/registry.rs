@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Timeout for registry push operations.
+const REGISTRY_PUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Key for identifying a worker.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct WorkerKey {
@@ -229,7 +232,7 @@ pub async fn push_registry(
             if let Err(e) = client_clone
                 .post(&url)
                 .json(&registry_clone)
-                .timeout(std::time::Duration::from_secs(5))
+                .timeout(REGISTRY_PUSH_TIMEOUT)
                 .send()
                 .await
             {

@@ -20,6 +20,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Timeout for prepare/commit/abort requests during role switching.
+const SWITCH_PHASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
@@ -687,7 +690,7 @@ async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) 
     let init_result = client
         .post(format!("{}/prepare_switch", initiator))
         .json(&prep_body)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SWITCH_PHASE_TIMEOUT)
         .send()
         .await;
 
@@ -697,7 +700,7 @@ async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) 
     let partner_result = client
         .post(format!("{}/prepare_switch", partner))
         .json(&prep_body)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SWITCH_PHASE_TIMEOUT)
         .send()
         .await;
 
@@ -717,7 +720,7 @@ async fn send_abort(client: &reqwest::Client, endpoint: &str) {
     let result = client
         .post(format!("{}/abort_switch", endpoint))
         .json(&abort_body)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SWITCH_PHASE_TIMEOUT)
         .send()
         .await;
 
@@ -732,14 +735,14 @@ async fn commit_both(client: &reqwest::Client, initiator: &str, partner: &str) -
     let init_result = client
         .post(format!("{}/commit_switch", initiator))
         .json(&commit_body)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SWITCH_PHASE_TIMEOUT)
         .send()
         .await;
 
     let partner_result = client
         .post(format!("{}/commit_switch", partner))
         .json(&commit_body)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(SWITCH_PHASE_TIMEOUT)
         .send()
         .await;
 
