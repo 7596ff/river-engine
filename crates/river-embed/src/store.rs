@@ -221,6 +221,7 @@ impl Store {
 
         // Use sqlite-vec for KNN search with offset
         // We fetch limit + offset results and skip the first offset
+        // sqlite-vec requires 'k = ?' constraint for KNN queries
         let fetch_count = limit + offset;
 
         let mut stmt = self.conn.prepare(
@@ -228,9 +229,8 @@ impl Store {
             SELECT v.id, v.distance, c.source_path, c.line_start, c.line_end, c.text
             FROM chunks_vec v
             JOIN chunks c ON v.id = c.id
-            WHERE v.embedding MATCH ?
+            WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
-            LIMIT ?
             "#,
         )?;
 

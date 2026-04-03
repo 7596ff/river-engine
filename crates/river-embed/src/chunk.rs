@@ -127,12 +127,11 @@ fn try_sentence_split(lines: &[&str], config: &ChunkConfig) -> Option<(String, S
     let text = lines.join("\n");
     let target_tokens = config.max_tokens * 3 / 4; // Aim for 75% of max
 
-    let mut current_tokens = 0;
     let mut best_split = None;
 
     // Look for sentence boundaries (. ! ?) followed by space or newline
     for (i, ch) in text.char_indices() {
-        current_tokens = estimate_tokens(&text[..i]);
+        let current_tokens = estimate_tokens(&text[..i]);
 
         if current_tokens >= target_tokens {
             // Look for sentence ending punctuation
