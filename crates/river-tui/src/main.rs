@@ -9,7 +9,6 @@ use clap::Parser;
 use http::router;
 use river_context::OpenAIMessage;
 use river_protocol::{AdapterRegistration, AdapterRegistrationRequest, AdapterRegistrationResponse};
-use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -172,7 +171,7 @@ async fn tail_context(
             s.context_lines_read(side)
         };
 
-        let new_entries = match read_context_from_line(&path, lines_read) {
+        let new_entries = match read_context_from_line(&path, lines_read).await {
             Ok(entries) => entries,
             Err(_) => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -193,17 +192,24 @@ async fn tail_context(
 }
 
 /// Read context entries starting from a specific line.
-fn read_context_from_line(path: &PathBuf, skip_lines: usize) -> std::io::Result<Vec<OpenAIMessage>> {
-    let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
+async fn read_context_from_line(path: &PathBuf, skip_lines: usize) -> std::io::Result<Vec<OpenAIMessage>> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let entries: Vec<OpenAIMessage> = reader
-        .lines()
-        .skip(skip_lines)
-        .filter_map(|line| line.ok())
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(&line).ok())
-        .collect();
+    let file = tokio::fs::File::open(path).await?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    let mut entries = Vec::new();
+    let mut line_num = 0;
+
+    while let Some(line) = lines.next_line().await? {
+        if line_num >= skip_lines && !line.trim().is_empty() {
+            if let Ok(msg) = serde_json::from_str::<OpenAIMessage>(&line) {
+                entries.push(msg);
+            }
+        }
+        line_num += 1;
+    }
 
     Ok(entries)
 }
