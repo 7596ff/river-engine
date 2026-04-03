@@ -345,3 +345,85 @@ pub async fn spawn_dyad(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_key_equality() {
+        let key1 = ProcessKey::Worker {
+            dyad: "dyad1".into(),
+            side: Side::Left,
+        };
+        let key2 = ProcessKey::Worker {
+            dyad: "dyad1".into(),
+            side: Side::Left,
+        };
+        let key3 = ProcessKey::Worker {
+            dyad: "dyad1".into(),
+            side: Side::Right,
+        };
+
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_process_key_adapter() {
+        let key1 = ProcessKey::Adapter {
+            dyad: "dyad1".into(),
+            adapter_type: "discord".into(),
+        };
+        let key2 = ProcessKey::Adapter {
+            dyad: "dyad1".into(),
+            adapter_type: "slack".into(),
+        };
+
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_supervisor_new() {
+        let sup = Supervisor::new();
+        assert!(sup.endpoints_for_health_check().is_empty());
+    }
+
+    #[test]
+    fn test_supervisor_set_endpoint_nonexistent() {
+        let mut sup = Supervisor::new();
+        // Setting endpoint for nonexistent process should be a no-op
+        sup.set_endpoint(
+            &ProcessKey::Worker {
+                dyad: "dyad1".into(),
+                side: Side::Left,
+            },
+            "http://localhost:3001".into(),
+        );
+        // Should not crash, just do nothing
+        assert!(sup.endpoints_for_health_check().is_empty());
+    }
+
+    #[test]
+    fn test_supervisor_failure_tracking() {
+        let mut sup = Supervisor::new();
+        let key = ProcessKey::Embed { name: "embed".into() };
+
+        // Recording failure for nonexistent process returns 0
+        assert_eq!(sup.record_failure(&key), 0);
+
+        // Reset failures for nonexistent process is a no-op
+        sup.reset_failures(&key);
+    }
+
+    #[test]
+    fn test_supervisor_error_display() {
+        let err = SupervisorError::SpawnFailed(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "binary not found",
+        ));
+        let display = format!("{}", err);
+        assert!(display.contains("Failed to spawn process"));
+        assert!(display.contains("binary not found"));
+    }
+}
