@@ -8,6 +8,7 @@ description = "Discord adapter for River Engine"
 
 [dependencies]
 river-adapter = { path = "../river-adapter" }
+river-protocol = { path = "../river-protocol" }
 
 tokio = { workspace = true, features = ["sync", "time", "signal"] }
 axum = { workspace = true }

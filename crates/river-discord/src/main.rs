@@ -9,6 +9,7 @@ mod http;
 use clap::Parser;
 use discord::DiscordClient;
 use http::router;
+use river_protocol::{AdapterRegistration, AdapterRegistrationRequest, AdapterRegistrationResponse};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,29 +36,6 @@ struct Args {
     /// Port to bind (0 for OS-assigned)
     #[arg(long, default_value = "0")]
     port: u16,
-}
-
-/// Registration request to orchestrator.
-#[derive(Debug, serde::Serialize)]
-struct RegistrationRequest {
-    endpoint: String,
-    adapter: AdapterRegistration,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AdapterRegistration {
-    #[serde(rename = "type")]
-    adapter_type: String,
-    dyad: String,
-    features: Vec<u16>,
-}
-
-/// Registration response from orchestrator.
-#[derive(Debug, serde::Deserialize)]
-struct RegistrationResponse {
-    accepted: bool,
-    config: DiscordConfig,
-    worker_endpoint: String,
 }
 
 /// Discord-specific config from orchestrator.
@@ -122,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Registering with orchestrator at {}", args.orchestrator);
     let client = reqwest::Client::new();
 
-    let reg_request = RegistrationRequest {
+    let reg_request = AdapterRegistrationRequest {
         endpoint: adapter_endpoint.clone(),
         adapter: AdapterRegistration {
             adapter_type: args.adapter_type.clone(),
@@ -144,7 +122,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::process::exit(1);
     }
 
-    let registration: RegistrationResponse = response.json().await?;
+    let registration: AdapterRegistrationResponse = response.json().await?;
+    let discord_config: DiscordConfig = serde_json::from_value(registration.config)?;
     if !registration.accepted {
         tracing::error!("Registration rejected by orchestrator");
         std::process::exit(1);
@@ -158,12 +137,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Store config and worker endpoint
     {
         let mut s = state.write().await;
-        s.config = Some(registration.config.clone());
+        s.config = Some(discord_config.clone());
         s.worker_endpoint = Some(registration.worker_endpoint.clone());
     }
 
     // Initialize Discord client
-    let discord = Arc::new(DiscordClient::new(registration.config.clone()).await?);
+    let discord = Arc::new(DiscordClient::new(discord_config.clone()).await?);
 
     // Create HTTP state
     let http_state = Arc::new(HttpState {
