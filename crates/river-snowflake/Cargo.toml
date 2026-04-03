@@ -8,7 +8,7 @@ description = "128-bit snowflake ID generation for River Engine"
 
 [features]
 default = []
-server = ["dep:axum", "dep:tokio"]
+server = ["dep:axum", "dep:tokio", "dep:clap"]
 
 [dependencies]
 serde = { workspace = true }
@@ -17,7 +17,7 @@ thiserror = { workspace = true }
 
 axum = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-clap = { workspace = true }
+clap = { workspace = true, optional = true }
 
 [[bin]]
 name = "river-snowflake"
