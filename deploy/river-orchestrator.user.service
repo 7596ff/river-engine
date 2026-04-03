@@ -1,0 +1,16 @@
+[Unit]
+Description=River Engine Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/river-orchestrator --config %h/.config/river/river.json
+EnvironmentFile=%h/.config/river/river.env
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Install]
+WantedBy=default.target
