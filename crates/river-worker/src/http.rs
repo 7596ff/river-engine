@@ -1,6 +1,7 @@
 //! HTTP server for worker endpoints.
 
-use crate::state::{Registry, SharedState};
+use crate::state::SharedState;
+use river_protocol::Registry;
 use axum::{
     extract::State,
     http::StatusCode,

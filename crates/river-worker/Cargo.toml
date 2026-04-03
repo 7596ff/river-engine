@@ -9,6 +9,7 @@ description = "Worker runtime for River Engine"
 [dependencies]
 river-adapter = { path = "../river-adapter" }
 river-context = { path = "../river-context" }
+river-protocol = { path = "../river-protocol" }
 river-snowflake = { path = "../river-snowflake" }
 
 tokio = { workspace = true, features = ["process", "signal", "time", "sync", "fs"] }

@@ -1,80 +1,14 @@
 //! Worker state.
 
-use crate::config::{ModelConfig, RegistrationResponse, WorkerConfig};
+use crate::config::WorkerConfig;
 use river_adapter::{Baton, Channel, Ground, Side};
 use river_context::Flash;
-use serde::{Deserialize, Serialize};
+use river_protocol::{ModelConfig, Registry, WorkerRegistrationResponse};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-
-/// Process entry from registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ProcessEntry {
-    Worker {
-        endpoint: String,
-        dyad: String,
-        side: Side,
-        baton: Baton,
-        model: String,
-        ground: Ground,
-    },
-    Adapter {
-        endpoint: String,
-        #[serde(rename = "type")]
-        adapter_type: String,
-        dyad: String,
-        features: Vec<u16>,
-    },
-    EmbedService {
-        endpoint: String,
-        name: String,
-    },
-}
-
-/// Registry of all processes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Registry {
-    pub processes: Vec<ProcessEntry>,
-}
-
-impl Registry {
-    /// Find embed service endpoint.
-    pub fn embed_endpoint(&self) -> Option<&str> {
-        self.processes.iter().find_map(|p| match p {
-            ProcessEntry::EmbedService { endpoint, .. } => Some(endpoint.as_str()),
-            _ => None,
-        })
-    }
-
-    /// Find adapter endpoint by type.
-    pub fn adapter_endpoint(&self, adapter_type: &str) -> Option<&str> {
-        self.processes.iter().find_map(|p| match p {
-            ProcessEntry::Adapter {
-                endpoint,
-                adapter_type: t,
-                ..
-            } if t == adapter_type => Some(endpoint.as_str()),
-            _ => None,
-        })
-    }
-
-    /// Find worker endpoint by dyad and side.
-    pub fn worker_endpoint(&self, dyad: &str, side: &Side) -> Option<&str> {
-        self.processes.iter().find_map(|p| match p {
-            ProcessEntry::Worker {
-                endpoint,
-                dyad: d,
-                side: s,
-                ..
-            } if d == dyad && s == side => Some(endpoint.as_str()),
-            _ => None,
-        })
-    }
-}
 
 /// Notification about new messages.
 #[derive(Debug, Clone)]
@@ -124,7 +58,7 @@ pub struct WorkerState {
 
 impl WorkerState {
     /// Create initial state from config and registration.
-    pub fn new(config: &WorkerConfig, registration: RegistrationResponse) -> Self {
+    pub fn new(config: &WorkerConfig, registration: WorkerRegistrationResponse) -> Self {
         Self {
             dyad: config.dyad.clone(),
             side: config.side.clone(),
@@ -171,17 +105,14 @@ impl WorkerState {
 
     /// Get partner side.
     pub fn partner_side(&self) -> Side {
-        match self.side {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-        }
+        self.side.opposite()
     }
 }
 
 /// Thread-safe state wrapper.
 pub type SharedState = Arc<RwLock<WorkerState>>;
 
-pub fn new_shared_state(config: &WorkerConfig, registration: RegistrationResponse) -> SharedState {
+pub fn new_shared_state(config: &WorkerConfig, registration: WorkerRegistrationResponse) -> SharedState {
     let state = WorkerState::new(config, registration);
     Arc::new(RwLock::new(state))
 }

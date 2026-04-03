@@ -12,7 +12,8 @@ mod tools;
 mod worker_loop;
 
 use clap::Parser;
-use config::{RegistrationRequest, WorkerConfig, WorkerRegistration};
+use config::WorkerConfig;
+use river_protocol::{WorkerRegistration, WorkerRegistrationRequest};
 use http::router;
 use river_adapter::Side;
 use state::new_shared_state;
@@ -84,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Registering with orchestrator at {}", args.orchestrator);
     let client = reqwest::Client::new();
 
-    let reg_request = RegistrationRequest {
+    let reg_request = WorkerRegistrationRequest {
         endpoint: worker_endpoint.clone(),
         worker: WorkerRegistration {
             dyad: config.dyad.clone(),
