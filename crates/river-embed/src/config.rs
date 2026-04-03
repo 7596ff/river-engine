@@ -2,13 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration built from CLI args.
-pub struct EmbedConfig {
-    pub orchestrator_endpoint: String,
-    pub name: String,
-    pub port: u16,
-}
-
 /// Registration request sent to orchestrator.
 #[derive(Serialize)]
 pub struct RegistrationRequest {

@@ -1,4 +1,4 @@
-//! River Mock Adapter - TUI-based adapter for debugging.
+//! River TUI - Terminal UI for debugging River Engine.
 
 mod adapter;
 mod http;
@@ -7,15 +7,18 @@ mod tui;
 use adapter::AdapterState;
 use clap::Parser;
 use http::router;
+use river_context::OpenAIMessage;
+use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
 
 #[derive(Parser, Debug)]
-#[command(name = "river-mock-adapter")]
-#[command(about = "TUI-based mock adapter for River Engine debugging")]
+#[command(name = "river-tui")]
+#[command(about = "Terminal UI for River Engine debugging")]
 struct Args {
     /// Orchestrator endpoint
     #[arg(long)]
@@ -36,6 +39,10 @@ struct Args {
     /// Port to bind (0 for OS-assigned)
     #[arg(long, default_value = "0")]
     port: u16,
+
+    /// Workspace directory (tails both left/context.jsonl and right/context.jsonl)
+    #[arg(long)]
+    workspace: Option<PathBuf>,
 }
 
 /// Registration request to orchestrator.
@@ -57,7 +64,8 @@ struct AdapterRegistration {
 #[derive(Debug, serde::Deserialize)]
 struct RegistrationResponse {
     accepted: bool,
-    config: serde_json::Value, // Mock adapter doesn't need config
+    #[allow(dead_code)]
+    config: serde_json::Value,
     worker_endpoint: String,
 }
 
@@ -133,8 +141,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         axum::serve(listener, app).await.ok();
     });
 
+    // Start context tailers for both sides if workspace provided
+    if let Some(workspace) = args.workspace {
+        // Tail left side
+        let left_path = workspace.join("left").join("context.jsonl");
+        let left_state = state.clone();
+        let left_tx = ui_tx.clone();
+        tokio::spawn(async move {
+            tail_context(left_path, "left", left_state, left_tx).await;
+        });
+
+        // Tail right side
+        let right_path = workspace.join("right").join("context.jsonl");
+        let right_state = state.clone();
+        let right_tx = ui_tx.clone();
+        tokio::spawn(async move {
+            tail_context(right_path, "right", right_state, right_tx).await;
+        });
+    }
+
     // Run TUI on main thread
     tui::run(state, ui_rx, registration.worker_endpoint).await?;
 
     Ok(())
+}
+
+/// Tail a context.jsonl file and update state with new entries.
+async fn tail_context(
+    path: PathBuf,
+    side: &'static str,
+    state: SharedState,
+    ui_tx: mpsc::Sender<tui::UiEvent>,
+) {
+    loop {
+        // Wait for file to exist
+        if !path.exists() {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        // Read new lines
+        let lines_read = {
+            let s = state.read().await;
+            s.context_lines_read(side)
+        };
+
+        let new_entries = match read_context_from_line(&path, lines_read) {
+            Ok(entries) => entries,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+
+        if !new_entries.is_empty() {
+            let mut s = state.write().await;
+            for entry in new_entries {
+                s.add_context_entry(side, entry);
+            }
+            let _ = ui_tx.send(tui::UiEvent::Refresh).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Read context entries starting from a specific line.
+fn read_context_from_line(path: &PathBuf, skip_lines: usize) -> std::io::Result<Vec<OpenAIMessage>> {
+    let file = std::fs::File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let entries: Vec<OpenAIMessage> = reader
+        .lines()
+        .skip(skip_lines)
+        .filter_map(|line| line.ok())
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(&line).ok())
+        .collect();
+
+    Ok(entries)
 }

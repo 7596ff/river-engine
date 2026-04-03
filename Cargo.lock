@@ -1610,25 +1610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "river-cli"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "clap",
- "crossterm",
- "ratatui",
- "reqwest",
- "river-adapter",
- "river-snowflake",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "river-context"
 version = "0.1.0"
 dependencies = [
@@ -1702,6 +1683,26 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "river-tui"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "crossterm",
+ "ratatui",
+ "reqwest",
+ "river-adapter",
+ "river-context",
+ "river-snowflake",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,13 +1,14 @@
 [package]
-name = "river-cli"
+name = "river-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "TUI-based CLI for River Engine debugging and local development"
+description = "Terminal UI for River Engine debugging and local development"
 
 [dependencies]
 river-adapter = { path = "../river-adapter" }
+river-context = { path = "../river-context" }
 river-snowflake = { path = "../river-snowflake" }
 
 tokio = { workspace = true, features = ["sync", "time", "signal"] }

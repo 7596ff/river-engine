@@ -56,13 +56,7 @@ struct OllamaResponse {
     embedding: Vec<f32>,
 }
 
-// OpenAI-compatible request/response
-#[derive(Serialize)]
-struct OpenAiRequest<'a> {
-    model: &'a str,
-    input: &'a str,
-}
-
+// OpenAI-compatible response (request uses Ollama format which is compatible)
 #[derive(Deserialize)]
 struct OpenAiResponse {
     data: Vec<OpenAiEmbedding>,
@@ -125,10 +119,5 @@ impl EmbedClient {
         }
 
         Err(EmbedError::InvalidResponse)
-    }
-
-    /// Get the expected dimensions.
-    pub fn dimensions(&self) -> usize {
-        self.config.dimensions
     }
 }

@@ -70,14 +70,6 @@ impl Store {
         Ok(store)
     }
 
-    /// Create an in-memory store for testing.
-    pub fn in_memory(dimensions: usize) -> Result<Self, StoreError> {
-        let conn = Connection::open_in_memory()?;
-        let store = Self { conn, dimensions };
-        store.init_schema()?;
-        Ok(store)
-    }
-
     fn init_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             r#"

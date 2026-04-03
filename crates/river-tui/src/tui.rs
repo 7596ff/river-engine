@@ -17,6 +17,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use river_adapter::{Author, EventMetadata, InboundEvent};
+use river_context::OpenAIMessage;
 use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -60,11 +61,6 @@ pub async fn run(
                 match (key.code, key.modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                         break;
-                    }
-                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        // Toggle debug mode
-                        let mut s = state.write().await;
-                        s.show_debug = !s.show_debug;
                     }
                     (KeyCode::Enter, _) => {
                         // Send message
@@ -124,14 +120,14 @@ pub async fn run(
                     }
                     (KeyCode::Up, _) => {
                         let mut s = state.write().await;
-                        if s.scroll_offset < s.messages.len().saturating_sub(1) {
-                            s.scroll_offset += 1;
+                        if s.conversation_scroll < s.messages.len().saturating_sub(1) {
+                            s.conversation_scroll += 1;
                         }
                     }
                     (KeyCode::Down, _) => {
                         let mut s = state.write().await;
-                        if s.scroll_offset > 0 {
-                            s.scroll_offset -= 1;
+                        if s.conversation_scroll > 0 {
+                            s.conversation_scroll -= 1;
                         }
                     }
                     _ => {}
@@ -176,11 +172,9 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
         "waiting..."
     };
 
-    let debug_status = if state.show_debug { "debug:on" } else { "debug:off" };
-
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
-            format!(" River Mock Adapter "),
+            " River Mock Adapter ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -200,7 +194,7 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
         Span::styled(format!("[{}]", status), Style::default().fg(Color::Cyan)),
         Span::raw(" "),
         Span::styled(
-            format!("[{}]", debug_status),
+            format!("L:{} R:{}", state.left_lines_read, state.right_lines_read),
             Style::default().fg(Color::DarkGray),
         ),
     ]))
@@ -211,133 +205,226 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
 
 /// Draw message list.
 fn draw_messages(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
+    let width = area.width.saturating_sub(2) as usize; // Account for borders
+
     let items: Vec<ListItem> = state
         .messages
         .iter()
         .rev()
-        .skip(state.scroll_offset)
+        .skip(state.conversation_scroll)
         .take(area.height as usize - 2)
-        .map(|msg| format_message(msg, state.show_debug))
+        .map(|msg| format_message(msg, width))
         .flatten()
         .collect();
 
     // Reverse to show oldest at top
     let items: Vec<ListItem> = items.into_iter().rev().collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Messages "));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Context "));
 
     f.render_widget(list, area);
 }
 
 /// Format a message for display.
-fn format_message(msg: &DisplayMessage, show_debug: bool) -> Vec<ListItem<'static>> {
+fn format_message(msg: &DisplayMessage, width: usize) -> Vec<ListItem<'static>> {
     match msg {
         DisplayMessage::User {
             content, timestamp, ..
         } => {
             let time = timestamp.format("%H:%M:%S").to_string();
+            let content_part = format!("you> {}", content);
+            let available = width.saturating_sub(11); // "[HH:MM:SS] "
+            let padding = available.saturating_sub(content_part.len()) / 2;
             vec![ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("[{}] ", time),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled("user> ", Style::default().fg(Color::Cyan)),
+                Span::raw(" ".repeat(padding)),
+                Span::styled("you> ", Style::default().fg(Color::Cyan)),
                 Span::raw(content.clone()),
             ]))]
-        }
-        DisplayMessage::Worker {
-            content, timestamp, ..
-        } => {
-            let time = timestamp.format("%H:%M:%S").to_string();
-            // Wrap long content
-            let lines: Vec<ListItem> = content
-                .lines()
-                .enumerate()
-                .map(|(i, line)| {
-                    if i == 0 {
-                        ListItem::new(Line::from(vec![
-                            Span::styled(
-                                format!("[{}] ", time),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                            Span::styled("worker> ", Style::default().fg(Color::Green)),
-                            Span::raw(line.to_string()),
-                        ]))
-                    } else {
-                        ListItem::new(Line::from(vec![
-                            Span::raw("          "), // Indent continuation
-                            Span::raw(line.to_string()),
-                        ]))
-                    }
-                })
-                .collect();
-            lines
         }
         DisplayMessage::System {
             content, timestamp, ..
         } => {
             let time = timestamp.format("%H:%M:%S").to_string();
+            let content_part = format!("[sys] {}", content);
+            let available = width.saturating_sub(11);
+            let padding = available.saturating_sub(content_part.len()) / 2;
             vec![ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("[{}] ", time),
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::raw(" ".repeat(padding)),
                 Span::styled(
-                    format!("[System] {}", content),
+                    format!("[sys] {}", content),
                     Style::default().fg(Color::Yellow),
                 ),
             ]))]
         }
-        DisplayMessage::ToolCall {
-            tool,
-            args,
-            result,
-            timestamp,
-        } => {
-            if !show_debug {
-                return vec![];
-            }
+        DisplayMessage::Context { side, entry, timestamp } => {
+            format_context_entry(side, entry, timestamp, width)
+        }
+    }
+}
 
-            let time = timestamp.format("%H:%M:%S").to_string();
-            let mut lines = vec![ListItem::new(Line::from(vec![
+/// Format a context entry (OpenAI message) for display.
+fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::DateTime<Utc>, width: usize) -> Vec<ListItem<'static>> {
+    let time = timestamp.format("%H:%M:%S").to_string();
+    let role = entry.role.as_str();
+
+    // Side indicator (L/R)
+    let side_char = if side == "left" { "L" } else { "R" };
+    let is_right = side == "right";
+    let available = width.saturating_sub(11); // "[HH:MM:SS] "
+
+    // Determine color and prefix based on role
+    let (color, prefix) = match role {
+        "user" => (Color::Cyan, "user"),
+        "assistant" => (Color::Green, "asst"),
+        "system" => (Color::Magenta, "sys"),
+        "tool" => (Color::Blue, "tool"),
+        _ => (Color::White, role),
+    };
+
+    // Handle tool calls
+    if let Some(ref tool_calls) = entry.tool_calls {
+        let mut items = vec![];
+        for tc in tool_calls {
+            let content_part = format!("{} {}> call {} {}",
+                side_char, prefix, tc.function.name,
+                truncate_str(&tc.function.arguments, 30));
+            let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
+
+            items.push(ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("[{}] ", time),
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::raw(" ".repeat(padding)),
                 Span::styled(
-                    format!("──── TOOL: {} ────", tool),
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::DIM),
+                    format!("{} ", side_char),
+                    Style::default().fg(Color::DarkGray),
                 ),
-            ]))];
-
-            // Show args (truncated)
-            let args_display = if args.len() > 80 {
-                format!("{}...", &args[..80])
-            } else {
-                args.clone()
-            };
-            lines.push(ListItem::new(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(args_display, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}> ", prefix),
+                    Style::default().fg(color),
+                ),
+                Span::styled(
+                    format!("call {} ", tc.function.name),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(
+                    truncate_str(&tc.function.arguments, 30),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ])));
-
-            // Show result (truncated)
-            if let Some(result) = result {
-                let result_display = if result.len() > 80 {
-                    format!("{}...", &result[..80])
-                } else {
-                    result.clone()
-                };
-                lines.push(ListItem::new(Line::from(vec![
-                    Span::styled("└─> ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(result_display, Style::default().fg(Color::DarkGray)),
-                ])));
-            }
-
-            lines
         }
+        return items;
+    }
+
+    // Handle tool result
+    if let Some(ref tool_call_id) = entry.tool_call_id {
+        let content = entry.content.as_deref().unwrap_or("");
+        let id_preview_len = 8.min(tool_call_id.len());
+        let content_part = format!("{} {}> [{}] {}",
+            side_char, prefix, &tool_call_id[..id_preview_len],
+            truncate_str(content, 40));
+        let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
+
+        return vec![ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("[{}] ", time),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(
+                format!("{} ", side_char),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{}> ", prefix),
+                Style::default().fg(color),
+            ),
+            Span::styled(
+                format!("[{}] ", &tool_call_id[..id_preview_len]),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(truncate_str(content, 40)),
+        ]))];
+    }
+
+    // Regular content message
+    let content = entry.content.as_deref().unwrap_or("");
+    let lines: Vec<ListItem> = content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            let truncated = truncate_str(line, available.saturating_sub(10));
+            if i == 0 {
+                let content_part = format!("{} {}> {}", side_char, prefix, truncated);
+                let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("[{}] ", time),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" ".repeat(padding)),
+                    Span::styled(
+                        format!("{} ", side_char),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("{}> ", prefix),
+                        Style::default().fg(color),
+                    ),
+                    Span::raw(truncated),
+                ]))
+            } else {
+                // Continuation lines
+                let padding = if is_right { available.saturating_sub(truncated.len()) } else { 11 };
+                ListItem::new(Line::from(vec![
+                    Span::raw(" ".repeat(padding)),
+                    Span::raw(truncated),
+                ]))
+            }
+        })
+        .collect();
+
+    if lines.is_empty() {
+        let content_part = format!("{} {}> (empty)", side_char, prefix);
+        let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
+
+        vec![ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("[{}] ", time),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(
+                format!("{} ", side_char),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{}> ", prefix),
+                Style::default().fg(color),
+            ),
+            Span::styled("(empty)", Style::default().fg(Color::DarkGray)),
+        ]))]
+    } else {
+        lines
+    }
+}
+
+/// Truncate a string to max length, adding ellipsis if needed.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
 
@@ -348,7 +435,7 @@ fn draw_input(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Type message (Enter to send, Ctrl+C to quit, Ctrl+D toggle debug) "),
+                .title(" Type message (Enter to send, Ctrl+C to quit) "),
         )
         .wrap(Wrap { trim: false });
 

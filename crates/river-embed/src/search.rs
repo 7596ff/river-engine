@@ -85,13 +85,6 @@ impl CursorManager {
 
         Some((embedding, offset, remaining))
     }
-
-    /// Remove expired cursors.
-    pub fn cleanup(&self) {
-        let now = Instant::now();
-        let mut cursors = self.cursors.write().unwrap();
-        cursors.retain(|_, c| c.expires_at > now);
-    }
 }
 
 impl Default for CursorManager {
