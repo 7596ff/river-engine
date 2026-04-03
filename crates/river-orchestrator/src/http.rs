@@ -3,7 +3,7 @@
 use crate::config::{Config, ModelConfig};
 use crate::model::{ModelSwitchError, ModelSwitchRequest, ModelSwitchResponse};
 use crate::registry::{push_registry, Registry, SharedRegistry};
-use crate::respawn::{OutputAck, SharedRespawnManager, WorkerOutput};
+use crate::respawn::{OutputAck, RespawnAction, SharedRespawnManager, WorkerOutput};
 use crate::supervisor::{ProcessKey, SharedSupervisor};
 use axum::{
     extract::State,
@@ -27,6 +27,7 @@ pub struct AppState {
     pub respawn: SharedRespawnManager,
     pub client: reqwest::Client,
     pub dyad_locks: Arc<RwLock<HashMap<String, bool>>>,
+    pub orchestrator_url: String,
 }
 
 /// Worker registration request.
@@ -702,8 +703,28 @@ async fn handle_worker_output(
     // Push registry
     push_registry_to_all(&state).await;
 
-    // TODO: Trigger respawn based on action
-    // For now, just acknowledge
+    // Trigger respawn based on action
+    match action {
+        RespawnAction::ImmediateWithSleep
+        | RespawnAction::ImmediateWithSummary
+        | RespawnAction::ImmediateFromJSONL => {
+            // Spawn worker immediately
+            let mut sup = state.supervisor.write().await;
+            if let Err(e) = sup
+                .spawn_worker(&state.orchestrator_url, &output.dyad, output.side.clone())
+                .await
+            {
+                tracing::error!("Failed to respawn worker: {}", e);
+            }
+        }
+        RespawnAction::WaitThenRespawn { minutes } => {
+            // Respawn manager already stored the wake time
+            tracing::info!(
+                "Worker will respawn in {} minutes",
+                minutes
+            );
+        }
+    }
 
     Json(OutputAck { acknowledged: true })
 }

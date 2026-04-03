@@ -60,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let port = config.port;
     let config = Arc::new(config);
+    let orchestrator_url = format!("http://localhost:{}", port);
 
     // Create shared state
     let registry = new_shared_registry();
@@ -75,14 +76,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         respawn: respawn.clone(),
         client: client.clone(),
         dyad_locks,
+        orchestrator_url: orchestrator_url.clone(),
     };
 
     // Bind HTTP server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("Orchestrator listening on http://{}", addr);
-
-    let orchestrator_url = format!("http://localhost:{}", port);
 
     // Spawn the HTTP server
     let app = router(state.clone());
@@ -119,9 +119,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Startup complete. Entering supervision loop.");
 
-    // Health check interval
+    // Health check interval (60s)
     let health_interval = Duration::from_secs(60);
     let mut health_ticker = tokio::time::interval(health_interval);
+
+    // Wake check interval (10s)
+    let wake_interval = Duration::from_secs(10);
+    let mut wake_ticker = tokio::time::interval(wake_interval);
 
     // Main supervision loop with shutdown handling
     loop {
@@ -131,6 +135,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !dead.is_empty() {
                     tracing::warn!("Dead processes detected: {:?}", dead);
                     // TODO: Trigger respawns for dead processes
+                }
+            }
+            _ = wake_ticker.tick() => {
+                // Check for sleeping workers ready to wake
+                let ready = {
+                    let mgr = respawn.read().await;
+                    mgr.ready_to_wake()
+                };
+
+                for worker_key in ready {
+                    tracing::info!(
+                        "Waking worker: dyad={}, side={:?}",
+                        worker_key.dyad,
+                        worker_key.side
+                    );
+
+                    // Spawn the worker
+                    {
+                        let mut sup = supervisor.write().await;
+                        if let Err(e) = sup
+                            .spawn_worker(&orchestrator_url, &worker_key.dyad, worker_key.side.clone())
+                            .await
+                        {
+                            tracing::error!("Failed to wake worker: {}", e);
+                            continue;
+                        }
+                    }
+
+                    // Clear respawn state (will be re-populated on next registration)
+                    {
+                        let mut mgr = respawn.write().await;
+                        mgr.clear(&worker_key.dyad, &worker_key.side);
+                    }
                 }
             }
             _ = tokio::signal::ctrl_c() => {
