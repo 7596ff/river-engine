@@ -1251,6 +1251,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1603,6 +1615,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "river-protocol",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1613,23 +1626,29 @@ dependencies = [
 name = "river-context"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "river-adapter",
+ "river-protocol",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "river-discord"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "clap",
  "reqwest",
  "river-adapter",
+ "river-protocol",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "twilight-gateway",
@@ -1651,6 +1670,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sqlite-vec",
  "thiserror 2.0.18",
  "tokio",
  "zerocopy",
@@ -1662,15 +1682,27 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "nix",
  "regex",
  "reqwest",
  "river-adapter",
+ "river-protocol",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "river-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "utoipa",
 ]
 
 [[package]]
@@ -1683,6 +1715,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -1697,10 +1730,13 @@ dependencies = [
  "reqwest",
  "river-adapter",
  "river-context",
+ "river-protocol",
  "river-snowflake",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1715,6 +1751,7 @@ dependencies = [
  "reqwest",
  "river-adapter",
  "river-context",
+ "river-protocol",
  "river-snowflake",
  "serde",
  "serde_json",
@@ -2110,6 +2147,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite-vec"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2350,6 +2396,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

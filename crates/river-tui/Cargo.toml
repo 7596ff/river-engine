@@ -26,3 +26,4 @@ crossterm = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+tempfile = { workspace = true }

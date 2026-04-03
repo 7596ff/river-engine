@@ -214,3 +214,87 @@ async fn read_context_from_line(path: &PathBuf, skip_lines: usize) -> std::io::R
 
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_read_context_from_line_empty_file() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let result = read_context_from_line(&path, 0).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_read_context_from_line_parses_valid_json() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "Hello"}}"#).unwrap();
+        writeln!(file, r#"{{"role": "assistant", "content": "Hi there"}}"#).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_path_buf();
+
+        let result = read_context_from_line(&path, 0).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[0].content, Some("Hello".to_string()));
+        assert_eq!(result[1].role, "assistant");
+        assert_eq!(result[1].content, Some("Hi there".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_from_line_skips_lines() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "First"}}"#).unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "Second"}}"#).unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "Third"}}"#).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_path_buf();
+
+        let result = read_context_from_line(&path, 2).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, Some("Third".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_from_line_skips_empty_lines() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "Hello"}}"#).unwrap();
+        writeln!(file, "").unwrap();
+        writeln!(file, "   ").unwrap();
+        writeln!(file, r#"{{"role": "assistant", "content": "Hi"}}"#).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_path_buf();
+
+        let result = read_context_from_line(&path, 0).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, Some("Hello".to_string()));
+        assert_eq!(result[1].content, Some("Hi".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_from_line_handles_invalid_json() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"role": "user", "content": "Valid"}}"#).unwrap();
+        writeln!(file, "not valid json").unwrap();
+        writeln!(file, r#"{{"role": "assistant", "content": "Also valid"}}"#).unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_path_buf();
+
+        let result = read_context_from_line(&path, 0).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, Some("Valid".to_string()));
+        assert_eq!(result[1].content, Some("Also valid".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_from_line_file_not_found() {
+        let path = PathBuf::from("/nonexistent/path/to/file.jsonl");
+        let result = read_context_from_line(&path, 0).await;
+        assert!(result.is_err());
+    }
+}
