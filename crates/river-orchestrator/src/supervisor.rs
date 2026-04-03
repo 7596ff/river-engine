@@ -112,11 +112,17 @@ impl Supervisor {
         dyad: &str,
         adapter_config: &AdapterConfig,
     ) -> Result<(), SupervisorError> {
+        let side_str = match adapter_config.side {
+            Side::Left => "left",
+            Side::Right => "right",
+        };
         let child = Command::new(&adapter_config.binary)
             .arg("--orchestrator")
             .arg(orchestrator_url)
             .arg("--dyad")
             .arg(dyad)
+            .arg("--side")
+            .arg(side_str)
             .arg("--type")
             .arg(&adapter_config.adapter_type)
             .stdin(Stdio::null())

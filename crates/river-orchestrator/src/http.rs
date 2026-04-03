@@ -229,11 +229,11 @@ async fn handle_worker_registration(
         )
     })?;
 
-    // Determine baton
-    let baton = match (&req.worker.side, &dyad_config.left_starts_as) {
-        (Side::Left, b) => b.clone(),
-        (Side::Right, Baton::Actor) => Baton::Spectator,
-        (Side::Right, Baton::Spectator) => Baton::Actor,
+    // Determine baton based on initial_actor
+    let baton = if req.worker.side == dyad_config.initial_actor {
+        Baton::Actor
+    } else {
+        Baton::Spectator
     };
 
     // Check for respawn state
@@ -349,9 +349,7 @@ async fn handle_adapter_registration(
     let worker_endpoint = {
         let reg = state.registry.read().await;
         // Find the actor for this dyad
-        let left_is_actor = matches!(dyad_config.left_starts_as, Baton::Actor);
-        let side = if left_is_actor { Side::Left } else { Side::Right };
-        reg.get_worker_endpoint(&req.adapter.dyad, &side)
+        reg.get_worker_endpoint(&req.adapter.dyad, &dyad_config.initial_actor)
     };
 
     // Update supervisor with endpoint

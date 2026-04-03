@@ -1,6 +1,6 @@
 //! Configuration loading with env var substitution.
 
-use river_adapter::{Baton, Ground};
+use river_adapter::{Ground, Side};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ pub struct DyadConfig {
     pub workspace: PathBuf,
     pub left_model: String,
     pub right_model: String,
-    pub left_starts_as: Baton,
+    pub initial_actor: Side,
     pub ground: Ground,
     pub adapters: Vec<AdapterConfig>,
 }
@@ -53,6 +53,7 @@ pub struct AdapterConfig {
     #[serde(rename = "type")]
     pub adapter_type: String,
     pub binary: String,
+    pub side: river_adapter::Side,
     #[serde(default)]
     pub config: Value,
 }
