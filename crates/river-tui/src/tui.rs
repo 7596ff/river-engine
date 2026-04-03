@@ -470,3 +470,335 @@ fn draw_input(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
 
     f.render_widget(input, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::DisplayMessage;
+    use chrono::Utc;
+    use river_context::{FunctionCall, OpenAIMessage, ToolCall};
+
+    // ========== truncate_str tests ==========
+
+    #[test]
+    fn test_truncate_str_short_string() {
+        // String shorter than max_len should remain unchanged
+        let result = truncate_str("hello", 10);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact_length() {
+        // String exactly at max_len should remain unchanged
+        let result = truncate_str("hello", 5);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_adds_ellipsis() {
+        // String longer than max_len should be truncated with ellipsis
+        let result = truncate_str("hello world", 8);
+        // max_len=8, so we take 8-3=5 chars plus "..."
+        assert_eq!(result, "hello...");
+    }
+
+    #[test]
+    fn test_truncate_str_very_short_max() {
+        // Very short max_len (edge case)
+        let result = truncate_str("hello", 3);
+        // max_len=3, so we take 3-3=0 chars plus "..."
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn test_truncate_str_empty_string() {
+        let result = truncate_str("", 10);
+        assert_eq!(result, "");
+    }
+
+    // ========== format_message tests for User variant ==========
+
+    #[test]
+    fn test_format_message_user() {
+        let msg = DisplayMessage::User {
+            id: "msg-123".to_string(),
+            content: "Hello, world!".to_string(),
+            timestamp: Utc::now(),
+        };
+
+        let items = format_message(&msg, 80);
+
+        assert_eq!(items.len(), 1);
+        // The formatted output should contain the user content
+        // We can't easily inspect ListItem internals, but we can verify it returns one item
+    }
+
+    #[test]
+    fn test_format_message_user_empty_content() {
+        let msg = DisplayMessage::User {
+            id: "msg-456".to_string(),
+            content: "".to_string(),
+            timestamp: Utc::now(),
+        };
+
+        let items = format_message(&msg, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    // ========== format_message tests for System variant ==========
+
+    #[test]
+    fn test_format_message_system() {
+        let msg = DisplayMessage::System {
+            content: "System notification".to_string(),
+            timestamp: Utc::now(),
+        };
+
+        let items = format_message(&msg, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_message_system_long_content() {
+        let msg = DisplayMessage::System {
+            content: "This is a very long system message that exceeds normal display width".to_string(),
+            timestamp: Utc::now(),
+        };
+
+        let items = format_message(&msg, 40);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    // ========== format_context_entry tests ==========
+
+    #[test]
+    fn test_format_context_entry_user_role() {
+        let entry = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some("User message content".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_assistant_role() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some("Assistant response".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("right", &entry, &timestamp, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_tool_call() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call-abc123".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "get_weather".to_string(),
+                    arguments: r#"{"location": "San Francisco"}"#.to_string(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("right", &entry, &timestamp, 80);
+
+        // Should have one item per tool call
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_multiple_tool_calls() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![
+                ToolCall {
+                    id: "call-1".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "tool_a".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+                ToolCall {
+                    id: "call-2".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "tool_b".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+            ]),
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        // Should have one item per tool call
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn test_format_context_entry_tool_result() {
+        let entry = OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some("Tool execution result".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call-xyz789".to_string()),
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_empty_content() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some("".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("right", &entry, &timestamp, 80);
+
+        // Empty content results in "(empty)" display
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_none_content() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        // None content results in "(empty)" display
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_multiline_content() {
+        let entry = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some("Line 1\nLine 2\nLine 3".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        // Should have one item per line
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_format_context_entry_left_vs_right_side() {
+        let entry = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some("Test content".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let left_items = format_context_entry("left", &entry, &timestamp, 80);
+        let right_items = format_context_entry("right", &entry, &timestamp, 80);
+
+        // Both should produce same number of items (formatting differs internally)
+        assert_eq!(left_items.len(), right_items.len());
+    }
+
+    #[test]
+    fn test_format_context_entry_system_role() {
+        let entry = OpenAIMessage {
+            role: "system".to_string(),
+            content: Some("System prompt".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_unknown_role() {
+        let entry = OpenAIMessage {
+            role: "custom_role".to_string(),
+            content: Some("Custom role content".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        // Should still format, using the role name as prefix
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_narrow_width() {
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some("This is a long message that should be truncated".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("right", &entry, &timestamp, 30);
+
+        // Should still produce one item even with narrow width
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_format_context_entry_tool_result_empty_content() {
+        let entry = OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some("".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call-empty".to_string()),
+        };
+        let timestamp = Utc::now();
+
+        let items = format_context_entry("left", &entry, &timestamp, 80);
+
+        assert_eq!(items.len(), 1);
+    }
+}
