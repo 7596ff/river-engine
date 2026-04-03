@@ -175,6 +175,11 @@ impl RegistryState {
         self.adapters.remove(&key);
     }
 
+    /// Remove an embed service from registry.
+    pub fn remove_embed(&mut self, name: &str) {
+        self.embed_services.remove(name);
+    }
+
     /// Get worker endpoint.
     pub fn get_worker_endpoint(&self, dyad: &str, side: &Side) -> Option<String> {
         let key = WorkerKey {

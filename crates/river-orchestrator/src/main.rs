@@ -132,9 +132,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = health_ticker.tick() => {
                 let dead = run_health_checks(&client, &supervisor).await;
-                if !dead.is_empty() {
-                    tracing::warn!("Dead processes detected: {:?}", dead);
-                    // TODO: Trigger respawns for dead processes
+                for key in dead {
+                    tracing::warn!("Dead process detected: {:?}", key);
+
+                    // Remove from supervisor
+                    {
+                        let mut sup = supervisor.write().await;
+                        sup.remove(&key);
+                    }
+
+                    // Respawn based on process type
+                    match &key {
+                        supervisor::ProcessKey::Worker { dyad, side } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_worker(dyad, side);
+                            }
+                            // Respawn worker
+                            let mut sup = supervisor.write().await;
+                            if let Err(e) = sup.spawn_worker(&orchestrator_url, dyad, side.clone()).await {
+                                tracing::error!("Failed to respawn worker: {}", e);
+                            }
+                        }
+                        supervisor::ProcessKey::Adapter { dyad, adapter_type } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_adapter(dyad, adapter_type);
+                            }
+                            // Find adapter config and respawn
+                            if let Some(dyad_config) = config.dyads.get(dyad) {
+                                if let Some(adapter_config) = dyad_config.adapters.iter()
+                                    .find(|a| a.adapter_type == *adapter_type)
+                                {
+                                    let mut sup = supervisor.write().await;
+                                    if let Err(e) = sup.spawn_adapter(&orchestrator_url, dyad, adapter_config).await {
+                                        tracing::error!("Failed to respawn adapter: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        supervisor::ProcessKey::Embed { name } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_embed(name);
+                            }
+                            // Respawn embed
+                            let mut sup = supervisor.write().await;
+                            if let Err(e) = sup.spawn_embed(&orchestrator_url, name).await {
+                                tracing::error!("Failed to respawn embed: {}", e);
+                            }
+                        }
+                    }
                 }
             }
             _ = wake_ticker.tick() => {

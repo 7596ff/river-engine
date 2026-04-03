@@ -170,6 +170,11 @@ impl Supervisor {
         }
     }
 
+    /// Remove a dead process from tracking (doesn't kill - already dead).
+    pub fn remove(&mut self, key: &ProcessKey) {
+        self.processes.remove(key);
+    }
+
     /// Kill a process.
     pub async fn kill(&mut self, key: &ProcessKey) -> Result<(), SupervisorError> {
         if let Some(mut handle) = self.processes.remove(key) {
