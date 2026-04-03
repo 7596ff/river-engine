@@ -202,4 +202,56 @@ mod tests {
         let parsed: OutboundRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, request);
     }
+
+    #[test]
+    fn test_event_metadata_event_type_mapping() {
+        let author = Author { id: "u1".into(), name: "User".into(), bot: false };
+        let cases: Vec<(EventMetadata, EventType)> = vec![
+            (EventMetadata::MessageCreate { channel: "ch".into(), author: author.clone(), content: "hi".into(), message_id: "m1".into(), timestamp: "2026-01-01T00:00:00Z".into(), reply_to: None, attachments: vec![] }, EventType::MessageCreate),
+            (EventMetadata::MessageUpdate { channel: "ch".into(), message_id: "m1".into(), content: "edited".into(), timestamp: "2026-01-01T00:00:00Z".into() }, EventType::MessageUpdate),
+            (EventMetadata::MessageDelete { channel: "ch".into(), message_id: "m1".into() }, EventType::MessageDelete),
+            (EventMetadata::ReactionAdd { channel: "ch".into(), message_id: "m1".into(), user_id: "u1".into(), emoji: "👍".into() }, EventType::ReactionAdd),
+            (EventMetadata::ReactionRemove { channel: "ch".into(), message_id: "m1".into(), user_id: "u1".into(), emoji: "👍".into() }, EventType::ReactionRemove),
+            (EventMetadata::TypingStart { channel: "ch".into(), user_id: "u1".into() }, EventType::TypingStart),
+            (EventMetadata::MemberJoin { user_id: "u1".into(), username: "newuser".into() }, EventType::MemberJoin),
+            (EventMetadata::MemberLeave { user_id: "u1".into() }, EventType::MemberLeave),
+            (EventMetadata::PresenceUpdate { user_id: "u1".into(), status: "online".into() }, EventType::PresenceUpdate),
+            (EventMetadata::VoiceStateUpdate { user_id: "u1".into(), channel: Some("voice-ch".into()) }, EventType::VoiceStateUpdate),
+            (EventMetadata::ChannelCreate { channel: "ch".into(), name: "new-channel".into() }, EventType::ChannelCreate),
+            (EventMetadata::ChannelUpdate { channel: "ch".into(), name: "renamed".into() }, EventType::ChannelUpdate),
+            (EventMetadata::ChannelDelete { channel: "ch".into() }, EventType::ChannelDelete),
+            (EventMetadata::ThreadCreate { channel: "thread-ch".into(), parent_channel: "ch".into(), name: "thread".into() }, EventType::ThreadCreate),
+            (EventMetadata::ThreadUpdate { channel: "thread-ch".into(), name: "renamed-thread".into() }, EventType::ThreadUpdate),
+            (EventMetadata::ThreadDelete { channel: "thread-ch".into() }, EventType::ThreadDelete),
+            (EventMetadata::PinUpdate { channel: "ch".into(), message_id: "m1".into(), pinned: true }, EventType::PinUpdate),
+            (EventMetadata::PollVote { channel: "ch".into(), poll_id: "p1".into(), user_id: "u1".into(), option_index: 0, added: true }, EventType::PollVote),
+            (EventMetadata::ScheduledEvent { event_id: "e1".into(), name: "Event".into(), start_time: "2026-01-01T12:00:00Z".into() }, EventType::ScheduledEvent),
+            (EventMetadata::ConnectionLost { reason: "network error".into(), reconnecting: true }, EventType::ConnectionLost),
+            (EventMetadata::ConnectionRestored { downtime_seconds: 30 }, EventType::ConnectionRestored),
+            (EventMetadata::Unknown(serde_json::json!({"custom": "data"})), EventType::Unknown),
+        ];
+        for (metadata, expected_type) in cases {
+            assert_eq!(metadata.event_type(), expected_type, "Wrong event_type for {:?}", metadata);
+        }
+    }
+
+    #[test]
+    fn test_inbound_event_serde_roundtrip() {
+        let event = InboundEvent {
+            adapter: "discord".into(),
+            metadata: EventMetadata::MessageCreate {
+                channel: "general".into(),
+                author: Author { id: "u1".into(), name: "Alice".into(), bot: false },
+                content: "Hello!".into(),
+                message_id: "m123".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+                reply_to: None,
+                attachments: vec![],
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""message_create""#), "Should use snake_case: {}", json);
+        let parsed: InboundEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, event);
+    }
 }
