@@ -26,7 +26,6 @@ pub struct SearchResponse {
 
 /// Internal cursor state.
 pub struct Cursor {
-    pub id: String,
     pub query_embedding: Vec<f32>,
     pub offset: usize,
     pub total_results: usize,
@@ -52,9 +51,8 @@ impl CursorManager {
     pub fn create(&self, query_embedding: Vec<f32>, total_results: usize) -> String {
         let id = generate_cursor_id();
         let cursor = Cursor {
-            id: id.clone(),
             query_embedding,
-            offset: 0,
+            offset: 1, // Start at 1 since /search already returned offset 0
             total_results,
             expires_at: Instant::now() + self.ttl,
         };
@@ -62,6 +60,13 @@ impl CursorManager {
         let mut cursors = self.cursors.write().unwrap();
         cursors.insert(id.clone(), cursor);
         id
+    }
+
+    /// Remove all expired cursors.
+    pub fn cleanup_expired(&self) {
+        let mut cursors = self.cursors.write().unwrap();
+        let now = Instant::now();
+        cursors.retain(|_, cursor| cursor.expires_at > now);
     }
 
     /// Get a cursor and advance its offset.
@@ -115,5 +120,44 @@ pub fn hit_to_result(
         content: text,
         source: format!("{}:{}-{}", source_path, line_start, line_end),
         score: 1.0 - distance, // Convert distance to similarity score
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cursor_starts_at_offset_1() {
+        let manager = CursorManager::new(Duration::from_secs(60));
+        let embedding = vec![1.0, 2.0, 3.0];
+
+        let cursor_id = manager.create(embedding.clone(), 10);
+
+        // First advance should return offset 1, not 0
+        let (_, offset, remaining) = manager.advance(&cursor_id).unwrap();
+        assert_eq!(offset, 1, "First /next call should return offset 1");
+        assert_eq!(remaining, 8, "After returning offset 1, 8 results remain (2-9)");
+
+        // Second advance should return offset 2
+        let (_, offset, _) = manager.advance(&cursor_id).unwrap();
+        assert_eq!(offset, 2);
+    }
+
+    #[test]
+    fn test_cleanup_expired() {
+        let manager = CursorManager::new(Duration::from_millis(1));
+        let embedding = vec![1.0, 2.0, 3.0];
+
+        let cursor_id = manager.create(embedding.clone(), 10);
+
+        // Wait for expiration
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Cleanup
+        manager.cleanup_expired();
+
+        // Cursor should be gone
+        assert!(manager.advance(&cursor_id).is_none());
     }
 }
