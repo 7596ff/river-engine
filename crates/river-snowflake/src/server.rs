@@ -84,9 +84,16 @@ async fn get_id(
     };
 
     let birth = AgentBirth::from_u64(query.birth);
-    let id = state.cache.next_id(birth, snowflake_type);
-
-    (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response()
+    match state.cache.next_id(birth, snowflake_type) {
+        Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// POST /ids
@@ -115,14 +122,19 @@ async fn post_ids(
     }
 
     let birth = AgentBirth::from_u64(req.birth);
-    let ids = state
-        .cache
-        .next_ids(birth, snowflake_type, req.count)
-        .into_iter()
-        .map(|id| id.to_string())
-        .collect();
-
-    (StatusCode::OK, Json(BatchResponse { ids })).into_response()
+    match state.cache.next_ids(birth, snowflake_type, req.count) {
+        Ok(ids) => {
+            let ids = ids.into_iter().map(|id| id.to_string()).collect();
+            (StatusCode::OK, Json(BatchResponse { ids })).into_response()
+        }
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /health

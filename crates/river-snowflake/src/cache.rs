@@ -43,7 +43,7 @@ impl GeneratorCache {
     }
 
     /// Generate single ID (creates generator for birth if needed).
-    pub fn next_id(&self, birth: AgentBirth, snowflake_type: SnowflakeType) -> Snowflake {
+    pub fn next_id(&self, birth: AgentBirth, snowflake_type: SnowflakeType) -> Result<Snowflake, crate::SnowflakeError> {
         let gen = self.get_or_create(birth);
         gen.next(snowflake_type)
     }
@@ -54,7 +54,7 @@ impl GeneratorCache {
         birth: AgentBirth,
         snowflake_type: SnowflakeType,
         count: usize,
-    ) -> Vec<Snowflake> {
+    ) -> Result<Vec<Snowflake>, crate::SnowflakeError> {
         let gen = self.get_or_create(birth);
         (0..count).map(|_| gen.next(snowflake_type)).collect()
     }
@@ -85,8 +85,8 @@ mod tests {
         let cache = GeneratorCache::new();
         let birth = AgentBirth::new(2026, 4, 1, 12, 0, 0).unwrap();
 
-        let _id1 = cache.next_id(birth, SnowflakeType::Message);
-        let _id2 = cache.next_id(birth, SnowflakeType::Message);
+        let _id1 = cache.next_id(birth, SnowflakeType::Message).unwrap();
+        let _id2 = cache.next_id(birth, SnowflakeType::Message).unwrap();
 
         assert_eq!(cache.len(), 1);
     }
@@ -97,8 +97,8 @@ mod tests {
         let birth1 = AgentBirth::new(2026, 4, 1, 12, 0, 0).unwrap();
         let birth2 = AgentBirth::new(2026, 4, 2, 12, 0, 0).unwrap();
 
-        let _id1 = cache.next_id(birth1, SnowflakeType::Message);
-        let _id2 = cache.next_id(birth2, SnowflakeType::Message);
+        let _id1 = cache.next_id(birth1, SnowflakeType::Message).unwrap();
+        let _id2 = cache.next_id(birth2, SnowflakeType::Message).unwrap();
 
         assert_eq!(cache.len(), 2);
     }

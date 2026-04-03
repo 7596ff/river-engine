@@ -15,7 +15,7 @@
 //! // Embedded generation
 //! let cache = GeneratorCache::new();
 //! let birth = AgentBirth::new(2026, 4, 1, 12, 0, 0).unwrap();
-//! let id = cache.next_id(birth, SnowflakeType::Message);
+//! let id = cache.next_id(birth, SnowflakeType::Message).unwrap();
 //! ```
 
 mod cache;
@@ -42,4 +42,7 @@ pub enum SnowflakeError {
 
     #[error("invalid type: {0}")]
     InvalidType(String),
+
+    #[error("sequence overflow: too many IDs generated in same microsecond")]
+    SequenceOverflow,
 }
