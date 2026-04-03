@@ -128,3 +128,196 @@ pub fn supported_features() -> Vec<FeatureId> {
         FeatureId::TypingIndicator,
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_state() -> AdapterState {
+        AdapterState::new(
+            "test-dyad".to_string(),
+            "tui".to_string(),
+            "test-channel".to_string(),
+        )
+    }
+
+    #[test]
+    fn test_adapter_state_new_initialization() {
+        let state = create_test_state();
+
+        assert_eq!(state.dyad, "test-dyad");
+        assert_eq!(state.adapter_type, "tui");
+        assert_eq!(state.channel, "test-channel");
+        assert!(state.worker_endpoint.is_none());
+        assert!(state.messages.is_empty());
+        assert_eq!(state.conversation_scroll, 0);
+        assert_eq!(state.left_lines_read, 0);
+        assert_eq!(state.right_lines_read, 0);
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn test_add_user_message_returns_unique_ids() {
+        let mut state = create_test_state();
+
+        let id1 = state.add_user_message("Hello");
+        let id2 = state.add_user_message("World");
+
+        assert_ne!(id1, id2);
+        assert_eq!(state.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_add_user_message_resets_scroll() {
+        let mut state = create_test_state();
+        state.conversation_scroll = 10;
+
+        state.add_user_message("Test message");
+
+        assert_eq!(state.conversation_scroll, 0);
+    }
+
+    #[test]
+    fn test_add_user_message_stores_content() {
+        let mut state = create_test_state();
+
+        state.add_user_message("Hello, world!");
+
+        match &state.messages[0] {
+            DisplayMessage::User { content, .. } => {
+                assert_eq!(content, "Hello, world!");
+            }
+            _ => panic!("Expected User message"),
+        }
+    }
+
+    #[test]
+    fn test_add_system_message() {
+        let mut state = create_test_state();
+        state.conversation_scroll = 5;
+
+        state.add_system_message("System notification");
+
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.conversation_scroll, 0);
+
+        match &state.messages[0] {
+            DisplayMessage::System { content, .. } => {
+                assert_eq!(content, "System notification");
+            }
+            _ => panic!("Expected System message"),
+        }
+    }
+
+    #[test]
+    fn test_add_context_entry_left_side() {
+        let mut state = create_test_state();
+        let entry = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some("Left context".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        state.add_context_entry("left", entry);
+
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.left_lines_read, 1);
+        assert_eq!(state.right_lines_read, 0);
+
+        match &state.messages[0] {
+            DisplayMessage::Context { side, entry, .. } => {
+                assert_eq!(side, "left");
+                assert_eq!(entry.content, Some("Left context".to_string()));
+            }
+            _ => panic!("Expected Context message"),
+        }
+    }
+
+    #[test]
+    fn test_add_context_entry_right_side() {
+        let mut state = create_test_state();
+        let entry = OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some("Right context".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        state.add_context_entry("right", entry);
+
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.left_lines_read, 0);
+        assert_eq!(state.right_lines_read, 1);
+
+        match &state.messages[0] {
+            DisplayMessage::Context { side, .. } => {
+                assert_eq!(side, "right");
+            }
+            _ => panic!("Expected Context message"),
+        }
+    }
+
+    #[test]
+    fn test_add_context_entry_unknown_side() {
+        let mut state = create_test_state();
+        let entry = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some("Unknown side".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        state.add_context_entry("unknown", entry);
+
+        // Should still add message but not increment counters
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.left_lines_read, 0);
+        assert_eq!(state.right_lines_read, 0);
+    }
+
+    #[test]
+    fn test_context_lines_read() {
+        let mut state = create_test_state();
+        state.left_lines_read = 5;
+        state.right_lines_read = 3;
+
+        assert_eq!(state.context_lines_read("left"), 5);
+        assert_eq!(state.context_lines_read("right"), 3);
+        assert_eq!(state.context_lines_read("unknown"), 0);
+    }
+
+    #[test]
+    fn test_supported_features() {
+        let features = supported_features();
+
+        assert_eq!(features.len(), 7);
+        assert!(features.contains(&FeatureId::SendMessage));
+        assert!(features.contains(&FeatureId::ReceiveMessage));
+        assert!(features.contains(&FeatureId::EditMessage));
+        assert!(features.contains(&FeatureId::DeleteMessage));
+        assert!(features.contains(&FeatureId::ReadHistory));
+        assert!(features.contains(&FeatureId::AddReaction));
+        assert!(features.contains(&FeatureId::TypingIndicator));
+    }
+
+    #[test]
+    fn test_generate_message_id_uniqueness() {
+        let mut state = create_test_state();
+
+        let ids: Vec<String> = (0..100).map(|_| state.generate_message_id()).collect();
+
+        // Check all IDs are unique
+        let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique_ids.len(), ids.len());
+    }
+
+    #[test]
+    fn test_generate_message_id_not_empty() {
+        let mut state = create_test_state();
+
+        let id = state.generate_message_id();
+
+        assert!(!id.is_empty());
+    }
+}
