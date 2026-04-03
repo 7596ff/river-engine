@@ -39,37 +39,95 @@ impl DiscordClient {
             ),
         );
 
-        let mut shard = Shard::new(ShardId::ONE, config.token.clone(), intents);
-        let http = Arc::new(HttpClient::new(config.token));
+        let http = Arc::new(HttpClient::new(config.token.clone()));
         let (event_tx, event_rx) = mpsc::channel::<InboundEvent>(256);
         let connected = Arc::new(RwLock::new(true));
 
-        // Spawn gateway event loop
+        // Spawn gateway event loop with reconnection
         let connected_clone = connected.clone();
         let adapter_name_clone = adapter_name.clone();
+        let token = config.token.clone();
 
         tokio::spawn(async move {
             tracing::info!("Starting Discord gateway event loop");
 
-            while let Some(event) = shard.next_event(twilight_gateway::EventTypeFlags::all()).await
-            {
-                match event {
-                    Ok(event) => {
-                        if let Some(inbound) = convert_event(&adapter_name_clone, event) {
-                            if event_tx.send(inbound).await.is_err() {
-                                tracing::warn!("Event channel closed");
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Gateway error: {:?}", e);
-                        // Mark as disconnected on error
-                        let mut c = connected_clone.write().await;
-                        *c = false;
+            let mut backoff = std::time::Duration::from_secs(1);
+            let max_backoff = std::time::Duration::from_secs(60);
+            let mut disconnect_time: Option<std::time::Instant> = None;
+
+            loop {
+                // Create a new shard for each connection attempt
+                let mut shard = Shard::new(ShardId::ONE, token.clone(), intents);
+
+                // If we're reconnecting, emit ConnectionRestored
+                if let Some(disconnected_at) = disconnect_time.take() {
+                    let downtime_secs = disconnected_at.elapsed().as_secs();
+                    let event = InboundEvent {
+                        adapter: adapter_name_clone.clone(),
+                        metadata: EventMetadata::ConnectionRestored {
+                            downtime_seconds: downtime_secs,
+                        },
+                    };
+                    if event_tx.send(event).await.is_err() {
+                        tracing::warn!("Event channel closed during reconnect");
                         break;
                     }
+                    tracing::info!("Gateway reconnected after {}s downtime", downtime_secs);
                 }
+
+                // Reset backoff on successful connection
+                backoff = std::time::Duration::from_secs(1);
+                {
+                    let mut c = connected_clone.write().await;
+                    *c = true;
+                }
+
+                // Process events until error
+                while let Some(event) =
+                    shard.next_event(twilight_gateway::EventTypeFlags::all()).await
+                {
+                    match event {
+                        Ok(event) => {
+                            if let Some(inbound) = convert_event(&adapter_name_clone, event) {
+                                if event_tx.send(inbound).await.is_err() {
+                                    tracing::warn!("Event channel closed");
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Gateway error: {:?}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Mark as disconnected
+                {
+                    let mut c = connected_clone.write().await;
+                    *c = false;
+                }
+
+                // Record disconnect time for downtime calculation
+                disconnect_time = Some(std::time::Instant::now());
+
+                // Send ConnectionLost event
+                let event = InboundEvent {
+                    adapter: adapter_name_clone.clone(),
+                    metadata: EventMetadata::ConnectionLost {
+                        reason: "gateway disconnected".into(),
+                        reconnecting: true,
+                    },
+                };
+                if event_tx.send(event).await.is_err() {
+                    tracing::warn!("Event channel closed");
+                    break;
+                }
+
+                // Exponential backoff before reconnect
+                tracing::info!("Reconnecting in {:?}", backoff);
+                tokio::time::sleep(backoff).await;
+                backoff = std::cmp::min(backoff * 2, max_backoff);
             }
 
             tracing::info!("Gateway event loop ended");
