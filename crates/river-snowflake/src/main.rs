@@ -34,7 +34,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Snowflake server listening on {}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    eprintln!("Snowflake server shut down gracefully");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            eprintln!("\nReceived Ctrl+C, shutting down...");
+        }
+        _ = terminate => {
+            eprintln!("\nReceived SIGTERM, shutting down...");
+        }
+    }
 }
