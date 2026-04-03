@@ -264,3 +264,166 @@ impl Store {
         Ok((sources as usize, chunks as usize))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_db_path() -> String {
+        format!("/tmp/river_embed_test_{}.db", rand::random::<u64>())
+    }
+
+    #[test]
+    fn test_store_open_and_schema() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 384).expect("Failed to open store");
+
+        // Verify we can get counts
+        let (sources, chunks) = store.counts().expect("Failed to get counts");
+        assert_eq!(sources, 0);
+        assert_eq!(chunks, 0);
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_insert_and_search() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        store.upsert_source("test.md", "hash123").expect("Failed to upsert source");
+
+        let embedding = vec![1.0, 0.0, 0.0];
+        store.insert_chunk("chunk1", "test.md", 1, 10, "Test content", &embedding)
+            .expect("Failed to insert chunk");
+
+        let query = vec![1.0, 0.0, 0.0];
+        let results = store.search(&query, 10, 0).expect("Failed to search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "chunk1");
+        assert_eq!(results[0].text, "Test content");
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_foreign_key_cascade() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        store.upsert_source("test.md", "hash123").expect("Failed to upsert source");
+
+        let embedding = vec![1.0, 0.0, 0.0];
+        store.insert_chunk("chunk1", "test.md", 1, 10, "Content 1", &embedding)
+            .expect("Failed to insert chunk 1");
+        store.insert_chunk("chunk2", "test.md", 11, 20, "Content 2", &embedding)
+            .expect("Failed to insert chunk 2");
+
+        let (_, chunks_before) = store.counts().expect("Failed to get counts");
+        assert_eq!(chunks_before, 2);
+
+        // Delete source - should cascade to chunks
+        let deleted = store.delete_source("test.md").expect("Failed to delete source");
+        assert_eq!(deleted, 2);
+
+        let (sources, chunks_after) = store.counts().expect("Failed to get counts");
+        assert_eq!(sources, 0);
+        assert_eq!(chunks_after, 0);
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_needs_update() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        // Initially needs update
+        assert!(store.needs_update("test.md", "hash1").expect("Failed to check"));
+
+        store.upsert_source("test.md", "hash1").expect("Failed to upsert");
+
+        // Same hash - no update needed
+        assert!(!store.needs_update("test.md", "hash1").expect("Failed to check"));
+
+        // Different hash - needs update
+        assert!(store.needs_update("test.md", "hash2").expect("Failed to check"));
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_dimension_mismatch() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        store.upsert_source("test.md", "hash123").expect("Failed to upsert source");
+
+        // Wrong dimension
+        let embedding = vec![1.0, 0.0]; // Only 2 dimensions, expected 3
+        let result = store.insert_chunk("chunk1", "test.md", 1, 10, "Test", &embedding);
+
+        assert!(matches!(result, Err(StoreError::DimensionMismatch { expected: 3, actual: 2 })));
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_search_ordering() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        store.upsert_source("test.md", "hash123").expect("Failed to upsert source");
+
+        // Insert chunks with different embeddings
+        store.insert_chunk("chunk1", "test.md", 1, 10, "Exact match", &[1.0, 0.0, 0.0])
+            .expect("Failed to insert");
+        store.insert_chunk("chunk2", "test.md", 11, 20, "Partial match", &[0.7, 0.7, 0.0])
+            .expect("Failed to insert");
+        store.insert_chunk("chunk3", "test.md", 21, 30, "No match", &[0.0, 0.0, 1.0])
+            .expect("Failed to insert");
+
+        let query = vec![1.0, 0.0, 0.0];
+        let results = store.search(&query, 10, 0).expect("Failed to search");
+
+        assert_eq!(results.len(), 3);
+        // First result should be exact match (lowest distance)
+        assert_eq!(results[0].id, "chunk1");
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_search_with_offset() {
+        let path = temp_db_path();
+        let store = Store::open(&path, 3).expect("Failed to open store");
+
+        store.upsert_source("test.md", "hash123").expect("Failed to upsert source");
+
+        for i in 0..5 {
+            store.insert_chunk(
+                &format!("chunk{}", i),
+                "test.md",
+                i * 10,
+                (i + 1) * 10,
+                &format!("Content {}", i),
+                &[1.0 - (i as f32 * 0.1), 0.0, 0.0],
+            ).expect("Failed to insert");
+        }
+
+        // Get first 2
+        let results = store.search(&[1.0, 0.0, 0.0], 2, 0).expect("Failed to search");
+        assert_eq!(results.len(), 2);
+
+        // Get next 2 (offset 2)
+        let results_offset = store.search(&[1.0, 0.0, 0.0], 2, 2).expect("Failed to search");
+        assert_eq!(results_offset.len(), 2);
+
+        // They should be different
+        assert_ne!(results[0].id, results_offset[0].id);
+
+        fs::remove_file(&path).ok();
+    }
+}
