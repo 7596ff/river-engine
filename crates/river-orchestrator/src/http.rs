@@ -12,7 +12,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use river_adapter::{Baton, FeatureId, Ground, Side};
+use river_adapter::FeatureId;
+use river_protocol::{Baton, Ground, Side};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
