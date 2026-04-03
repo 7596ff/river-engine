@@ -2,7 +2,7 @@
 
 use crate::config::WorkerConfig;
 use crate::llm::{get_tool_definitions, LlmClient, LlmContent};
-use crate::persistence::{append_to_context, clear_context, load_context};
+use crate::persistence::{append_to_context, clear_context, load_context, save_context};
 use crate::state::SharedState;
 use crate::tools::{execute_tool, ToolResult};
 use river_adapter::Side;
@@ -207,6 +207,7 @@ pub async fn run_loop(
                 let mut should_sleep = None;
                 let mut summary_text = None;
                 let mut new_baton = None;
+                let mut channel_switched = false;
 
                 for call in &calls {
                     let result = execute_tool(call, &state, config, &mut generator, client).await;
@@ -225,6 +226,16 @@ pub async fn run_loop(
                         ToolResult::SwitchRoles { new_baton: b } => {
                             new_baton = Some(b.clone());
                             serde_json::json!({"switched": true, "new_baton": b}).to_string()
+                        }
+                        ToolResult::ChannelSwitch { previous_adapter, previous_channel } => {
+                            channel_switched = true;
+                            serde_json::json!({
+                                "switched": true,
+                                "previous": {
+                                    "adapter": previous_adapter,
+                                    "channel": previous_channel
+                                }
+                            }).to_string()
                         }
                     };
 
@@ -273,6 +284,14 @@ pub async fn run_loop(
 
                     // Wait for wake
                     sleep_until_wake(&state, minutes).await;
+                }
+
+                // Handle channel switch - save reordered context
+                // TODO: Use build_context to properly reorder with new channel at end
+                if channel_switched {
+                    if let Err(e) = save_context(&context_path, &messages) {
+                        tracing::warn!("Failed to save context after channel switch: {}", e);
+                    }
                 }
             }
         }

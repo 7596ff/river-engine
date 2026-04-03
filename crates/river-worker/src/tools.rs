@@ -45,6 +45,7 @@ pub enum ToolResult {
     Summary(String),
     Sleep { minutes: Option<u64> },
     SwitchRoles { new_baton: String },
+    ChannelSwitch { previous_adapter: String, previous_channel: String },
 }
 
 /// Execute a tool call.
@@ -459,13 +460,10 @@ async fn execute_switch_channel(args: &serde_json::Value, state: &SharedState) -
         prev
     };
 
-    ToolResult::Success(serde_json::json!({
-        "switched": true,
-        "previous": {
-            "adapter": previous.adapter,
-            "channel": previous.id
-        }
-    }))
+    ToolResult::ChannelSwitch {
+        previous_adapter: previous.adapter,
+        previous_channel: previous.id,
+    }
 }
 
 fn execute_sleep(args: &serde_json::Value) -> ToolResult {
