@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 use river_protocol::{Attachment, Author};
 
 /// Inbound event from adapter to worker.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct InboundEvent {
     /// Adapter type (e.g., "discord", "slack")
     pub adapter: String,
@@ -43,7 +43,7 @@ pub enum EventType {
 }
 
 /// Data-carrying enum with per-event-type fields.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventMetadata {
     MessageCreate {
