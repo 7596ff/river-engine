@@ -1,10 +1,49 @@
 //! Context assembly logic.
 
-use crate::format::{format_chat_messages, format_embedding, format_flash, format_moment, format_move};
+use chrono::{DateTime, Utc};
+
+use crate::format::{
+    format_chat_messages, format_embedding, format_flash, format_moment, format_move,
+};
+use crate::id::extract_timestamp;
 use crate::openai::OpenAIMessage;
 use crate::request::{ChannelContext, ContextRequest};
 use crate::response::{ContextError, ContextResponse};
 use crate::tokens::estimate_total_tokens;
+use crate::workspace::Flash;
+
+/// Item in the timeline with its timestamp for sorting.
+#[derive(Debug)]
+struct TimelineItem {
+    /// Timestamp in microseconds (from snowflake ID).
+    timestamp: u64,
+    /// The formatted message.
+    message: OpenAIMessage,
+}
+
+impl TimelineItem {
+    fn new(id: &str, message: OpenAIMessage) -> Self {
+        let timestamp = extract_timestamp(id).unwrap_or(0);
+        Self { timestamp, message }
+    }
+}
+
+/// Check if an item has expired based on TTL.
+/// Uses chrono for robust timestamp comparison.
+fn is_expired(expires_at: &str, now: &DateTime<Utc>) -> bool {
+    match expires_at.parse::<DateTime<Utc>>() {
+        Ok(expiry) => expiry <= *now,
+        Err(_) => {
+            // Fallback to string comparison for ISO8601 UTC strings
+            expires_at <= now.to_rfc3339().as_str()
+        }
+    }
+}
+
+/// Parse the current time string into a DateTime.
+fn parse_now(now: &str) -> DateTime<Utc> {
+    now.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now())
+}
 
 /// Build context from request.
 pub fn build_context(request: ContextRequest) -> Result<ContextResponse, ContextError> {
@@ -12,46 +51,57 @@ pub fn build_context(request: ContextRequest) -> Result<ContextResponse, Context
         return Err(ContextError::EmptyChannels);
     }
 
-    let mut messages = Vec::new();
-    let now = &request.now;
+    let now_dt = parse_now(&request.now);
 
-    // Filter flashes by TTL
-    let valid_flashes: Vec<_> = request
+    // Collect all timeline items with timestamps
+    let mut timeline: Vec<TimelineItem> = Vec::new();
+
+    // Filter flashes by TTL and collect with timestamps
+    let valid_flashes: Vec<&Flash> = request
         .flashes
-        .into_iter()
-        .filter(|f| f.expires_at > *now)
+        .iter()
+        .filter(|f| !is_expired(&f.expires_at, &now_dt))
         .collect();
+
+    for flash in &valid_flashes {
+        timeline.push(TimelineItem::new(&flash.id, format_flash(flash)));
+    }
 
     // Process other channels (not current, not last): moments + moves only
     if request.channels.len() > 2 {
         for channel_ctx in &request.channels[2..] {
-            add_channel_summary(&mut messages, channel_ctx);
+            collect_channel_summary(&mut timeline, channel_ctx);
         }
     }
 
     // Process last channel (index 1 if exists): moments + moves + embeddings
     if request.channels.len() > 1 {
         let last_ctx = &request.channels[1];
-        add_channel_summary(&mut messages, last_ctx);
-        add_channel_embeddings(&mut messages, last_ctx, now);
+        collect_channel_summary(&mut timeline, last_ctx);
+        collect_channel_embeddings(&mut timeline, last_ctx, &now_dt);
     }
 
-    // Add LLM history block
+    // Process current channel (index 0): moments + moves + embeddings
+    let current_ctx = &request.channels[0];
+    collect_channel_summary(&mut timeline, current_ctx);
+    collect_channel_embeddings(&mut timeline, current_ctx, &now_dt);
+
+    // Sort timeline by timestamp
+    timeline.sort_by_key(|item| item.timestamp);
+
+    // Build final message list
+    let mut messages: Vec<OpenAIMessage> =
+        timeline.into_iter().map(|item| item.message).collect();
+
+    // Add LLM history block (not sorted, keeps its position)
     messages.extend(request.history);
 
-    // Process current channel (index 0): moments + moves + messages + embeddings
-    let current_ctx = &request.channels[0];
-    add_channel_summary(&mut messages, current_ctx);
-    add_channel_embeddings(&mut messages, current_ctx, now);
-
-    // Add chat messages for current channel
+    // Add chat messages for current channel (at the end, most recent)
     if !current_ctx.messages.is_empty() {
-        messages.push(format_chat_messages(&current_ctx.messages, &current_ctx.channel));
-    }
-
-    // Intersperse flashes (add near end for high priority)
-    for flash in valid_flashes {
-        messages.push(format_flash(&flash));
+        messages.push(format_chat_messages(
+            &current_ctx.messages,
+            &current_ctx.channel,
+        ));
     }
 
     // Estimate tokens
@@ -70,19 +120,29 @@ pub fn build_context(request: ContextRequest) -> Result<ContextResponse, Context
     })
 }
 
-fn add_channel_summary(messages: &mut Vec<OpenAIMessage>, ctx: &ChannelContext) {
+fn collect_channel_summary(timeline: &mut Vec<TimelineItem>, ctx: &ChannelContext) {
     for moment in &ctx.moments {
-        messages.push(format_moment(moment, &ctx.channel));
+        timeline.push(TimelineItem::new(
+            &moment.id,
+            format_moment(moment, &ctx.channel),
+        ));
     }
     for mv in &ctx.moves {
-        messages.push(format_move(mv, &ctx.channel));
+        timeline.push(TimelineItem::new(&mv.id, format_move(mv, &ctx.channel)));
     }
 }
 
-fn add_channel_embeddings(messages: &mut Vec<OpenAIMessage>, ctx: &ChannelContext, now: &str) {
+fn collect_channel_embeddings(
+    timeline: &mut Vec<TimelineItem>,
+    ctx: &ChannelContext,
+    now: &DateTime<Utc>,
+) {
     for embedding in &ctx.embeddings {
-        if embedding.expires_at.as_str() > now {
-            messages.push(format_embedding(embedding));
+        if !is_expired(&embedding.expires_at, now) {
+            timeline.push(TimelineItem::new(
+                &embedding.id,
+                format_embedding(embedding),
+            ));
         }
     }
 }
@@ -90,7 +150,7 @@ fn add_channel_embeddings(messages: &mut Vec<OpenAIMessage>, ctx: &ChannelContex
 #[cfg(test)]
 mod tests {
     use super::*;
-    use river_adapter::Channel;
+    use river_protocol::Channel;
 
     #[test]
     fn test_build_context_empty_channels() {
