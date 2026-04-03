@@ -77,3 +77,78 @@ pub fn openapi_json() -> String {
         .to_pretty_json()
         .expect("failed to generate OpenAPI JSON")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_feature_id_serde_roundtrip() {
+        let features = [
+            FeatureId::SendMessage,
+            FeatureId::ReceiveMessage,
+            FeatureId::EditMessage,
+            FeatureId::DeleteMessage,
+            FeatureId::ReadHistory,
+            FeatureId::PinMessage,
+            FeatureId::UnpinMessage,
+            FeatureId::BulkDeleteMessages,
+            FeatureId::AddReaction,
+            FeatureId::RemoveReaction,
+            FeatureId::RemoveAllReactions,
+            FeatureId::Attachments,
+            FeatureId::TypingIndicator,
+            FeatureId::CreateThread,
+            FeatureId::ThreadEvents,
+            FeatureId::CreatePoll,
+            FeatureId::PollVote,
+            FeatureId::PollEvents,
+            FeatureId::VoiceStateEvents,
+            FeatureId::PresenceEvents,
+            FeatureId::MemberEvents,
+            FeatureId::ScheduledEvents,
+            FeatureId::ChannelEvents,
+            FeatureId::ConnectionEvents,
+        ];
+        for feature in features {
+            let json = serde_json::to_string(&feature).unwrap();
+            let parsed: FeatureId = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, feature, "Failed roundtrip for {:?}", feature);
+        }
+    }
+
+    #[test]
+    fn test_feature_id_is_required() {
+        assert!(FeatureId::SendMessage.is_required());
+        assert!(FeatureId::ReceiveMessage.is_required());
+        assert!(!FeatureId::EditMessage.is_required());
+        assert!(!FeatureId::DeleteMessage.is_required());
+        assert!(!FeatureId::AddReaction.is_required());
+        assert!(!FeatureId::ConnectionEvents.is_required());
+    }
+
+    #[test]
+    fn test_feature_id_try_from_valid() {
+        assert_eq!(FeatureId::try_from(0u16), Ok(FeatureId::SendMessage));
+        assert_eq!(FeatureId::try_from(1u16), Ok(FeatureId::ReceiveMessage));
+        assert_eq!(FeatureId::try_from(10u16), Ok(FeatureId::EditMessage));
+        assert_eq!(FeatureId::try_from(20u16), Ok(FeatureId::AddReaction));
+        assert_eq!(FeatureId::try_from(100u16), Ok(FeatureId::VoiceStateEvents));
+        assert_eq!(FeatureId::try_from(900u16), Ok(FeatureId::ConnectionEvents));
+    }
+
+    #[test]
+    fn test_feature_id_try_from_invalid() {
+        assert_eq!(FeatureId::try_from(2u16), Err(2u16));
+        assert_eq!(FeatureId::try_from(99u16), Err(99u16));
+        assert_eq!(FeatureId::try_from(9999u16), Err(9999u16));
+    }
+
+    #[test]
+    fn test_feature_id_u16_values() {
+        assert_eq!(FeatureId::SendMessage as u16, 0);
+        assert_eq!(FeatureId::ReceiveMessage as u16, 1);
+        assert_eq!(FeatureId::EditMessage as u16, 10);
+        assert_eq!(FeatureId::ConnectionEvents as u16, 900);
+    }
+}
