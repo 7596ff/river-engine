@@ -146,6 +146,19 @@ pub async fn run(
                             s.conversation_scroll -= 1;
                         }
                     }
+                    (KeyCode::PageUp, _) => {
+                        let mut s = state.write().await;
+                        let page_size = 10; // Scroll 10 lines at a time
+                        s.conversation_scroll = s
+                            .conversation_scroll
+                            .saturating_add(page_size)
+                            .min(s.messages.len().saturating_sub(1));
+                    }
+                    (KeyCode::PageDown, _) => {
+                        let mut s = state.write().await;
+                        let page_size = 10;
+                        s.conversation_scroll = s.conversation_scroll.saturating_sub(page_size);
+                    }
                     _ => {}
                 }
             }
@@ -451,7 +464,7 @@ fn draw_input(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Type message (Enter to send, Ctrl+C to quit) "),
+                .title(" Type message (Enter=send, Up/Down/PgUp/PgDn=scroll, Ctrl+C=quit) "),
         )
         .wrap(Wrap { trim: false });
 
