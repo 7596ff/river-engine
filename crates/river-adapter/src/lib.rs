@@ -254,4 +254,64 @@ mod tests {
         let parsed: InboundEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, event);
     }
+
+    #[test]
+    fn test_outbound_response_success() {
+        let response = OutboundResponse::success(ResponseData::MessageSent { message_id: "m123".into() });
+        assert!(response.ok);
+        assert!(response.data.is_some());
+        assert!(response.error.is_none());
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""ok":true"#));
+        assert!(json.contains(r#""message_sent""#), "Should use snake_case: {}", json);
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn test_outbound_response_failure() {
+        let response = OutboundResponse::failure(ResponseError::new(ErrorCode::NotFound, "Message not found"));
+        assert!(!response.ok);
+        assert!(response.data.is_none());
+        assert!(response.error.is_some());
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""ok":false"#));
+        assert!(json.contains(r#""not_found""#));
+        assert!(!json.contains(r#""data""#));
+    }
+
+    #[test]
+    fn test_response_data_serde_roundtrip() {
+        let variants = [
+            ResponseData::MessageSent { message_id: "m1".into() },
+            ResponseData::MessageEdited { message_id: "m1".into() },
+            ResponseData::MessageDeleted,
+            ResponseData::MessagesPinned,
+            ResponseData::MessagesUnpinned,
+            ResponseData::MessagesDeleted { count: 5 },
+            ResponseData::ReactionAdded,
+            ResponseData::ReactionRemoved,
+            ResponseData::ReactionsCleared,
+            ResponseData::AttachmentSent { message_id: "m1".into() },
+            ResponseData::TypingStarted,
+            ResponseData::History { messages: vec![HistoryMessage { message_id: "m1".into(), channel: "ch".into(), author: Author { id: "u1".into(), name: "User".into(), bot: false }, content: "Hello".into(), timestamp: "2026-01-01T00:00:00Z".into() }] },
+            ResponseData::ThreadCreated { thread_id: "t1".into() },
+            ResponseData::PollCreated { poll_id: "p1".into() },
+            ResponseData::PollVoted,
+        ];
+        for data in variants {
+            let json = serde_json::to_string(&data).unwrap();
+            let parsed: ResponseData = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, data, "Failed roundtrip for {:?}", data);
+        }
+    }
+
+    #[test]
+    fn test_error_code_serde_roundtrip() {
+        let codes = [ErrorCode::UnsupportedFeature, ErrorCode::InvalidPayload, ErrorCode::PlatformError, ErrorCode::RateLimited, ErrorCode::NotFound, ErrorCode::Unauthorized];
+        for code in codes {
+            let json = serde_json::to_string(&code).unwrap();
+            let parsed: ErrorCode = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, code);
+        }
+    }
 }
