@@ -1,5 +1,7 @@
 //! Embedding client for external model.
 
+use std::time::Duration;
+
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +72,10 @@ struct OpenAiEmbedding {
 impl EmbedClient {
     /// Create a new client with the given configuration.
     pub fn new(config: EmbedModelConfig) -> Self {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
         Self { client, config }
     }
 
