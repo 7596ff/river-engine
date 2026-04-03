@@ -8,6 +8,7 @@ use adapter::AdapterState;
 use clap::Parser;
 use http::router;
 use river_context::OpenAIMessage;
+use river_protocol::{AdapterRegistration, AdapterRegistrationRequest, AdapterRegistrationResponse};
 use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -45,30 +46,6 @@ struct Args {
     workspace: Option<PathBuf>,
 }
 
-/// Registration request to orchestrator.
-#[derive(Debug, serde::Serialize)]
-struct RegistrationRequest {
-    endpoint: String,
-    adapter: AdapterRegistration,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AdapterRegistration {
-    #[serde(rename = "type")]
-    adapter_type: String,
-    dyad: String,
-    features: Vec<u16>,
-}
-
-/// Registration response from orchestrator.
-#[derive(Debug, serde::Deserialize)]
-struct RegistrationResponse {
-    accepted: bool,
-    #[allow(dead_code)]
-    config: serde_json::Value,
-    worker_endpoint: String,
-}
-
 pub type SharedState = Arc<RwLock<AdapterState>>;
 
 #[tokio::main]
@@ -97,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Register with orchestrator
     let client = reqwest::Client::new();
-    let reg_request = RegistrationRequest {
+    let reg_request = AdapterRegistrationRequest {
         endpoint: adapter_endpoint.clone(),
         adapter: AdapterRegistration {
             adapter_type: args.adapter_type.clone(),
@@ -119,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::process::exit(1);
     }
 
-    let registration: RegistrationResponse = response.json().await?;
+    let registration: AdapterRegistrationResponse = response.json().await?;
     if !registration.accepted {
         eprintln!("Registration rejected by orchestrator");
         std::process::exit(1);

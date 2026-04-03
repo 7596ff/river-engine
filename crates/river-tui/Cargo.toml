@@ -9,6 +9,7 @@ description = "Terminal UI for River Engine debugging and local development"
 [dependencies]
 river-adapter = { path = "../river-adapter" }
 river-context = { path = "../river-context" }
+river-protocol = { path = "../river-protocol" }
 river-snowflake = { path = "../river-snowflake" }
 
 tokio = { workspace = true, features = ["sync", "time", "signal"] }
