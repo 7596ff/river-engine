@@ -11,3 +11,5 @@ river-adapter = { path = "../river-adapter" }
 river-protocol = { path = "../river-protocol" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
