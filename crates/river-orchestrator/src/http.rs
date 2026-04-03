@@ -2,7 +2,8 @@
 
 use crate::config::{Config, ModelConfig};
 use crate::model::{ModelSwitchError, ModelSwitchRequest, ModelSwitchResponse};
-use crate::registry::{push_registry, Registry, SharedRegistry};
+use crate::registry::{push_registry, SharedRegistry};
+use river_protocol::Registry;
 use crate::respawn::{OutputAck, RespawnAction, SharedRespawnManager, WorkerOutput};
 use crate::supervisor::{ProcessKey, SharedSupervisor};
 use axum::{

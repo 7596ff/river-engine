@@ -8,6 +8,7 @@ description = "Process supervisor for River Engine"
 
 [dependencies]
 river-adapter = { path = "../river-adapter" }
+river-protocol = { path = "../river-protocol" }
 
 tokio = { workspace = true, features = ["process", "signal", "time"] }
 axum = { workspace = true }

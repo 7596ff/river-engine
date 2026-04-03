@@ -1,51 +1,9 @@
 //! Registry state and push mechanism.
 
-use river_adapter::{Baton, Ground, Side};
-use serde::{Deserialize, Serialize};
+use river_protocol::{Baton, Ground, ProcessEntry, Registry, Side};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-/// Process entry in the registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ProcessEntry {
-    Worker {
-        endpoint: String,
-        dyad: String,
-        side: Side,
-        baton: Baton,
-        model: String,
-        ground: Ground,
-    },
-    Adapter {
-        endpoint: String,
-        #[serde(rename = "type")]
-        adapter_type: String,
-        dyad: String,
-        features: Vec<u16>,
-    },
-    EmbedService {
-        endpoint: String,
-        name: String,
-    },
-}
-
-impl ProcessEntry {
-    pub fn endpoint(&self) -> &str {
-        match self {
-            ProcessEntry::Worker { endpoint, .. } => endpoint,
-            ProcessEntry::Adapter { endpoint, .. } => endpoint,
-            ProcessEntry::EmbedService { endpoint, .. } => endpoint,
-        }
-    }
-}
-
-/// The full registry sent to all processes.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Registry {
-    pub processes: Vec<ProcessEntry>,
-}
 
 /// Key for identifying a worker.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -191,10 +149,7 @@ impl RegistryState {
 
     /// Get partner worker endpoint.
     pub fn get_partner_endpoint(&self, dyad: &str, side: &Side) -> Option<String> {
-        let partner_side = match side {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-        };
+        let partner_side = side.opposite();
         self.get_worker_endpoint(dyad, &partner_side)
     }
 
