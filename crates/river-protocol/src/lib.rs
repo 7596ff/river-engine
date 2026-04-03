@@ -134,4 +134,129 @@ mod tests {
         let parsed: Ground = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, ground);
     }
+
+    #[test]
+    fn test_process_entry_worker_roundtrip() {
+        let entry = ProcessEntry::Worker {
+            endpoint: "http://localhost:3001".to_string(),
+            dyad: "river".to_string(),
+            side: Side::Left,
+            baton: Baton::Actor,
+            model: "gpt-4".to_string(),
+            ground: Ground {
+                name: "Cassie".to_string(),
+                id: "user123".to_string(),
+                channel: Channel {
+                    adapter: "discord".to_string(),
+                    id: "ch123".to_string(),
+                    name: Some("general".to_string()),
+                },
+            },
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ProcessEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn test_process_entry_adapter_roundtrip() {
+        let entry = ProcessEntry::Adapter {
+            endpoint: "http://localhost:3002".to_string(),
+            adapter_type: "discord".to_string(),
+            dyad: "river".to_string(),
+            features: vec![0, 1, 100, 200],
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ProcessEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn test_process_entry_embed_roundtrip() {
+        let entry = ProcessEntry::EmbedService {
+            endpoint: "http://localhost:3003".to_string(),
+            name: "embed-service".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ProcessEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn test_process_entry_tagged_discrimination() {
+        // Verify the JSON has the correct "type" field for tagged enum
+        let worker = ProcessEntry::Worker {
+            endpoint: "http://localhost:3001".to_string(),
+            dyad: "river".to_string(),
+            side: Side::Left,
+            baton: Baton::Actor,
+            model: "gpt-4".to_string(),
+            ground: Ground {
+                name: "Cassie".to_string(),
+                id: "user123".to_string(),
+                channel: Channel {
+                    adapter: "discord".to_string(),
+                    id: "ch123".to_string(),
+                    name: None,
+                },
+            },
+        };
+        let json = serde_json::to_string(&worker).unwrap();
+        assert!(json.contains(r#""type":"worker""#), "JSON should contain type:worker tag: {}", json);
+
+        let adapter = ProcessEntry::Adapter {
+            endpoint: "http://localhost:3002".to_string(),
+            adapter_type: "discord".to_string(),
+            dyad: "river".to_string(),
+            features: vec![0, 1],
+        };
+        let json = serde_json::to_string(&adapter).unwrap();
+        assert!(json.contains(r#""type":"adapter""#), "JSON should contain type:adapter tag: {}", json);
+
+        let embed = ProcessEntry::EmbedService {
+            endpoint: "http://localhost:3003".to_string(),
+            name: "embed".to_string(),
+        };
+        let json = serde_json::to_string(&embed).unwrap();
+        assert!(json.contains(r#""type":"embed_service""#), "JSON should contain type:embed_service tag: {}", json);
+    }
+
+    #[test]
+    fn test_registry_serde_roundtrip() {
+        let registry = Registry {
+            processes: vec![
+                ProcessEntry::Worker {
+                    endpoint: "http://localhost:3001".to_string(),
+                    dyad: "river".to_string(),
+                    side: Side::Left,
+                    baton: Baton::Actor,
+                    model: "gpt-4".to_string(),
+                    ground: Ground {
+                        name: "Cassie".to_string(),
+                        id: "user123".to_string(),
+                        channel: Channel {
+                            adapter: "discord".to_string(),
+                            id: "ch123".to_string(),
+                            name: Some("general".to_string()),
+                        },
+                    },
+                },
+                ProcessEntry::Adapter {
+                    endpoint: "http://localhost:3002".to_string(),
+                    adapter_type: "discord".to_string(),
+                    dyad: "river".to_string(),
+                    features: vec![0, 1],
+                },
+            ],
+        };
+        let json = serde_json::to_string(&registry).unwrap();
+        let parsed: Registry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, registry);
+    }
+
+    #[test]
+    fn test_registry_default() {
+        let registry = Registry::default();
+        assert!(registry.processes.is_empty());
+    }
 }
