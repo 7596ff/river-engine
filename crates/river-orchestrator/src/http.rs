@@ -28,7 +28,7 @@ pub struct AppState {
     pub supervisor: SharedSupervisor,
     pub respawn: SharedRespawnManager,
     pub client: reqwest::Client,
-    pub dyad_locks: Arc<RwLock<HashMap<String, bool>>>,
+    pub dyad_locks: Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     pub orchestrator_url: String,
 }
 
@@ -508,10 +508,18 @@ async fn handle_switch_roles(
     State(state): State<AppState>,
     Json(req): Json<SwitchRolesRequest>,
 ) -> Result<Json<SwitchRolesResponse>, (StatusCode, Json<SwitchRolesError>)> {
-    // Acquire dyad lock
-    {
+    // Get or create the dyad lock
+    let dyad_lock = {
         let mut locks = state.dyad_locks.write().await;
-        if *locks.get(&req.dyad).unwrap_or(&false) {
+        locks.entry(req.dyad.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+
+    // Try to acquire the lock without blocking
+    let _guard = match dyad_lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
             return Err((
                 StatusCode::CONFLICT,
                 Json(SwitchRolesError {
@@ -520,8 +528,7 @@ async fn handle_switch_roles(
                 }),
             ));
         }
-        locks.insert(req.dyad.clone(), true);
-    }
+    };
 
     // Get both worker endpoints
     let (initiator_endpoint, partner_endpoint) = {
@@ -534,7 +541,6 @@ async fn handle_switch_roles(
     let partner_endpoint = match partner_endpoint {
         Some(ep) => ep,
         None => {
-            release_lock(&state, &req.dyad).await;
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(SwitchRolesError {
@@ -548,7 +554,6 @@ async fn handle_switch_roles(
     let initiator_endpoint = match initiator_endpoint {
         Some(ep) => ep,
         None => {
-            release_lock(&state, &req.dyad).await;
             return Err((
                 StatusCode::NOT_FOUND,
                 Json(SwitchRolesError {
@@ -573,7 +578,6 @@ async fn handle_switch_roles(
         PrepareResult::InitiatorPreparedPartnerFailed => {
             // Abort the initiator since partner failed
             send_abort(&state.client, &initiator_endpoint).await;
-            release_lock(&state, &req.dyad).await;
             return Err((
                 StatusCode::CONFLICT,
                 Json(SwitchRolesError {
@@ -585,7 +589,6 @@ async fn handle_switch_roles(
         PrepareResult::PartnerPreparedInitiatorFailed => {
             // Abort the partner since initiator failed
             send_abort(&state.client, &partner_endpoint).await;
-            release_lock(&state, &req.dyad).await;
             return Err((
                 StatusCode::CONFLICT,
                 Json(SwitchRolesError {
@@ -595,7 +598,6 @@ async fn handle_switch_roles(
             ));
         }
         PrepareResult::BothFailed => {
-            release_lock(&state, &req.dyad).await;
             return Err((
                 StatusCode::CONFLICT,
                 Json(SwitchRolesError {
@@ -614,7 +616,6 @@ async fn handle_switch_roles(
     ).await;
 
     if !commit_result {
-        release_lock(&state, &req.dyad).await;
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(SwitchRolesError {
@@ -658,19 +659,13 @@ async fn handle_switch_roles(
     // Push registry
     push_registry_to_all(&state).await;
 
-    // Release lock
-    release_lock(&state, &req.dyad).await;
+    // Lock is automatically released when _guard goes out of scope
 
     Ok(Json(SwitchRolesResponse {
         switched: true,
         your_new_baton,
         partner_new_baton,
     }))
-}
-
-async fn release_lock(state: &AppState, dyad: &str) {
-    let mut locks = state.dyad_locks.write().await;
-    locks.remove(dyad);
 }
 
 /// Result of preparing workers for role switch.
