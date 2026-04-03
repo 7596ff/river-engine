@@ -19,6 +19,9 @@ axum = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 
+[dev-dependencies]
+tower = { workspace = true }
+
 [[bin]]
 name = "river-snowflake"
 required-features = ["server"]
