@@ -173,7 +173,8 @@ async fn tail_context(
 
         let new_entries = match read_context_from_line(&path, lines_read).await {
             Ok(entries) => entries,
-            Err(_) => {
+            Err(e) => {
+                tracing::warn!(side = side, error = %e, "Context read error");
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
             }
