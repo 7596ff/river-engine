@@ -6,8 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use river_context::{build_context, ContextRequest, ChannelContext, OpenAIMessage};
-//! use river_adapter::Channel;
+//! use river_context::{build_context, ContextRequest, ChannelContext, OpenAIMessage, Channel};
 //!
 //! let request = ContextRequest {
 //!     channels: vec![ChannelContext {
