@@ -22,6 +22,12 @@ use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Maximum length for tool call arguments display.
+const TOOL_ARGS_MAX_LEN: usize = 30;
+
+/// Maximum length for tool result content display.
+const TOOL_RESULT_MAX_LEN: usize = 40;
+
 /// Events that trigger UI updates.
 #[derive(Debug)]
 pub enum UiEvent {
@@ -324,7 +330,7 @@ fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::D
         for tc in tool_calls {
             let content_part = format!("{} {}> call {} {}",
                 side_char, prefix, tc.function.name,
-                truncate_str(&tc.function.arguments, 30));
+                truncate_str(&tc.function.arguments, TOOL_ARGS_MAX_LEN));
             let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
 
             items.push(ListItem::new(Line::from(vec![
@@ -346,7 +352,7 @@ fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::D
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(
-                    truncate_str(&tc.function.arguments, 30),
+                    truncate_str(&tc.function.arguments, TOOL_ARGS_MAX_LEN),
                     Style::default().fg(Color::DarkGray),
                 ),
             ])));
@@ -360,7 +366,7 @@ fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::D
         let id_preview_len = 8.min(tool_call_id.len());
         let content_part = format!("{} {}> [{}] {}",
             side_char, prefix, &tool_call_id[..id_preview_len],
-            truncate_str(content, 40));
+            truncate_str(content, TOOL_RESULT_MAX_LEN));
         let padding = if is_right { available.saturating_sub(content_part.len()) } else { 0 };
 
         return vec![ListItem::new(Line::from(vec![
@@ -381,7 +387,7 @@ fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::D
                 format!("[{}] ", &tool_call_id[..id_preview_len]),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::raw(truncate_str(content, 40)),
+            Span::raw(truncate_str(content, TOOL_RESULT_MAX_LEN)),
         ]))];
     }
 
