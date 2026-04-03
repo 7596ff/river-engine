@@ -245,3 +245,92 @@ pub type SharedRegistry = Arc<RwLock<RegistryState>>;
 pub fn new_shared_registry() -> SharedRegistry {
     Arc::new(RwLock::new(RegistryState::new()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use river_protocol::Channel;
+
+    fn test_ground() -> Ground {
+        Ground {
+            name: "Test User".into(),
+            id: "user123".into(),
+            channel: Channel {
+                adapter: "discord".into(),
+                id: "ch123".into(),
+                name: Some("general".into()),
+            },
+        }
+    }
+
+    #[test]
+    fn test_get_worker_baton() {
+        let mut state = RegistryState::new();
+
+        // Initially no worker
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Left), None);
+
+        // Register a worker as Actor
+        state.register_worker(
+            "dyad1".into(),
+            Side::Left,
+            "http://localhost:3001".into(),
+            Baton::Actor,
+            "gpt-4".into(),
+            test_ground(),
+        );
+
+        // Should get Actor baton
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Left), Some(Baton::Actor));
+
+        // Other side still None
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Right), None);
+    }
+
+    #[test]
+    fn test_baton_swap() {
+        let mut state = RegistryState::new();
+        let ground = test_ground();
+
+        // Register both workers
+        state.register_worker(
+            "dyad1".into(),
+            Side::Left,
+            "http://localhost:3001".into(),
+            Baton::Actor,
+            "gpt-4".into(),
+            ground.clone(),
+        );
+        state.register_worker(
+            "dyad1".into(),
+            Side::Right,
+            "http://localhost:3002".into(),
+            Baton::Spectator,
+            "gpt-4".into(),
+            ground,
+        );
+
+        // Verify initial state
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Left), Some(Baton::Actor));
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Right), Some(Baton::Spectator));
+
+        // Swap batons
+        let left_baton = state.get_worker_baton("dyad1", &Side::Left).unwrap();
+        let right_baton = state.get_worker_baton("dyad1", &Side::Right).unwrap();
+
+        state.update_worker_baton("dyad1", &Side::Left, right_baton);
+        state.update_worker_baton("dyad1", &Side::Right, left_baton);
+
+        // Verify swapped state
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Left), Some(Baton::Spectator));
+        assert_eq!(state.get_worker_baton("dyad1", &Side::Right), Some(Baton::Actor));
+    }
+
+    #[test]
+    fn test_update_worker_baton_nonexistent() {
+        let mut state = RegistryState::new();
+
+        // Should return false for nonexistent worker
+        assert!(!state.update_worker_baton("dyad1", &Side::Left, Baton::Actor));
+    }
+}
