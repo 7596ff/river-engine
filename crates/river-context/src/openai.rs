@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// OpenAI-compatible message.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAIMessage {
     pub role: String,
 
@@ -60,7 +60,7 @@ impl OpenAIMessage {
 }
 
 /// Tool call in an assistant message.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -69,7 +69,7 @@ pub struct ToolCall {
 }
 
 /// Function call details.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
