@@ -1,0 +1,21 @@
+[package]
+name = "river-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Process supervisor for River Engine"
+
+[dependencies]
+river-adapter = { path = "../river-adapter" }
+
+tokio = { workspace = true, features = ["process", "signal", "time"] }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tower-http = { version = "0.6", features = ["trace"] }
+regex = "1"

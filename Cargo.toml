@@ -32,3 +32,8 @@ twilight-gateway = "0.16"
 twilight-http = "0.16"
 twilight-model = "0.16"
 twilight-util = { version = "0.16", features = ["builder"] }
+utoipa = { version = "5.0", features = ["preserve_order"] }
+async-trait = "0.1"
+base64 = "0.22"
+ratatui = "0.29"
+crossterm = "0.28"

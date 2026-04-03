@@ -1,0 +1,23 @@
+[package]
+name = "river-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "TUI-based CLI for River Engine debugging and local development"
+
+[dependencies]
+river-adapter = { path = "../river-adapter" }
+river-snowflake = { path = "../river-snowflake" }
+
+tokio = { workspace = true, features = ["sync", "time", "signal"] }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }

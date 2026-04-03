@@ -1,0 +1,23 @@
+[package]
+name = "river-discord"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Discord adapter for River Engine"
+
+[dependencies]
+river-adapter = { path = "../river-adapter" }
+
+tokio = { workspace = true, features = ["sync", "time", "signal"] }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+twilight-gateway = { workspace = true }
+twilight-http = { workspace = true }
+twilight-model = { workspace = true }
+chrono = { workspace = true }

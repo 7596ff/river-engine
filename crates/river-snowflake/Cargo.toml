@@ -1,0 +1,24 @@
+[package]
+name = "river-snowflake"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "128-bit snowflake ID generation for River Engine"
+
+[features]
+default = []
+server = ["dep:axum", "dep:tokio"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+clap = { workspace = true }
+
+[[bin]]
+name = "river-snowflake"
+required-features = ["server"]

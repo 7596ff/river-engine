@@ -1,0 +1,272 @@
+//! Registry state and push mechanism.
+
+use river_adapter::{Baton, Ground, Side};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Process entry in the registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProcessEntry {
+    Worker {
+        endpoint: String,
+        dyad: String,
+        side: Side,
+        baton: Baton,
+        model: String,
+        ground: Ground,
+    },
+    Adapter {
+        endpoint: String,
+        #[serde(rename = "type")]
+        adapter_type: String,
+        dyad: String,
+        features: Vec<u16>,
+    },
+    EmbedService {
+        endpoint: String,
+        name: String,
+    },
+}
+
+impl ProcessEntry {
+    pub fn endpoint(&self) -> &str {
+        match self {
+            ProcessEntry::Worker { endpoint, .. } => endpoint,
+            ProcessEntry::Adapter { endpoint, .. } => endpoint,
+            ProcessEntry::EmbedService { endpoint, .. } => endpoint,
+        }
+    }
+}
+
+/// The full registry sent to all processes.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Registry {
+    pub processes: Vec<ProcessEntry>,
+}
+
+/// Key for identifying a worker.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct WorkerKey {
+    pub dyad: String,
+    pub side: Side,
+}
+
+/// Key for identifying an adapter.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct AdapterKey {
+    pub dyad: String,
+    pub adapter_type: String,
+}
+
+/// Internal registry state.
+#[derive(Debug, Default)]
+pub struct RegistryState {
+    workers: HashMap<WorkerKey, ProcessEntry>,
+    adapters: HashMap<AdapterKey, ProcessEntry>,
+    embed_services: HashMap<String, ProcessEntry>,
+}
+
+impl RegistryState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register or update a worker.
+    pub fn register_worker(
+        &mut self,
+        dyad: String,
+        side: Side,
+        endpoint: String,
+        baton: Baton,
+        model: String,
+        ground: Ground,
+    ) {
+        let key = WorkerKey {
+            dyad: dyad.clone(),
+            side: side.clone(),
+        };
+        let entry = ProcessEntry::Worker {
+            endpoint,
+            dyad,
+            side,
+            baton,
+            model,
+            ground,
+        };
+        self.workers.insert(key, entry);
+    }
+
+    /// Register or update an adapter.
+    pub fn register_adapter(
+        &mut self,
+        dyad: String,
+        adapter_type: String,
+        endpoint: String,
+        features: Vec<u16>,
+    ) {
+        let key = AdapterKey {
+            dyad: dyad.clone(),
+            adapter_type: adapter_type.clone(),
+        };
+        let entry = ProcessEntry::Adapter {
+            endpoint,
+            adapter_type,
+            dyad,
+            features,
+        };
+        self.adapters.insert(key, entry);
+    }
+
+    /// Register or update an embed service.
+    pub fn register_embed(&mut self, name: String, endpoint: String) {
+        let entry = ProcessEntry::EmbedService {
+            endpoint,
+            name: name.clone(),
+        };
+        self.embed_services.insert(name, entry);
+    }
+
+    /// Update a worker's baton.
+    pub fn update_worker_baton(&mut self, dyad: &str, side: &Side, new_baton: Baton) -> bool {
+        let key = WorkerKey {
+            dyad: dyad.to_string(),
+            side: side.clone(),
+        };
+        if let Some(ProcessEntry::Worker { baton, .. }) = self.workers.get_mut(&key) {
+            *baton = new_baton;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update a worker's model.
+    pub fn update_worker_model(&mut self, dyad: &str, side: &Side, new_model: String) -> bool {
+        let key = WorkerKey {
+            dyad: dyad.to_string(),
+            side: side.clone(),
+        };
+        if let Some(ProcessEntry::Worker { model, .. }) = self.workers.get_mut(&key) {
+            *model = new_model;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a worker from registry.
+    pub fn remove_worker(&mut self, dyad: &str, side: &Side) {
+        let key = WorkerKey {
+            dyad: dyad.to_string(),
+            side: side.clone(),
+        };
+        self.workers.remove(&key);
+    }
+
+    /// Remove an adapter from registry.
+    pub fn remove_adapter(&mut self, dyad: &str, adapter_type: &str) {
+        let key = AdapterKey {
+            dyad: dyad.to_string(),
+            adapter_type: adapter_type.to_string(),
+        };
+        self.adapters.remove(&key);
+    }
+
+    /// Get worker endpoint.
+    pub fn get_worker_endpoint(&self, dyad: &str, side: &Side) -> Option<String> {
+        let key = WorkerKey {
+            dyad: dyad.to_string(),
+            side: side.clone(),
+        };
+        self.workers.get(&key).map(|e| e.endpoint().to_string())
+    }
+
+    /// Get partner worker endpoint.
+    pub fn get_partner_endpoint(&self, dyad: &str, side: &Side) -> Option<String> {
+        let partner_side = match side {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        };
+        self.get_worker_endpoint(dyad, &partner_side)
+    }
+
+    /// Get embed service endpoint.
+    pub fn get_embed_endpoint(&self, name: &str) -> Option<String> {
+        self.embed_services.get(name).map(|e| e.endpoint().to_string())
+    }
+
+    /// Build the registry snapshot for pushing.
+    pub fn build_registry(&self) -> Registry {
+        let mut processes = Vec::new();
+        processes.extend(self.workers.values().cloned());
+        processes.extend(self.adapters.values().cloned());
+        processes.extend(self.embed_services.values().cloned());
+        Registry { processes }
+    }
+
+    /// Get all endpoints for pushing.
+    pub fn all_endpoints(&self) -> Vec<String> {
+        let mut endpoints = Vec::new();
+        for entry in self.workers.values() {
+            endpoints.push(entry.endpoint().to_string());
+        }
+        for entry in self.adapters.values() {
+            endpoints.push(entry.endpoint().to_string());
+        }
+        for entry in self.embed_services.values() {
+            endpoints.push(entry.endpoint().to_string());
+        }
+        endpoints
+    }
+
+    /// Get worker count.
+    pub fn worker_count(&self) -> usize {
+        self.workers.len()
+    }
+
+    /// Get adapter count.
+    pub fn adapter_count(&self) -> usize {
+        self.adapters.len()
+    }
+
+    /// Get embed service count.
+    pub fn embed_count(&self) -> usize {
+        self.embed_services.len()
+    }
+}
+
+/// Push registry to all endpoints.
+pub async fn push_registry(
+    client: &reqwest::Client,
+    registry: &Registry,
+    endpoints: &[String],
+) {
+    for endpoint in endpoints {
+        let url = format!("{}/registry", endpoint);
+        let registry_clone = registry.clone();
+        let client_clone = client.clone();
+
+        // Fire and forget - don't wait for responses
+        tokio::spawn(async move {
+            if let Err(e) = client_clone
+                .post(&url)
+                .json(&registry_clone)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                tracing::warn!("Failed to push registry to {}: {}", url, e);
+            }
+        });
+    }
+}
+
+/// Thread-safe registry wrapper.
+pub type SharedRegistry = Arc<RwLock<RegistryState>>;
+
+pub fn new_shared_registry() -> SharedRegistry {
+    Arc::new(RwLock::new(RegistryState::new()))
+}

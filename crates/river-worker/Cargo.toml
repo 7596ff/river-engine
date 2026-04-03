@@ -1,0 +1,26 @@
+[package]
+name = "river-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Worker runtime for River Engine"
+
+[dependencies]
+river-adapter = { path = "../river-adapter" }
+river-context = { path = "../river-context" }
+river-snowflake = { path = "../river-snowflake" }
+
+tokio = { workspace = true, features = ["process", "signal", "time", "sync", "fs"] }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+urlencoding = "2.1"
+
+[dev-dependencies]
+tempfile = "3"

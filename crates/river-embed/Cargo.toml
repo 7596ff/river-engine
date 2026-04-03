@@ -1,0 +1,32 @@
+[package]
+name = "river-embed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Vector search service for River Engine"
+
+[dependencies]
+river-snowflake = { path = "../river-snowflake" }
+
+# Async runtime and HTTP
+tokio = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+
+# Database
+rusqlite = { workspace = true }
+zerocopy = { version = "0.8", features = ["derive"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Utilities
+sha2 = "0.10"
+rand = "0.9"
+futures = "0.3"
+thiserror = { workspace = true }
