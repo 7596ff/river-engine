@@ -4,5 +4,7 @@
 //! It has no dependencies on other river-* crates.
 
 mod identity;
+mod registry;
 
 pub use identity::{Attachment, Author, Baton, Channel, Ground, Side};
+pub use registry::{ProcessEntry, Registry};
