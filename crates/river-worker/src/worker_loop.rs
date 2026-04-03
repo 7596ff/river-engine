@@ -2,7 +2,7 @@
 
 use crate::config::WorkerConfig;
 use crate::llm::{get_tool_definitions, LlmClient, LlmContent};
-use crate::persistence::{append_to_context, load_context};
+use crate::persistence::{append_to_context, clear_context, load_context};
 use crate::state::SharedState;
 use crate::tools::{execute_tool, ToolResult};
 use river_adapter::Side;
@@ -235,6 +235,10 @@ pub async fn run_loop(
 
                 // Handle summary exit
                 if let Some(summary) = summary_text {
+                    // Clear context file - worker is done with this conversation
+                    if let Err(e) = clear_context(&context_path) {
+                        tracing::warn!("Failed to clear context: {}", e);
+                    }
                     return WorkerOutput {
                         dyad: config.dyad.clone(),
                         side: config.side.clone(),
