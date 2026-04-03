@@ -1,5 +1,6 @@
 //! Timestamp extraction from snowflakes.
 
+use crate::snowflake::is_leap_year;
 use crate::Snowflake;
 
 /// Extract ISO8601 timestamp from Snowflake.
@@ -55,10 +56,6 @@ pub fn timestamp_iso8601(id: &Snowflake) -> String {
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
         year, month, day, hour, minute, second, micros
     )
-}
-
-fn is_leap_year(year: u16) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 #[cfg(test)]
