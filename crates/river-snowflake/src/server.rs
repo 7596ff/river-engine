@@ -73,14 +73,11 @@ async fn get_id(
     Path(type_str): Path<String>,
     Query(query): Query<IdQuery>,
 ) -> impl IntoResponse {
-    let Some(snowflake_type) = SnowflakeType::from_str(&type_str) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("invalid type: {}", type_str),
-            }),
-        )
-            .into_response();
+    let snowflake_type: SnowflakeType = match type_str.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() })).into_response();
+        }
     };
 
     let birth = match AgentBirth::try_from_u64(query.birth) {
@@ -106,14 +103,11 @@ async fn post_ids(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchRequest>,
 ) -> impl IntoResponse {
-    let Some(snowflake_type) = SnowflakeType::from_str(&req.snowflake_type) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("invalid type: {}", req.snowflake_type),
-            }),
-        )
-            .into_response();
+    let snowflake_type: SnowflakeType = match req.snowflake_type.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() })).into_response();
+        }
     };
 
     if req.count > 10000 {

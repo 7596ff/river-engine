@@ -1,6 +1,10 @@
 //! Snowflake type identifier enum.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
+
+use crate::SnowflakeError;
 
 /// 8-bit type identifier for snowflake IDs.
 #[repr(u8)]
@@ -47,6 +51,25 @@ impl SnowflakeType {
             Self::Flash => "flash",
             Self::Move => "move",
             Self::Moment => "moment",
+        }
+    }
+}
+
+impl FromStr for SnowflakeType {
+    type Err = SnowflakeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "message" => Ok(Self::Message),
+            "embedding" => Ok(Self::Embedding),
+            "session" => Ok(Self::Session),
+            "subagent" => Ok(Self::Subagent),
+            "tool_call" => Ok(Self::ToolCall),
+            "context" => Ok(Self::Context),
+            "flash" => Ok(Self::Flash),
+            "move" => Ok(Self::Move),
+            "moment" => Ok(Self::Moment),
+            _ => Err(SnowflakeError::InvalidType(s.to_string())),
         }
     }
 }
