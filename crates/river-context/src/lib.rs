@@ -46,5 +46,5 @@ pub use response::{ContextError, ContextResponse};
 pub use tokens::{estimate_message_tokens, estimate_tokens, estimate_total_tokens};
 pub use workspace::{ChatMessage, Embedding, Flash, Moment, Move};
 
-// Re-export types from river-adapter
-pub use river_adapter::{Author, Channel};
+// Re-export types from river-protocol
+pub use river_protocol::{Author, Channel};

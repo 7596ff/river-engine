@@ -8,5 +8,6 @@ description = "Context assembly library for River Engine workers"
 
 [dependencies]
 river-adapter = { path = "../river-adapter" }
+river-protocol = { path = "../river-protocol" }
 serde = { workspace = true }
 serde_json = { workspace = true }
