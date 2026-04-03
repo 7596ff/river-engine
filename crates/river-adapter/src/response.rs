@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::author::Author;
+use river_protocol::Author;
 
 /// Response from adapter execute endpoint.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

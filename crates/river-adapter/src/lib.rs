@@ -28,14 +28,15 @@
 //! assert_eq!(request.feature_id(), FeatureId::SendMessage);
 //! ```
 
-mod author;
 mod error;
 mod event;
 mod feature;
 mod response;
 mod traits;
 
-pub use author::{Attachment, Author, Baton, Channel, Ground, Side};
+// Re-export identity types from river-protocol
+pub use river_protocol::{Attachment, Author, Baton, Channel, Ground, Side};
+
 pub use error::AdapterError;
 pub use event::{EventMetadata, EventType, InboundEvent};
 pub use feature::{FeatureId, OutboundRequest};
@@ -60,7 +61,7 @@ use utoipa::OpenApi;
     ResponseError,
     ErrorCode,
     HistoryMessage,
-    // Supporting
+    // Supporting (from river-protocol)
     Author,
     Channel,
     Attachment,

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::author::{Attachment, Author};
+use river_protocol::{Attachment, Author};
 
 /// Inbound event from adapter to worker.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
