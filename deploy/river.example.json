@@ -19,6 +19,18 @@
       "name": "voyage-3",
       "api_key": "$VOYAGE_API_KEY",
       "dimensions": 1024
+    },
+    "qwen3-4b": {
+      "endpoint": "http://localhost:11434/v1/chat/completions",
+      "name": "qwen3:4b",
+      "api_key": "ollama",
+      "context_limit": 32000
+    },
+    "nomic-embed": {
+      "endpoint": "http://localhost:11434/v1/embeddings",
+      "name": "nomic-embed-text",
+      "api_key": "ollama",
+      "dimensions": 768
     }
   },
 
@@ -31,7 +43,7 @@
       "workspace": "/var/lib/river/workspaces/river",
       "left_model": "claude-sonnet",
       "right_model": "claude-haiku",
-      "left_starts_as": "actor",
+      "initial_actor": "left",
       "ground": {
         "name": "Cassie",
         "id": "123456789",
@@ -44,6 +56,7 @@
         {
           "type": "discord",
           "binary": "/usr/local/bin/river-discord",
+          "side": "left",
           "config": {
             "token": "$DISCORD_TOKEN",
             "guild_id": "1234567890123456789"
