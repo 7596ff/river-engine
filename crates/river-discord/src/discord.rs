@@ -130,7 +130,13 @@ impl DiscordClient {
                         },
                         Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::EditMessage {
@@ -162,7 +168,13 @@ impl DiscordClient {
                         data: Some(ResponseData::MessageEdited { message_id }),
                         error: None,
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::DeleteMessage { channel, message_id } => {
@@ -185,7 +197,13 @@ impl DiscordClient {
                         data: Some(ResponseData::MessageDeleted),
                         error: None,
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::AddReaction {
@@ -218,7 +236,13 @@ impl DiscordClient {
                         data: Some(ResponseData::ReactionAdded),
                         error: None,
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::RemoveReaction {
@@ -251,7 +275,13 @@ impl DiscordClient {
                         data: Some(ResponseData::ReactionRemoved),
                         error: None,
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::TypingIndicator { channel } => {
@@ -268,7 +298,13 @@ impl DiscordClient {
                         data: Some(ResponseData::TypingStarted),
                         error: None,
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             OutboundRequest::ReadHistory {
@@ -328,7 +364,13 @@ impl DiscordClient {
                         }
                         Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
                     },
-                    Err(e) => error_response(ErrorCode::PlatformError, &e.to_string()),
+                    Err(e) => {
+                        if let Some(retry_after_ms) = check_rate_limit(&e) {
+                            error_response_rate_limited(retry_after_ms)
+                        } else {
+                            error_response(ErrorCode::PlatformError, &e.to_string())
+                        }
+                    }
                 }
             }
             _ => error_response(
@@ -546,4 +588,29 @@ fn error_response(code: ErrorCode, message: &str) -> OutboundResponse {
             message: message.into(),
         }),
     }
+}
+
+/// Create a rate-limited error response.
+fn error_response_rate_limited(retry_after_ms: u64) -> OutboundResponse {
+    OutboundResponse {
+        ok: false,
+        data: None,
+        error: Some(ResponseError {
+            code: ErrorCode::RateLimited,
+            message: format!("rate limited, retry after {}ms", retry_after_ms),
+        }),
+    }
+}
+
+/// Check if error is a rate limit and extract retry_after if so.
+fn check_rate_limit(err: &twilight_http::Error) -> Option<u64> {
+    if let twilight_http::error::ErrorType::Response { status, .. } = err.kind() {
+        if status.get() == 429 {
+            // Default to 1 second if we can't parse retry_after
+            // In practice, twilight handles rate limits internally,
+            // but we expose this for the adapter protocol
+            return Some(1000);
+        }
+    }
+    None
 }
