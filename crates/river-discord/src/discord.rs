@@ -51,6 +51,8 @@ impl DiscordClient {
         tokio::spawn(async move {
             tracing::info!("Starting Discord gateway event loop");
 
+            // Backoff warnings are false positives - value is used in sleep()
+            #[allow(unused_assignments)]
             let mut backoff = std::time::Duration::from_secs(1);
             let max_backoff = std::time::Duration::from_secs(60);
             let mut disconnect_time: Option<std::time::Instant> = None;
@@ -127,7 +129,10 @@ impl DiscordClient {
                 // Exponential backoff before reconnect
                 tracing::info!("Reconnecting in {:?}", backoff);
                 tokio::time::sleep(backoff).await;
-                backoff = std::cmp::min(backoff * 2, max_backoff);
+                #[allow(unused_assignments)]
+                {
+                    backoff = std::cmp::min(backoff * 2, max_backoff);
+                }
             }
 
             tracing::info!("Gateway event loop ended");
