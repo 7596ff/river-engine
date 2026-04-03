@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 use river_protocol::Author;
 
 /// Response from adapter execute endpoint.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct OutboundResponse {
     /// Whether the request succeeded.
     pub ok: bool,
@@ -39,7 +39,7 @@ impl OutboundResponse {
 }
 
 /// Response data variants.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseData {
     MessageSent { message_id: String },
@@ -60,7 +60,7 @@ pub enum ResponseData {
 }
 
 /// Message from history.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct HistoryMessage {
     pub message_id: String,
     pub channel: String,
@@ -70,7 +70,7 @@ pub struct HistoryMessage {
 }
 
 /// Error response details.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ResponseError {
     pub code: ErrorCode,
     pub message: String,
