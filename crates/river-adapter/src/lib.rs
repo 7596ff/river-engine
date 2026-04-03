@@ -151,4 +151,55 @@ mod tests {
         assert_eq!(FeatureId::EditMessage as u16, 10);
         assert_eq!(FeatureId::ConnectionEvents as u16, 900);
     }
+
+    #[test]
+    fn test_outbound_request_feature_id_mapping() {
+        let cases = [
+            (OutboundRequest::SendMessage { channel: "ch".into(), content: "hi".into(), reply_to: None }, FeatureId::SendMessage),
+            (OutboundRequest::EditMessage { channel: "ch".into(), message_id: "m1".into(), content: "edited".into() }, FeatureId::EditMessage),
+            (OutboundRequest::DeleteMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::DeleteMessage),
+            (OutboundRequest::ReadHistory { channel: "ch".into(), limit: Some(10), before: None }, FeatureId::ReadHistory),
+            (OutboundRequest::PinMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::PinMessage),
+            (OutboundRequest::UnpinMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::UnpinMessage),
+            (OutboundRequest::BulkDeleteMessages { channel: "ch".into(), message_ids: vec!["m1".into(), "m2".into()] }, FeatureId::BulkDeleteMessages),
+            (OutboundRequest::AddReaction { channel: "ch".into(), message_id: "m1".into(), emoji: "👍".into() }, FeatureId::AddReaction),
+            (OutboundRequest::RemoveReaction { channel: "ch".into(), message_id: "m1".into(), emoji: "👍".into() }, FeatureId::RemoveReaction),
+            (OutboundRequest::RemoveAllReactions { channel: "ch".into(), message_id: "m1".into() }, FeatureId::RemoveAllReactions),
+            (OutboundRequest::SendAttachment { channel: "ch".into(), filename: "file.txt".into(), data: vec![1, 2, 3], content_type: Some("text/plain".into()) }, FeatureId::Attachments),
+            (OutboundRequest::TypingIndicator { channel: "ch".into() }, FeatureId::TypingIndicator),
+            (OutboundRequest::CreateThread { channel: "ch".into(), message_id: "m1".into(), name: "thread".into() }, FeatureId::CreateThread),
+            (OutboundRequest::CreatePoll { channel: "ch".into(), question: "Vote?".into(), options: vec!["Yes".into(), "No".into()], duration_hours: Some(24) }, FeatureId::CreatePoll),
+            (OutboundRequest::PollVote { channel: "ch".into(), poll_id: "p1".into(), option_index: 0 }, FeatureId::PollVote),
+        ];
+        for (request, expected_feature) in cases {
+            assert_eq!(request.feature_id(), expected_feature, "Wrong feature_id for {:?}", request);
+        }
+    }
+
+    #[test]
+    fn test_outbound_request_serde_roundtrip() {
+        let request = OutboundRequest::SendMessage {
+            channel: "general".into(),
+            content: "Hello!".into(),
+            reply_to: Some("msg123".into()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""send_message""#), "Should use snake_case: {}", json);
+        let parsed: OutboundRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, request);
+    }
+
+    #[test]
+    fn test_outbound_request_base64_attachment() {
+        let request = OutboundRequest::SendAttachment {
+            channel: "ch".into(),
+            filename: "test.bin".into(),
+            data: vec![0x48, 0x65, 0x6c, 0x6c, 0x6f], // "Hello" in bytes
+            content_type: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("SGVsbG8="), "Should contain base64 data: {}", json);
+        let parsed: OutboundRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, request);
+    }
 }
