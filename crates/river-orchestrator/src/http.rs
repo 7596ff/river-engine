@@ -144,7 +144,7 @@ pub struct RegistrationError {
 }
 
 /// Switch roles request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SwitchRolesRequest {
     pub dyad: String,
     pub side: Side,
@@ -827,4 +827,62 @@ async fn push_registry_to_all(state: &AppState) {
         (reg.build_registry(), reg.all_endpoints())
     };
     push_registry(&state.client, &registry, &endpoints).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_switch_roles_request_serde() {
+        let req = SwitchRolesRequest {
+            dyad: "test-dyad".into(),
+            side: Side::Left,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("test-dyad"));
+        assert!(json.contains("left"));
+    }
+
+    #[test]
+    fn test_switch_roles_response_serde() {
+        let resp = SwitchRolesResponse {
+            switched: true,
+            your_new_baton: Baton::Spectator,
+            partner_new_baton: Baton::Actor,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""switched":true"#));
+        assert!(json.contains(r#""your_new_baton":"spectator""#));
+        assert!(json.contains(r#""partner_new_baton":"actor""#));
+    }
+
+    #[test]
+    fn test_switch_roles_error_serde() {
+        let err = SwitchRolesError {
+            error: "switch_in_progress".into(),
+            message: Some("Another switch is already in progress".into()),
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("switch_in_progress"));
+        assert!(json.contains("Another switch"));
+
+        // Test without message
+        let err_no_msg = SwitchRolesError {
+            error: "partner_busy".into(),
+            message: None,
+        };
+        let json = serde_json::to_string(&err_no_msg).unwrap();
+        assert!(json.contains("partner_busy"));
+        assert!(!json.contains("message"));
+    }
+
+    #[test]
+    fn test_prepare_result_variants() {
+        // Just verify the enum exists and variants are correct
+        let _both = PrepareResult::BothPrepared;
+        let _init = PrepareResult::InitiatorPreparedPartnerFailed;
+        let _part = PrepareResult::PartnerPreparedInitiatorFailed;
+        let _none = PrepareResult::BothFailed;
+    }
 }
