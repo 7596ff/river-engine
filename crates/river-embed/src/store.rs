@@ -1,12 +1,22 @@
-//! Vector storage using rusqlite.
-//!
-//! This is a simplified implementation that stores vectors as blobs
-//! and computes cosine similarity in Rust. For production, consider
-//! integrating sqlite-vec properly or using a dedicated vector database.
+//! Vector storage using rusqlite with sqlite-vec for efficient vector search.
 
-use rusqlite::{params, Connection};
+use rusqlite::{ffi::sqlite3_auto_extension, params, Connection};
 use std::path::Path;
+use std::sync::Once;
 use zerocopy::IntoBytes;
+
+static SQLITE_VEC_INIT: Once = Once::new();
+
+/// Initialize sqlite-vec extension (called once per process).
+fn init_sqlite_vec() {
+    SQLITE_VEC_INIT.call_once(|| {
+        unsafe {
+            sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+    });
+}
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -64,7 +74,14 @@ pub struct Store {
 impl Store {
     /// Open or create the database.
     pub fn open(path: impl AsRef<Path>, dimensions: usize) -> Result<Self, StoreError> {
+        // Initialize sqlite-vec extension (once per process)
+        init_sqlite_vec();
+
         let conn = Connection::open(path)?;
+
+        // Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
+
         let store = Self { conn, dimensions };
         store.init_schema()?;
         Ok(store)
@@ -92,6 +109,14 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_path);
             "#,
         )?;
+
+        // Create virtual table for vector search
+        let create_vec_table = format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[{}])",
+            self.dimensions
+        );
+        self.conn.execute(&create_vec_table, [])?;
+
         Ok(())
     }
 
@@ -107,14 +132,19 @@ impl Store {
 
     /// Delete all chunks for a source.
     pub fn delete_source(&self, path: &str) -> Result<usize, StoreError> {
-        // Count chunks first
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE source_path = ?",
-            [path],
-            |row| row.get(0),
-        )?;
+        // Get chunk IDs first (for deleting from vec table)
+        let mut stmt = self.conn.prepare("SELECT id FROM chunks WHERE source_path = ?")?;
+        let ids: Vec<String> = stmt
+            .query_map([path], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
 
-        // Delete chunks
+        // Delete from vector table
+        for id in &ids {
+            self.conn.execute("DELETE FROM chunks_vec WHERE id = ?", [id])?;
+        }
+
+        // Delete chunks (cascade will handle this if foreign keys work, but be explicit)
         self.conn
             .execute("DELETE FROM chunks WHERE source_path = ?", [path])?;
 
@@ -122,7 +152,7 @@ impl Store {
         self.conn
             .execute("DELETE FROM sources WHERE path = ?", [path])?;
 
-        Ok(count as usize)
+        Ok(ids.len())
     }
 
     /// Insert or update a source.
@@ -158,15 +188,22 @@ impl Store {
 
         let embedding_bytes = embedding.as_bytes();
 
+        // Insert into main chunks table
         self.conn.execute(
             "INSERT INTO chunks (id, source_path, line_start, line_end, text, embedding) VALUES (?, ?, ?, ?, ?, ?)",
             params![id, source_path, line_start as i64, line_end as i64, text, embedding_bytes],
         )?;
 
+        // Insert into vector table
+        self.conn.execute(
+            "INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)",
+            params![id, embedding_bytes],
+        )?;
+
         Ok(())
     }
 
-    /// Search for similar chunks using cosine similarity.
+    /// Search for similar chunks using sqlite-vec.
     pub fn search(
         &self,
         query_embedding: &[f32],
@@ -180,46 +217,40 @@ impl Store {
             });
         }
 
-        // Load all chunks and compute similarity in Rust
-        // (For production, use a proper vector index)
+        let query_bytes = query_embedding.as_bytes();
+
+        // Use sqlite-vec for KNN search with offset
+        // We fetch limit + offset results and skip the first offset
+        let fetch_count = limit + offset;
+
         let mut stmt = self.conn.prepare(
-            "SELECT id, source_path, line_start, line_end, text, embedding FROM chunks",
+            r#"
+            SELECT v.id, v.distance, c.source_path, c.line_start, c.line_end, c.text
+            FROM chunks_vec v
+            JOIN chunks c ON v.id = c.id
+            WHERE v.embedding MATCH ?
+            ORDER BY v.distance
+            LIMIT ?
+            "#,
         )?;
 
-        let mut hits: Vec<SearchHit> = stmt
-            .query_map([], |row| {
-                let embedding_bytes: Vec<u8> = row.get(5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)? as usize,
-                    row.get::<_, i64>(3)? as usize,
-                    row.get::<_, String>(4)?,
-                    embedding_bytes,
-                ))
+        let hits: Vec<SearchHit> = stmt
+            .query_map(params![query_bytes, fetch_count as i64], |row| {
+                Ok(SearchHit {
+                    id: row.get(0)?,
+                    distance: row.get(1)?,
+                    source_path: row.get(2)?,
+                    line_start: row.get::<_, i64>(3)? as usize,
+                    line_end: row.get::<_, i64>(4)? as usize,
+                    text: row.get(5)?,
+                })
             })?
             .filter_map(|r| r.ok())
-            .map(|(id, source_path, line_start, line_end, text, embedding_bytes)| {
-                let embedding = bytes_to_floats(&embedding_bytes);
-                let distance = cosine_distance(query_embedding, &embedding);
-                SearchHit {
-                    id,
-                    source_path,
-                    line_start,
-                    line_end,
-                    text,
-                    distance,
-                }
-            })
+            .skip(offset)
+            .take(limit)
             .collect();
 
-        // Sort by distance (ascending = most similar first)
-        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-
-        // Apply offset and limit
-        let results = hits.into_iter().skip(offset).take(limit).collect();
-
-        Ok(results)
+        Ok(hits)
     }
 
     /// Get counts for health check.
@@ -232,24 +263,4 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
         Ok((sources as usize, chunks as usize))
     }
-}
-
-fn bytes_to_floats(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap_or([0; 4])))
-        .collect()
-}
-
-fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 1.0;
-    }
-
-    let similarity = dot / (norm_a * norm_b);
-    1.0 - similarity // Convert to distance
 }
