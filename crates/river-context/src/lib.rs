@@ -33,6 +33,7 @@
 
 mod assembly;
 mod format;
+mod id;
 mod openai;
 mod request;
 mod response;
@@ -40,6 +41,7 @@ mod tokens;
 mod workspace;
 
 pub use assembly::build_context;
+pub use id::extract_timestamp;
 pub use openai::{FunctionCall, OpenAIMessage, ToolCall};
 pub use request::{ChannelContext, ContextRequest};
 pub use response::{ContextError, ContextResponse};
