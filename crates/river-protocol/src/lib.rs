@@ -259,4 +259,117 @@ mod tests {
         let registry = Registry::default();
         assert!(registry.processes.is_empty());
     }
+
+    #[test]
+    fn test_model_config_serde_roundtrip() {
+        let config = ModelConfig {
+            endpoint: "https://api.openai.com/v1".to_string(),
+            name: "gpt-4-turbo".to_string(),
+            api_key: "sk-test-key".to_string(),
+            context_limit: 128000,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: ModelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, config);
+    }
+
+    #[test]
+    fn test_worker_registration_serde_roundtrip() {
+        let reg = WorkerRegistration {
+            dyad: "river".to_string(),
+            side: Side::Left,
+        };
+        let json = serde_json::to_string(&reg).unwrap();
+        let parsed: WorkerRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, reg);
+    }
+
+    #[test]
+    fn test_worker_registration_request_serde_roundtrip() {
+        let req = WorkerRegistrationRequest {
+            endpoint: "http://localhost:3001".to_string(),
+            worker: WorkerRegistration {
+                dyad: "river".to_string(),
+                side: Side::Right,
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        // WorkerRegistrationRequest only derives Serialize, test serialization works
+        assert!(json.contains("endpoint"));
+        assert!(json.contains("worker"));
+    }
+
+    #[test]
+    fn test_worker_registration_response_serde_roundtrip() {
+        let json = r#"{
+            "accepted": true,
+            "baton": "actor",
+            "partner_endpoint": "http://localhost:3002",
+            "model": {
+                "endpoint": "https://api.openai.com",
+                "name": "gpt-4",
+                "api_key": "sk-key",
+                "context_limit": 128000
+            },
+            "ground": {
+                "name": "Cassie",
+                "id": "user123",
+                "channel": {
+                    "adapter": "discord",
+                    "id": "ch123",
+                    "name": "general"
+                }
+            },
+            "workspace": "/path/to/workspace",
+            "initial_message": "Hello!",
+            "start_sleeping": false
+        }"#;
+        let response: WorkerRegistrationResponse = serde_json::from_str(json).unwrap();
+        assert!(response.accepted);
+        assert_eq!(response.baton, Baton::Actor);
+        assert_eq!(response.partner_endpoint, Some("http://localhost:3002".to_string()));
+        assert_eq!(response.workspace, "/path/to/workspace");
+    }
+
+    #[test]
+    fn test_adapter_registration_serde_roundtrip() {
+        let reg = AdapterRegistration {
+            adapter_type: "discord".to_string(),
+            dyad: "river".to_string(),
+            features: vec![0, 1, 100, 200, 300],
+        };
+        let json = serde_json::to_string(&reg).unwrap();
+        // Verify the "type" rename works
+        assert!(json.contains(r#""type":"discord""#), "Should rename adapter_type to type: {}", json);
+        let parsed: AdapterRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, reg);
+    }
+
+    #[test]
+    fn test_adapter_registration_request_serde_roundtrip() {
+        let req = AdapterRegistrationRequest {
+            endpoint: "http://localhost:3002".to_string(),
+            adapter: AdapterRegistration {
+                adapter_type: "discord".to_string(),
+                dyad: "river".to_string(),
+                features: vec![0, 1],
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("endpoint"));
+        assert!(json.contains("adapter"));
+    }
+
+    #[test]
+    fn test_adapter_registration_response_serde_roundtrip() {
+        let json = r#"{
+            "accepted": true,
+            "config": {"token": "discord-token", "guild_id": 123456},
+            "worker_endpoint": "http://localhost:3001"
+        }"#;
+        let response: AdapterRegistrationResponse = serde_json::from_str(json).unwrap();
+        assert!(response.accepted);
+        assert_eq!(response.worker_endpoint, "http://localhost:3001");
+        assert!(response.config.is_object());
+    }
 }
