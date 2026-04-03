@@ -145,15 +145,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         discord: discord.clone(),
     });
 
-    // Start event forwarding loop
+    // Start event forwarding loop (no polling delay)
     let discord_clone = discord.clone();
     let worker_endpoint = registration.worker_endpoint.clone();
     let event_task = tokio::spawn(async move {
         let http_client = reqwest::Client::new();
         loop {
-            let events = discord_clone.poll_events().await;
-
-            for event in events {
+            // Wait for events without polling delay
+            if let Some(event) = discord_clone.recv_event().await {
                 if let Err(e) = http_client
                     .post(format!("{}/notify", worker_endpoint))
                     .json(&event)
@@ -163,9 +162,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 {
                     tracing::warn!("Failed to forward event to worker: {}", e);
                 }
+            } else {
+                // Channel closed, exit
+                break;
             }
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     });
 

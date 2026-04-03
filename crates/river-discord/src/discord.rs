@@ -141,7 +141,14 @@ impl DiscordClient {
         })
     }
 
-    /// Poll for new events from the gateway.
+    /// Receive next event from the gateway (blocking).
+    pub async fn recv_event(&self) -> Option<InboundEvent> {
+        let mut rx = self.event_rx.write().await;
+        rx.recv().await
+    }
+
+    /// Poll for new events from the gateway (non-blocking, for compatibility).
+    #[allow(dead_code)]
     pub async fn poll_events(&self) -> Vec<InboundEvent> {
         let mut events = Vec::new();
         let mut rx = self.event_rx.write().await;
