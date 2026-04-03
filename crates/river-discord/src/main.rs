@@ -48,16 +48,12 @@ pub struct DiscordConfig {
 
 /// Shared adapter state (without the DiscordClient to maintain Sync).
 pub struct AdapterState {
-    pub worker_endpoint: Option<String>,
     pub config: Option<DiscordConfig>,
 }
 
 impl AdapterState {
     fn new() -> Self {
-        Self {
-            worker_endpoint: None,
-            config: None,
-        }
+        Self { config: None }
     }
 }
 
@@ -134,11 +130,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         registration.worker_endpoint
     );
 
-    // Store config and worker endpoint
+    // Store config
     {
         let mut s = state.write().await;
         s.config = Some(discord_config.clone());
-        s.worker_endpoint = Some(registration.worker_endpoint.clone());
     }
 
     // Initialize Discord client

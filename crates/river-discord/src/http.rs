@@ -9,54 +9,15 @@ use axum::{
     Json, Router,
 };
 use river_adapter::{Adapter, ErrorCode, OutboundRequest, OutboundResponse, ResponseError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 
 /// Create the HTTP router.
 pub fn router(state: Arc<HttpState>) -> Router {
     Router::new()
-        .route("/start", post(start))
         .route("/execute", post(execute))
         .route("/health", get(health))
         .with_state(state)
-}
-
-/// Start request body.
-#[derive(Debug, Deserialize)]
-pub struct StartRequest {
-    pub worker_endpoint: String,
-}
-
-/// Start response.
-#[derive(Debug, Serialize)]
-pub struct StartResponse {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// POST /start - Bind adapter to worker.
-async fn start(
-    State(state): State<Arc<HttpState>>,
-    Json(request): Json<StartRequest>,
-) -> impl IntoResponse {
-    let mut s = state.state.write().await;
-
-    // Check if already bound
-    if s.worker_endpoint.is_some() {
-        return Json(StartResponse {
-            ok: false,
-            error: Some("already bound to worker".into()),
-        });
-    }
-
-    s.worker_endpoint = Some(request.worker_endpoint.clone());
-    tracing::info!("Bound to worker at {}", request.worker_endpoint);
-
-    Json(StartResponse {
-        ok: true,
-        error: None,
-    })
 }
 
 /// POST /execute - Execute an outbound request.
