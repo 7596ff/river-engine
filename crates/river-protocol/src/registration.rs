@@ -7,21 +7,21 @@ use utoipa::ToSchema;
 // === Worker Registration ===
 
 /// Worker identity for registration.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct WorkerRegistration {
     pub dyad: String,
     pub side: Side,
 }
 
 /// Worker registration request to orchestrator.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct WorkerRegistrationRequest {
     pub endpoint: String,
     pub worker: WorkerRegistration,
 }
 
 /// Worker registration response from orchestrator.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct WorkerRegistrationResponse {
     pub accepted: bool,
     pub baton: Baton,
@@ -36,7 +36,7 @@ pub struct WorkerRegistrationResponse {
 // === Adapter Registration ===
 
 /// Adapter identity for registration.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AdapterRegistration {
     #[serde(rename = "type")]
     pub adapter_type: String,
@@ -45,14 +45,14 @@ pub struct AdapterRegistration {
 }
 
 /// Adapter registration request to orchestrator.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct AdapterRegistrationRequest {
     pub endpoint: String,
     pub adapter: AdapterRegistration,
 }
 
 /// Adapter registration response from orchestrator.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct AdapterRegistrationResponse {
     pub accepted: bool,
     /// Adapter-specific configuration (e.g., Discord token).
