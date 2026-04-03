@@ -102,12 +102,28 @@ pub async fn run(
                             };
 
                             // Send to worker's /notify endpoint
-                            let _ = http_client
+                            let notify_result = http_client
                                 .post(format!("{}/notify", worker_endpoint))
                                 .json(&event)
                                 .timeout(Duration::from_secs(5))
                                 .send()
                                 .await;
+
+                            match notify_result {
+                                Ok(response) => {
+                                    if !response.status().is_success() {
+                                        let mut s = state.write().await;
+                                        s.add_system_message(&format!(
+                                            "Send failed: HTTP {}",
+                                            response.status()
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    let mut s = state.write().await;
+                                    s.add_system_message(&format!("Send failed: {}", e));
+                                }
+                            }
                         }
                     }
                     (KeyCode::Backspace, _) => {
