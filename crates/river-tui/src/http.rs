@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use river_adapter::{ErrorCode, OutboundRequest, OutboundResponse, ResponseData, ResponseError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 /// Combined state for handlers.
@@ -24,50 +24,9 @@ pub struct HttpState {
 pub fn router(state: SharedState, ui_tx: mpsc::Sender<UiEvent>) -> Router {
     let http_state = HttpState { state, ui_tx };
     Router::new()
-        .route("/start", post(start))
         .route("/execute", post(execute))
         .route("/health", get(health))
         .with_state(http_state)
-}
-
-/// Start request body.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct StartRequest {
-    pub worker_endpoint: String,
-}
-
-/// Start response.
-#[derive(Debug, Serialize)]
-pub struct StartResponse {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// POST /start - Bind adapter to worker.
-async fn start(
-    State(state): State<HttpState>,
-    Json(request): Json<StartRequest>,
-) -> impl IntoResponse {
-    let mut s = state.state.write().await;
-
-    if s.worker_endpoint.is_some() {
-        return Json(StartResponse {
-            ok: false,
-            error: Some("already bound to worker".into()),
-        });
-    }
-
-    s.worker_endpoint = Some(request.worker_endpoint.clone());
-    s.add_system_message(&format!("Worker bound: {}", request.worker_endpoint));
-
-    // Notify UI
-    let _ = state.ui_tx.send(UiEvent::Refresh).await;
-
-    Json(StartResponse {
-        ok: true,
-        error: None,
-    })
 }
 
 /// POST /execute - Execute an outbound request.
