@@ -1,0 +1,1478 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "river-adapter",
+    "description": "Types-only library for adapter ↔ worker communication",
+    "contact": {
+      "name": "River Engine Contributors"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Attachment": {
+        "type": "object",
+        "description": "File attachment metadata.",
+        "required": [
+          "id",
+          "filename",
+          "url",
+          "size"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original filename."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL to download the attachment."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size in bytes.",
+            "minimum": 0
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME content type."
+          }
+        }
+      },
+      "Author": {
+        "type": "object",
+        "description": "Message author information.",
+        "required": [
+          "id",
+          "name",
+          "bot"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the author."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "bot": {
+            "type": "boolean",
+            "description": "Whether this is a bot account."
+          }
+        }
+      },
+      "Baton": {
+        "type": "string",
+        "description": "Worker role (actor or spectator).",
+        "enum": [
+          "actor",
+          "spectator"
+        ]
+      },
+      "Channel": {
+        "type": "object",
+        "description": "Communication channel identifier.",
+        "required": [
+          "adapter",
+          "id"
+        ],
+        "properties": {
+          "adapter": {
+            "type": "string",
+            "description": "Adapter type (e.g., \"discord\", \"slack\")."
+          },
+          "id": {
+            "type": "string",
+            "description": "Channel identifier."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable channel name."
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Error codes for adapter responses.",
+        "enum": [
+          "unsupported_feature",
+          "invalid_payload",
+          "platform_error",
+          "rate_limited",
+          "not_found",
+          "unauthorized"
+        ]
+      },
+      "EventMetadata": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "message_create"
+            ],
+            "properties": {
+              "message_create": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "author",
+                  "content",
+                  "message_id",
+                  "timestamp",
+                  "attachments"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "author": {
+                    "$ref": "#/components/schemas/Author"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  },
+                  "reply_to": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Attachment"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "message_update"
+            ],
+            "properties": {
+              "message_update": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "content",
+                  "timestamp"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "message_delete"
+            ],
+            "properties": {
+              "message_delete": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reaction_add"
+            ],
+            "properties": {
+              "reaction_add": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "user_id",
+                  "emoji"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reaction_remove"
+            ],
+            "properties": {
+              "reaction_remove": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "user_id",
+                  "emoji"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "typing_start"
+            ],
+            "properties": {
+              "typing_start": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "user_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "member_join"
+            ],
+            "properties": {
+              "member_join": {
+                "type": "object",
+                "required": [
+                  "user_id",
+                  "username"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "member_leave"
+            ],
+            "properties": {
+              "member_leave": {
+                "type": "object",
+                "required": [
+                  "user_id"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "presence_update"
+            ],
+            "properties": {
+              "presence_update": {
+                "type": "object",
+                "required": [
+                  "user_id",
+                  "status"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "voice_state_update"
+            ],
+            "properties": {
+              "voice_state_update": {
+                "type": "object",
+                "required": [
+                  "user_id"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "channel": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel_create"
+            ],
+            "properties": {
+              "channel_create": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "name"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel_update"
+            ],
+            "properties": {
+              "channel_update": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "name"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel_delete"
+            ],
+            "properties": {
+              "channel_delete": {
+                "type": "object",
+                "required": [
+                  "channel"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "thread_create"
+            ],
+            "properties": {
+              "thread_create": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "parent_channel",
+                  "name"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "parent_channel": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "thread_update"
+            ],
+            "properties": {
+              "thread_update": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "name"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "thread_delete"
+            ],
+            "properties": {
+              "thread_delete": {
+                "type": "object",
+                "required": [
+                  "channel"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "pin_update"
+            ],
+            "properties": {
+              "pin_update": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "pinned"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "pinned": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "poll_vote"
+            ],
+            "properties": {
+              "poll_vote": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "poll_id",
+                  "user_id",
+                  "option_index",
+                  "added"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "poll_id": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "option_index": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "added": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scheduled_event"
+            ],
+            "properties": {
+              "scheduled_event": {
+                "type": "object",
+                "required": [
+                  "event_id",
+                  "name",
+                  "start_time"
+                ],
+                "properties": {
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "start_time": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "connection_lost"
+            ],
+            "properties": {
+              "connection_lost": {
+                "type": "object",
+                "required": [
+                  "reason",
+                  "reconnecting"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "reconnecting": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "connection_restored"
+            ],
+            "properties": {
+              "connection_restored": {
+                "type": "object",
+                "required": [
+                  "downtime_seconds"
+                ],
+                "properties": {
+                  "downtime_seconds": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "unknown"
+            ],
+            "properties": {
+              "unknown": {}
+            }
+          }
+        ],
+        "description": "Data-carrying enum with per-event-type fields."
+      },
+      "EventType": {
+        "type": "string",
+        "description": "Lightweight enum for event type identification.",
+        "enum": [
+          "message_create",
+          "message_update",
+          "message_delete",
+          "reaction_add",
+          "reaction_remove",
+          "typing_start",
+          "member_join",
+          "member_leave",
+          "presence_update",
+          "voice_state_update",
+          "channel_create",
+          "channel_update",
+          "channel_delete",
+          "thread_create",
+          "thread_update",
+          "thread_delete",
+          "pin_update",
+          "poll_vote",
+          "scheduled_event",
+          "connection_lost",
+          "connection_restored",
+          "unknown"
+        ]
+      },
+      "FeatureId": {
+        "type": "string",
+        "description": "Lightweight enum for registration and capability checks.",
+        "enum": [
+          "send_message",
+          "receive_message",
+          "edit_message",
+          "delete_message",
+          "read_history",
+          "pin_message",
+          "unpin_message",
+          "bulk_delete_messages",
+          "add_reaction",
+          "remove_reaction",
+          "remove_all_reactions",
+          "attachments",
+          "typing_indicator",
+          "create_thread",
+          "thread_events",
+          "create_poll",
+          "poll_vote",
+          "poll_events",
+          "voice_state_events",
+          "presence_events",
+          "member_events",
+          "scheduled_events",
+          "channel_events",
+          "connection_events"
+        ]
+      },
+      "Ground": {
+        "type": "object",
+        "description": "Human operator information.",
+        "required": [
+          "name",
+          "id",
+          "channel"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human operator name."
+          },
+          "id": {
+            "type": "string",
+            "description": "Human operator platform ID."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "Channel for reaching the human."
+          }
+        }
+      },
+      "HistoryMessage": {
+        "type": "object",
+        "description": "Message from history.",
+        "required": [
+          "message_id",
+          "channel",
+          "author",
+          "content",
+          "timestamp"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "author": {
+            "$ref": "#/components/schemas/Author"
+          },
+          "content": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        }
+      },
+      "InboundEvent": {
+        "type": "object",
+        "description": "Inbound event from adapter to worker.",
+        "required": [
+          "adapter",
+          "metadata"
+        ],
+        "properties": {
+          "adapter": {
+            "type": "string",
+            "description": "Adapter type (e.g., \"discord\", \"slack\")"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/EventMetadata",
+            "description": "Event-specific metadata"
+          }
+        }
+      },
+      "OutboundRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "send_message"
+            ],
+            "properties": {
+              "send_message": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "content"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "reply_to": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "edit_message"
+            ],
+            "properties": {
+              "edit_message": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "content"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "delete_message"
+            ],
+            "properties": {
+              "delete_message": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "read_history"
+            ],
+            "properties": {
+              "read_history": {
+                "type": "object",
+                "required": [
+                  "channel"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "before": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "pin_message"
+            ],
+            "properties": {
+              "pin_message": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "unpin_message"
+            ],
+            "properties": {
+              "unpin_message": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "bulk_delete_messages"
+            ],
+            "properties": {
+              "bulk_delete_messages": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_ids"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "add_reaction"
+            ],
+            "properties": {
+              "add_reaction": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "emoji"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "remove_reaction"
+            ],
+            "properties": {
+              "remove_reaction": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "emoji"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "remove_all_reactions"
+            ],
+            "properties": {
+              "remove_all_reactions": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "send_attachment"
+            ],
+            "properties": {
+              "send_attachment": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "filename",
+                  "data"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "format": "int32",
+                      "minimum": 0
+                    }
+                  },
+                  "content_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "typing_indicator"
+            ],
+            "properties": {
+              "typing_indicator": {
+                "type": "object",
+                "required": [
+                  "channel"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "create_thread"
+            ],
+            "properties": {
+              "create_thread": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "message_id",
+                  "name"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "message_id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "create_poll"
+            ],
+            "properties": {
+              "create_poll": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "question",
+                  "options"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "duration_hours": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "poll_vote"
+            ],
+            "properties": {
+              "poll_vote": {
+                "type": "object",
+                "required": [
+                  "channel",
+                  "poll_id",
+                  "option_index"
+                ],
+                "properties": {
+                  "channel": {
+                    "type": "string"
+                  },
+                  "poll_id": {
+                    "type": "string"
+                  },
+                  "option_index": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Data-carrying enum with typed payloads for outbound requests."
+      },
+      "OutboundResponse": {
+        "type": "object",
+        "description": "Response from adapter execute endpoint.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Whether the request succeeded."
+          },
+          "data": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseData",
+                "description": "Response data on success."
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseError",
+                "description": "Error details on failure."
+              }
+            ]
+          }
+        }
+      },
+      "ResponseData": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "message_sent"
+            ],
+            "properties": {
+              "message_sent": {
+                "type": "object",
+                "required": [
+                  "message_id"
+                ],
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "message_edited"
+            ],
+            "properties": {
+              "message_edited": {
+                "type": "object",
+                "required": [
+                  "message_id"
+                ],
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "message_deleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "messages_pinned"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "messages_unpinned"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "messages_deleted"
+            ],
+            "properties": {
+              "messages_deleted": {
+                "type": "object",
+                "required": [
+                  "count"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "reaction_added"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "reaction_removed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "reactions_cleared"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "attachment_sent"
+            ],
+            "properties": {
+              "attachment_sent": {
+                "type": "object",
+                "required": [
+                  "message_id"
+                ],
+                "properties": {
+                  "message_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "typing_started"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "history"
+            ],
+            "properties": {
+              "history": {
+                "type": "object",
+                "required": [
+                  "messages"
+                ],
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/HistoryMessage"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "thread_created"
+            ],
+            "properties": {
+              "thread_created": {
+                "type": "object",
+                "required": [
+                  "thread_id"
+                ],
+                "properties": {
+                  "thread_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "poll_created"
+            ],
+            "properties": {
+              "poll_created": {
+                "type": "object",
+                "required": [
+                  "poll_id"
+                ],
+                "properties": {
+                  "poll_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "poll_voted"
+            ]
+          }
+        ],
+        "description": "Response data variants."
+      },
+      "ResponseError": {
+        "type": "object",
+        "description": "Error response details.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Side": {
+        "type": "string",
+        "description": "Fixed position in the dyad.",
+        "enum": [
+          "left",
+          "right"
+        ]
+      }
+    }
+  }
+}

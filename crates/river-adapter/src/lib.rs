@@ -314,4 +314,26 @@ mod tests {
             assert_eq!(parsed, code);
         }
     }
+
+    #[test]
+    fn test_openapi_json_generation() {
+        let json = openapi_json();
+        assert!(json.contains("FeatureId"));
+        assert!(json.contains("OutboundRequest"));
+        assert!(json.contains("InboundEvent"));
+        assert!(json.contains("EventMetadata"));
+        assert!(json.contains("OutboundResponse"));
+        assert!(json.contains("ResponseData"));
+        let _: serde_json::Value = serde_json::from_str(&json).expect("Invalid JSON");
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test -p river-adapter generate_openapi_file -- --ignored
+    fn generate_openapi_file() {
+        let json = openapi_json();
+        std::fs::write(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"),
+            json,
+        ).expect("Failed to write openapi.json");
+    }
 }
