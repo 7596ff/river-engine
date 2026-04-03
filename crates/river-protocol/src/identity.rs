@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Message author information.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Author {
     /// Unique identifier for the author.
     pub id: String,
@@ -26,7 +26,7 @@ pub struct Channel {
 }
 
 /// File attachment metadata.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Attachment {
     /// Unique identifier.
     pub id: String,
@@ -69,7 +69,7 @@ impl Side {
 }
 
 /// Human operator information.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Ground {
     /// Human operator name.
     pub name: String,
