@@ -97,7 +97,7 @@ impl TryFrom<u16> for FeatureId {
 }
 
 /// Data-carrying enum with typed payloads for outbound requests.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OutboundRequest {
     SendMessage {
