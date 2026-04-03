@@ -111,10 +111,6 @@ impl AdapterState {
         self.conversation_scroll = 0;
     }
 
-    pub fn total_context_lines(&self) -> usize {
-        self.left_lines_read + self.right_lines_read
-    }
-
     pub fn generate_message_id(&mut self) -> String {
         self.generator.next(SnowflakeType::Message).to_string()
     }
