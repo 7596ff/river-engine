@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Initialize Discord client
-    let discord = Arc::new(DiscordClient::new(discord_config.clone()).await?);
+    let discord = Arc::new(DiscordClient::new(discord_config.clone(), args.adapter_type.clone()).await?);
 
     // Create HTTP state
     let http_state = Arc::new(HttpState {

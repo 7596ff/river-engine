@@ -1,10 +1,11 @@
 //! Discord gateway client using twilight.
 
 use crate::DiscordConfig;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use river_adapter::{
-    Attachment, Author, ErrorCode, EventMetadata, FeatureId, InboundEvent, OutboundRequest,
-    OutboundResponse, ResponseData, ResponseError,
+    Adapter, AdapterError, Attachment, Author, ErrorCode, EventMetadata, FeatureId, InboundEvent,
+    OutboundRequest, OutboundResponse, ResponseData, ResponseError,
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -19,12 +20,14 @@ pub struct DiscordClient {
     http: Arc<HttpClient>,
     event_rx: Arc<RwLock<mpsc::Receiver<InboundEvent>>>,
     connected: Arc<RwLock<bool>>,
+    adapter_name: String,
 }
 
 impl DiscordClient {
     /// Create a new Discord client.
     pub async fn new(
         config: DiscordConfig,
+        adapter_name: String,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let intents = Intents::from_bits_truncate(
             config.intents.unwrap_or(
@@ -43,7 +46,7 @@ impl DiscordClient {
 
         // Spawn gateway event loop
         let connected_clone = connected.clone();
-        let adapter_name = "discord".to_string();
+        let adapter_name_clone = adapter_name.clone();
 
         tokio::spawn(async move {
             tracing::info!("Starting Discord gateway event loop");
@@ -52,7 +55,7 @@ impl DiscordClient {
             {
                 match event {
                     Ok(event) => {
-                        if let Some(inbound) = convert_event(&adapter_name, event) {
+                        if let Some(inbound) = convert_event(&adapter_name_clone, event) {
                             if event_tx.send(inbound).await.is_err() {
                                 tracing::warn!("Event channel closed");
                                 break;
@@ -76,6 +79,7 @@ impl DiscordClient {
             http,
             event_rx: Arc::new(RwLock::new(event_rx)),
             connected,
+            adapter_name,
         })
     }
 
@@ -92,8 +96,8 @@ impl DiscordClient {
         events
     }
 
-    /// Execute an outbound request.
-    pub async fn execute(&self, request: OutboundRequest) -> OutboundResponse {
+    /// Execute an outbound request (internal implementation).
+    async fn execute_impl(&self, request: OutboundRequest) -> OutboundResponse {
         match request {
             OutboundRequest::SendMessage {
                 channel,
@@ -337,6 +341,35 @@ impl DiscordClient {
     /// Check health.
     pub async fn is_healthy(&self) -> bool {
         *self.connected.read().await
+    }
+}
+
+#[async_trait]
+impl Adapter for DiscordClient {
+    fn adapter_type(&self) -> &str {
+        &self.adapter_name
+    }
+
+    fn features(&self) -> Vec<FeatureId> {
+        supported_features()
+    }
+
+    async fn start(&self, _worker_endpoint: String) -> Result<(), AdapterError> {
+        // Event forwarding is started in new(), this is a no-op
+        // The worker_endpoint is provided during registration
+        Ok(())
+    }
+
+    async fn execute(&self, request: OutboundRequest) -> Result<OutboundResponse, AdapterError> {
+        Ok(self.execute_impl(request).await)
+    }
+
+    async fn health(&self) -> Result<(), AdapterError> {
+        if self.is_healthy().await {
+            Ok(())
+        } else {
+            Err(AdapterError::Connection("websocket disconnected".into()))
+        }
     }
 }
 

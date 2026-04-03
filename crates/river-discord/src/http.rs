@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use river_adapter::OutboundRequest;
+use river_adapter::{Adapter, ErrorCode, OutboundRequest, OutboundResponse, ResponseError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -64,7 +64,17 @@ async fn execute(
     State(state): State<Arc<HttpState>>,
     Json(request): Json<OutboundRequest>,
 ) -> impl IntoResponse {
-    let response = state.discord.execute(request).await;
+    let response = match state.discord.execute(request).await {
+        Ok(r) => r,
+        Err(e) => OutboundResponse {
+            ok: false,
+            data: None,
+            error: Some(ResponseError {
+                code: ErrorCode::PlatformError,
+                message: e.to_string(),
+            }),
+        },
+    };
     (StatusCode::OK, Json(response))
 }
 
