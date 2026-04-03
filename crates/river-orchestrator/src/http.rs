@@ -595,21 +595,35 @@ async fn handle_switch_roles(
         ));
     }
 
-    // Update registry with swapped batons
+    // Update registry with swapped batons - read actual values and swap them
     let (your_new_baton, partner_new_baton) = {
         let mut reg = state.registry.write().await;
-        let partner_side = match req.side {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-        };
+        let partner_side = req.side.opposite();
 
-        // Swap batons
-        reg.update_worker_baton(&req.dyad, &req.side, Baton::Spectator);
-        reg.update_worker_baton(&req.dyad, &partner_side, Baton::Actor);
+        // Get current batons
+        let initiator_baton = reg.get_worker_baton(&req.dyad, &req.side);
+        let partner_baton = reg.get_worker_baton(&req.dyad, &partner_side);
 
-        // The initiator becomes spectator, partner becomes actor
-        // (Assuming initiator was actor requesting the switch)
-        (Baton::Spectator, Baton::Actor)
+        match (initiator_baton, partner_baton) {
+            (Some(init_baton), Some(part_baton)) => {
+                // Swap: initiator gets partner's baton, partner gets initiator's baton
+                let new_initiator_baton = part_baton.clone();
+                let new_partner_baton = init_baton;
+
+                reg.update_worker_baton(&req.dyad, &req.side, new_initiator_baton.clone());
+                reg.update_worker_baton(&req.dyad, &partner_side, new_partner_baton.clone());
+
+                (new_initiator_baton, new_partner_baton)
+            }
+            _ => {
+                // This shouldn't happen if both workers are registered
+                // but handle gracefully by defaulting to previous behavior
+                tracing::warn!("Could not read batons for dyad {}, using default swap", req.dyad);
+                reg.update_worker_baton(&req.dyad, &req.side, Baton::Spectator);
+                reg.update_worker_baton(&req.dyad, &partner_side, Baton::Actor);
+                (Baton::Spectator, Baton::Actor)
+            }
+        }
     };
 
     // Push registry
