@@ -23,3 +23,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 chrono = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
