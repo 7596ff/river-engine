@@ -40,12 +40,7 @@ impl AgentBirth {
             return Err(SnowflakeError::InvalidBirth("second out of range".into()));
         }
 
-        // Pack: [year:12][month:4][day:5][hour:5][minute:6][second:6] = 38 bits
-        // Actually the spec says 36 bits, let's recompute:
-        // year needs 12 bits (0-4095), month 4 bits, day 5 bits, hour 5 bits, min 6 bits, sec 6 bits
-        // = 12 + 4 + 5 + 5 + 6 + 6 = 38 bits
-        // The spec says 36 bits, so maybe year is 10 bits (0-1023 + 2000 offset)?
-        // Let's use year-2000 with 10 bits: supports 2000-3023
+        // Pack: [year_offset:10][month:4][day:5][hour:5][minute:6][second:6] = 36 bits
         let year_offset = (year - 2000) as u64;
 
         let packed = (year_offset << 26)
