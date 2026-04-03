@@ -1,6 +1,6 @@
 //! HTTP server and endpoints.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
@@ -10,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use river_snowflake::{AgentBirth, GeneratorCache};
 
@@ -17,6 +18,9 @@ use crate::embed::EmbedClient;
 use crate::index::IndexError;
 use crate::search::{hit_to_result, CursorManager, SearchResponse};
 use crate::store::Store;
+
+/// Maximum number of results to fetch per search.
+const MAX_SEARCH_RESULTS: usize = 100;
 
 /// Shared application state.
 pub struct AppState {
@@ -84,7 +88,7 @@ async fn handle_index(
     State(state): State<Arc<AppState>>,
     Json(req): Json<IndexRequest>,
 ) -> impl IntoResponse {
-    let result = index_content_async(&state, &req.source, &req.content, state.birth).await;
+    let result = crate::index::index_content(&state, &req.source, &req.content, state.birth).await;
 
     match result {
         Ok((indexed, chunks)) => (
@@ -109,79 +113,11 @@ async fn handle_index(
     }
 }
 
-async fn index_content_async(
-    state: &AppState,
-    source: &str,
-    content: &str,
-    birth: AgentBirth,
-) -> Result<(bool, usize), IndexError> {
-    use crate::chunk::{chunk_markdown, ChunkConfig};
-    use river_snowflake::SnowflakeType;
-    use sha2::{Digest, Sha256};
-
-    if content.trim().is_empty() {
-        return Err(IndexError::EmptyContent);
-    }
-
-    // Hash content
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-
-    // Check if update needed (synchronous db access)
-    let needs_update = {
-        let store = state.store.lock().unwrap();
-        store.needs_update(source, &hash)?
-    };
-
-    if !needs_update {
-        return Ok((false, 0));
-    }
-
-    // Delete existing chunks
-    {
-        let store = state.store.lock().unwrap();
-        store.delete_source(source)?;
-    }
-
-    // Chunk content
-    let config = ChunkConfig::default();
-    let text_chunks = chunk_markdown(content, &config);
-
-    if text_chunks.is_empty() {
-        return Ok((true, 0));
-    }
-
-    // Generate embeddings (async)
-    let texts: Vec<String> = text_chunks.iter().map(|c| c.text.clone()).collect();
-    let embeddings = state.embed_client.embed(&texts).await?;
-
-    // Store source and chunks
-    {
-        let store = state.store.lock().unwrap();
-        store.upsert_source(source, &hash)?;
-
-        for (chunk, embedding) in text_chunks.iter().zip(embeddings.iter()) {
-            let id = state.id_cache.next_id(birth, SnowflakeType::Embedding).unwrap();
-            store.insert_chunk(
-                &id.to_string(),
-                source,
-                chunk.line_start,
-                chunk.line_end,
-                &chunk.text,
-                embedding,
-            )?;
-        }
-    }
-
-    Ok((true, text_chunks.len()))
-}
-
 async fn handle_delete(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> impl IntoResponse {
-    let store = state.store.lock().unwrap();
+    let store = state.store.lock().await;
 
     match store.delete_source(&path) {
         Ok(count) => (
@@ -222,8 +158,8 @@ async fn handle_search(
 
     // Search store
     let hits = {
-        let store = state.store.lock().unwrap();
-        match store.search(&query_embedding, 100, 0) {
+        let store = state.store.lock().await;
+        match store.search(&query_embedding, MAX_SEARCH_RESULTS, 0) {
             Ok(h) => h,
             Err(e) => {
                 return (
@@ -279,7 +215,7 @@ async fn handle_next(
     };
 
     let hits = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.lock().await;
         match store.search(&query_embedding, 1, offset) {
             Ok(h) => h,
             Err(e) => {
@@ -317,7 +253,7 @@ async fn handle_next(
 }
 
 async fn handle_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let store = state.store.lock().unwrap();
+    let store = state.store.lock().await;
 
     match store.counts() {
         Ok((sources, chunks)) => Json(HealthResponse {
