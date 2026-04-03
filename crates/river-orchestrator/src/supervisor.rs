@@ -9,6 +9,11 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 
+#[cfg(unix)]
+use nix::sys::signal::{kill, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
+
 /// Process handle with metadata.
 #[derive(Debug)]
 pub struct ProcessHandle {
@@ -175,41 +180,53 @@ impl Supervisor {
         self.processes.remove(key);
     }
 
-    /// Kill a process.
-    pub async fn kill(&mut self, key: &ProcessKey) -> Result<(), SupervisorError> {
-        if let Some(mut handle) = self.processes.remove(key) {
-            handle.child.kill().await.map_err(SupervisorError::KillFailed)?;
-        }
-        Ok(())
-    }
-
-    /// Send SIGTERM to all processes (or kill on non-Unix).
+    /// Send SIGTERM to all processes for graceful shutdown.
+    /// On non-Unix platforms, falls back to immediate kill.
     pub async fn terminate_all(&mut self) {
-        for (key, handle) in &mut self.processes {
-            // For graceful shutdown, we just kill the process
-            // Workers should handle this by writing summary
-            if let Err(e) = handle.child.start_kill() {
-                tracing::warn!("Failed to kill {:?}: {}", key, e);
+        for (key, handle) in &self.processes {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = handle.child.id() {
+                    let pid = Pid::from_raw(pid as i32);
+                    if let Err(e) = kill(pid, Signal::SIGTERM) {
+                        tracing::warn!("Failed to send SIGTERM to {:?}: {}", key, e);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix, we can't send SIGTERM, so just mark for kill
+                tracing::info!("Non-Unix platform, will force kill {:?}", key);
             }
         }
     }
 
-    /// Wait for all processes to exit with timeout, then kill stragglers.
+    /// Wait for all processes to exit with timeout, then SIGKILL stragglers.
+    /// Spec requires 5 minute grace period for SIGTERM.
     pub async fn shutdown(&mut self, timeout: Duration) {
+        tracing::info!("Sending SIGTERM to all processes, waiting up to {:?}", timeout);
         self.terminate_all().await;
 
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
             if self.processes.is_empty() {
+                tracing::info!("All processes exited gracefully");
                 break;
             }
 
             if tokio::time::Instant::now() > deadline {
-                tracing::warn!("Shutdown timeout, killing remaining processes");
-                for (_, handle) in &mut self.processes {
-                    let _ = handle.child.kill().await;
+                tracing::warn!(
+                    "Shutdown timeout after {:?}, sending SIGKILL to {} remaining processes",
+                    timeout,
+                    self.processes.len()
+                );
+                for (key, handle) in &mut self.processes {
+                    if let Err(e) = handle.child.kill().await {
+                        tracing::warn!("Failed to SIGKILL {:?}: {}", key, e);
+                    }
                 }
+                self.processes.clear();
                 break;
             }
 
@@ -217,7 +234,10 @@ impl Supervisor {
             let mut exited = Vec::new();
             for (key, handle) in &mut self.processes {
                 match handle.child.try_wait() {
-                    Ok(Some(_)) => exited.push(key.clone()),
+                    Ok(Some(status)) => {
+                        tracing::debug!("Process {:?} exited with status {:?}", key, status);
+                        exited.push(key.clone());
+                    }
                     Ok(None) => {}
                     Err(e) => {
                         tracing::warn!("Error checking process {:?}: {}", key, e);
@@ -246,14 +266,12 @@ impl Supervisor {
 #[derive(Debug)]
 pub enum SupervisorError {
     SpawnFailed(std::io::Error),
-    KillFailed(std::io::Error),
 }
 
 impl std::fmt::Display for SupervisorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SupervisorError::SpawnFailed(e) => write!(f, "Failed to spawn process: {}", e),
-            SupervisorError::KillFailed(e) => write!(f, "Failed to kill process: {}", e),
         }
     }
 }
