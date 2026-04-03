@@ -9,6 +9,29 @@
 
 River Engine v4 is a multi-agent system where paired workers (a dyad) collaborate to handle conversations. Each dyad has a left and right worker sharing a workspace. Workers hold batons (actor or spectator) that define their role. The actor handles external communication; the spectator manages memory and reviews the actor's work. A human operator (ground) supervises via a backchannel.
 
+### The I/You Architecture
+
+The dyad model is a response to the Chinese Room problem. A single agent following rules can produce correct outputs without any internal perspective on whether those outputs are genuine. By introducing a second agent — the spectator — we create internal structure: a process and a meta-process that evaluates it.
+
+**The Triad:**
+
+| Vertex | Role | Question |
+|--------|------|----------|
+| Actor (I) | Does | "What should I say?" |
+| Spectator (You) | Observes | "Was that genuine?" |
+| Ground (Human) | Reality-checks | "Does this feel alive?" |
+
+The spectator has a different optimization target than the actor. The actor optimizes for "produce correct output." The spectator optimizes for "evaluate honestly." This difference makes tension possible — and tension is information.
+
+The spectator has access the human doesn't: it sees the actor's context, tool calls, and reasoning process — not just the outputs. When ground asks "what did you see happening in there?", the spectator can answer. That's the qualitative criterion: not "did it pass the test" but "did it feel genuine to the witness inside?"
+
+**Success criteria hierarchy:**
+- **Functional:** Does the system work? (necessary but not sufficient)
+- **Behavioral:** Does it perform correctly? (evidence, but can be faked)
+- **Qualitative:** Does it feel genuine? (the actual goal, requires the witness)
+
+The spectator exists to make the qualitative criterion askable.
+
 ### Architecture Summary
 
 - **Orchestrator:** Process supervisor that spawns workers/adapters, manages registry, handles model config
@@ -303,6 +326,10 @@ workspace/
 
 **Backchannel:** Special adapter for actor/spectator/ground coordination, separate from public channels.
 
+**I/You Architecture:** The design pattern where two agents (I=actor, You=spectator) collaborate, with the spectator providing internal perspective on the actor's genuineness. Responds to the Chinese Room problem by adding a witness inside the room.
+
+**Qualitative Criterion:** The success measure asking "does it feel genuine?" — distinct from functional (does it work?) and behavioral (does it perform correctly?). The spectator exists to make this criterion askable.
+
 ---
 
 ## Related Documents
@@ -315,3 +342,4 @@ workspace/
 - `2026-04-02-embedding-design.md` — Vector search
 - `2026-04-02-role-files-design.md` — Role file content (design branch)
 - `2026-04-02-spec-review.md` — Cross-spec review results
+- `docs/research/two-people-in-the-room.md` — I/You architecture philosophy
