@@ -1,7 +1,7 @@
 //! Search logic and cursor management.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use rand::Rng;
@@ -33,8 +33,9 @@ pub struct Cursor {
 }
 
 /// Cursor manager with expiration.
+#[derive(Clone)]
 pub struct CursorManager {
-    cursors: RwLock<HashMap<String, Cursor>>,
+    cursors: Arc<RwLock<HashMap<String, Cursor>>>,
     ttl: Duration,
 }
 
@@ -42,7 +43,7 @@ impl CursorManager {
     /// Create a new cursor manager.
     pub fn new(ttl: Duration) -> Self {
         Self {
-            cursors: RwLock::new(HashMap::new()),
+            cursors: Arc::new(RwLock::new(HashMap::new())),
             ttl,
         }
     }

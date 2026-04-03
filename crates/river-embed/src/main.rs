@@ -1,9 +1,11 @@
 //! River Embed server binary.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use tokio::net::TcpListener;
+use tokio::signal;
 use tokio::sync::Mutex;
 
 mod chunk;
@@ -102,12 +104,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         birth,
     });
 
+    // Spawn cursor cleanup task
+    {
+        let cursor_manager = state.cursor_manager.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                cursor_manager.cleanup_expired();
+            }
+        });
+    }
+
     // Build router
     let app = http::router(state);
 
     eprintln!("Embed server listening on {}", local_addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    eprintln!("Shutdown signal received");
 }
