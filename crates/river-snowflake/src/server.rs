@@ -83,7 +83,12 @@ async fn get_id(
             .into_response();
     };
 
-    let birth = AgentBirth::from_u64(query.birth);
+    let birth = match AgentBirth::try_from_u64(query.birth) {
+        Ok(b) => b,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() })).into_response();
+        }
+    };
     match state.cache.next_id(birth, snowflake_type) {
         Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
         Err(e) => (
@@ -121,7 +126,12 @@ async fn post_ids(
             .into_response();
     }
 
-    let birth = AgentBirth::from_u64(req.birth);
+    let birth = match AgentBirth::try_from_u64(req.birth) {
+        Ok(b) => b,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e.to_string() })).into_response();
+        }
+    };
     match state.cache.next_ids(birth, snowflake_type, req.count) {
         Ok(ids) => {
             let ids = ids.into_iter().map(|id| id.to_string()).collect();

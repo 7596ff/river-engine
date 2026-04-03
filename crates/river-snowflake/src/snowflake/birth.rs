@@ -118,6 +118,37 @@ impl AgentBirth {
         Self(value)
     }
 
+    /// Create from raw packed value with validation.
+    pub fn try_from_u64(value: u64) -> Result<Self, crate::SnowflakeError> {
+        let birth = Self(value);
+        let year = birth.year();
+        let month = birth.month();
+        let day = birth.day();
+        let hour = birth.hour();
+        let minute = birth.minute();
+        let second = birth.second();
+
+        if year < 2000 || year > 3023 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("year {} out of range (2000-3023)", year)));
+        }
+        if month < 1 || month > 12 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("month {} out of range (1-12)", month)));
+        }
+        if day < 1 || day > 31 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("day {} out of range (1-31)", day)));
+        }
+        if hour > 23 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("hour {} out of range (0-23)", hour)));
+        }
+        if minute > 59 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("minute {} out of range (0-59)", minute)));
+        }
+        if second > 59 {
+            return Err(crate::SnowflakeError::InvalidBirth(format!("second {} out of range (0-59)", second)));
+        }
+        Ok(birth)
+    }
+
     /// Extract year.
     pub fn year(&self) -> u16 {
         ((self.0 >> 26) as u16) + 2000
@@ -216,5 +247,20 @@ mod tests {
     fn test_iso8601() {
         let birth = AgentBirth::new(2026, 4, 1, 12, 30, 45).unwrap();
         assert_eq!(birth.to_iso8601(), "2026-04-01T12:30:45");
+    }
+
+    #[test]
+    fn test_try_from_u64_valid() {
+        let birth = AgentBirth::new(2026, 4, 1, 12, 30, 45).unwrap();
+        let packed = birth.as_u64();
+        let restored = AgentBirth::try_from_u64(packed).unwrap();
+        assert_eq!(birth, restored);
+    }
+
+    #[test]
+    fn test_try_from_u64_invalid_month() {
+        let invalid = 0u64;
+        let result = AgentBirth::try_from_u64(invalid);
+        assert!(result.is_err());
     }
 }
