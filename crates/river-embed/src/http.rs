@@ -162,7 +162,7 @@ async fn index_content_async(
         store.upsert_source(source, &hash)?;
 
         for (chunk, embedding) in text_chunks.iter().zip(embeddings.iter()) {
-            let id = state.id_cache.next_id(birth, SnowflakeType::Embedding);
+            let id = state.id_cache.next_id(birth, SnowflakeType::Embedding).unwrap();
             store.insert_chunk(
                 &id.to_string(),
                 source,
