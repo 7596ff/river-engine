@@ -103,8 +103,8 @@ impl From<serde_json::Error> for ConfigError {
 }
 
 /// Load configuration from file with env var substitution.
-pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
-    let content = std::fs::read_to_string(path)?;
+pub async fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
+    let content = tokio::fs::read_to_string(path).await?;
     let resolved = substitute_env_vars(&content)?;
     let config: Config = serde_json::from_str(&resolved)?;
     validate_config(&config)?;

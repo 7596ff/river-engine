@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load config
     tracing::info!("Loading config from {:?}", args.config);
-    let mut config = load_config(&args.config)?;
+    let mut config = load_config(&args.config).await?;
 
     // Override port if specified
     if let Some(port) = args.port {
