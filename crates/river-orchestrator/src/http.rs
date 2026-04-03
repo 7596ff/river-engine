@@ -566,15 +566,44 @@ async fn handle_switch_roles(
         &partner_endpoint,
     ).await;
 
-    if !prepare_result {
-        release_lock(&state, &req.dyad).await;
-        return Err((
-            StatusCode::CONFLICT,
-            Json(SwitchRolesError {
-                error: "partner_busy".into(),
-                message: Some("Partner worker is mid-operation".into()),
-            }),
-        ));
+    match prepare_result {
+        PrepareResult::BothPrepared => {
+            // Continue to commit phase
+        }
+        PrepareResult::InitiatorPreparedPartnerFailed => {
+            // Abort the initiator since partner failed
+            send_abort(&state.client, &initiator_endpoint).await;
+            release_lock(&state, &req.dyad).await;
+            return Err((
+                StatusCode::CONFLICT,
+                Json(SwitchRolesError {
+                    error: "partner_busy".into(),
+                    message: Some("Partner worker is mid-operation, switch aborted".into()),
+                }),
+            ));
+        }
+        PrepareResult::PartnerPreparedInitiatorFailed => {
+            // Abort the partner since initiator failed
+            send_abort(&state.client, &partner_endpoint).await;
+            release_lock(&state, &req.dyad).await;
+            return Err((
+                StatusCode::CONFLICT,
+                Json(SwitchRolesError {
+                    error: "initiator_busy".into(),
+                    message: Some("Initiator worker is mid-operation, switch aborted".into()),
+                }),
+            ));
+        }
+        PrepareResult::BothFailed => {
+            release_lock(&state, &req.dyad).await;
+            return Err((
+                StatusCode::CONFLICT,
+                Json(SwitchRolesError {
+                    error: "workers_busy".into(),
+                    message: Some("Both workers are mid-operation".into()),
+                }),
+            ));
+        }
     }
 
     // Phase 2: Commit both workers
@@ -644,9 +673,22 @@ async fn release_lock(state: &AppState, dyad: &str) {
     locks.remove(dyad);
 }
 
-async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) -> bool {
+/// Result of preparing workers for role switch.
+enum PrepareResult {
+    /// Both workers prepared successfully
+    BothPrepared,
+    /// Initiator prepared but partner failed - need to abort initiator
+    InitiatorPreparedPartnerFailed,
+    /// Partner prepared but initiator failed - need to abort partner
+    PartnerPreparedInitiatorFailed,
+    /// Both failed to prepare
+    BothFailed,
+}
+
+async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) -> PrepareResult {
     let prep_body = serde_json::json!({"phase": "prepare"});
 
+    // Prepare initiator first
     let init_result = client
         .post(format!("{}/prepare_switch", initiator))
         .json(&prep_body)
@@ -654,6 +696,9 @@ async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) 
         .send()
         .await;
 
+    let initiator_ok = matches!(&init_result, Ok(r) if r.status().is_success());
+
+    // Prepare partner
     let partner_result = client
         .post(format!("{}/prepare_switch", partner))
         .json(&prep_body)
@@ -661,10 +706,29 @@ async fn prepare_both(client: &reqwest::Client, initiator: &str, partner: &str) 
         .send()
         .await;
 
-    matches!(
-        (init_result, partner_result),
-        (Ok(r1), Ok(r2)) if r1.status().is_success() && r2.status().is_success()
-    )
+    let partner_ok = matches!(&partner_result, Ok(r) if r.status().is_success());
+
+    match (initiator_ok, partner_ok) {
+        (true, true) => PrepareResult::BothPrepared,
+        (true, false) => PrepareResult::InitiatorPreparedPartnerFailed,
+        (false, true) => PrepareResult::PartnerPreparedInitiatorFailed,
+        (false, false) => PrepareResult::BothFailed,
+    }
+}
+
+/// Send abort to a worker that prepared but whose partner failed.
+async fn send_abort(client: &reqwest::Client, endpoint: &str) {
+    let abort_body = serde_json::json!({"phase": "abort"});
+    let result = client
+        .post(format!("{}/abort_switch", endpoint))
+        .json(&abort_body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+
+    if let Err(e) = result {
+        tracing::warn!("Failed to send abort to {}: {}", endpoint, e);
+    }
 }
 
 async fn commit_both(client: &reqwest::Client, initiator: &str, partner: &str) -> bool {
