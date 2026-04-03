@@ -153,6 +153,21 @@ impl RegistryState {
         self.get_worker_endpoint(dyad, &partner_side)
     }
 
+    /// Get worker's current baton.
+    pub fn get_worker_baton(&self, dyad: &str, side: &Side) -> Option<Baton> {
+        let key = WorkerKey {
+            dyad: dyad.to_string(),
+            side: side.clone(),
+        };
+        self.workers.get(&key).and_then(|e| {
+            if let ProcessEntry::Worker { baton, .. } = e {
+                Some(baton.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Get embed service endpoint.
     pub fn get_embed_endpoint(&self, name: &str) -> Option<String> {
         self.embed_services.get(name).map(|e| e.endpoint().to_string())
