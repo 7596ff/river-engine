@@ -1,6 +1,6 @@
 //! Context request types.
 
-use river_adapter::Channel;
+use river_protocol::Channel;
 use serde::{Deserialize, Serialize};
 
 use crate::openai::OpenAIMessage;
@@ -16,6 +16,22 @@ pub struct ChannelContext {
     pub embeddings: Vec<Embedding>,
 }
 
+impl Default for ChannelContext {
+    fn default() -> Self {
+        Self {
+            channel: Channel {
+                adapter: String::new(),
+                id: String::new(),
+                name: None,
+            },
+            moments: Vec::new(),
+            moves: Vec::new(),
+            messages: Vec::new(),
+            embeddings: Vec::new(),
+        }
+    }
+}
+
 /// Request to build context.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContextRequest {
@@ -29,4 +45,16 @@ pub struct ContextRequest {
     pub max_tokens: usize,
     /// Current time for TTL filtering (ISO8601).
     pub now: String,
+}
+
+impl Default for ContextRequest {
+    fn default() -> Self {
+        Self {
+            channels: Vec::new(),
+            flashes: Vec::new(),
+            history: Vec::new(),
+            max_tokens: 8000,
+            now: String::new(),
+        }
+    }
 }
