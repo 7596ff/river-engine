@@ -376,20 +376,60 @@ async fn execute_speak(
         }
     };
 
-    let (current_channel, registry) = {
+    let (current_channel, registry, workspace, dyad, baton) = {
         let s = state.read().await;
-        (s.current_channel.clone(), s.registry.clone())
+        (
+            s.current_channel.clone(),
+            s.registry.clone(),
+            s.workspace.clone(),
+            s.dyad.clone(),
+            s.baton,
+        )
     };
 
     let adapter = args
         .get("adapter")
         .and_then(|v| v.as_str())
         .unwrap_or(&current_channel.adapter);
-    let channel = args
+    let channel_id = args
         .get("channel")
         .and_then(|v| v.as_str())
         .unwrap_or(&current_channel.id);
+    let channel_name = current_channel.name.as_deref();
     let reply_to = args.get("reply_to").and_then(|v| v.as_str()).map(String::from);
+
+    // Check for backchannel special routing
+    if channel_id == "backchannel" || channel_name == Some("backchannel") {
+        use crate::conversation::backchannel_path;
+        use river_protocol::conversation::{Conversation, Line, Message, MessageDirection};
+
+        let id = format!("bc-{}", chrono::Utc::now().timestamp_millis());
+        let msg = Message {
+            direction: MessageDirection::Outgoing,
+            timestamp: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            id: id.clone(),
+            author: river_protocol::Author {
+                name: dyad.clone(),
+                id: format!("{:?}", baton),
+                bot: true,
+            },
+            content: content.to_string(),
+            reactions: vec![],
+        };
+
+        let path = backchannel_path(&workspace);
+        if let Err(e) = Conversation::append_line(&path, &Line::Message(msg)) {
+            return ToolResult::Error(ToolError::SendFailed {
+                reason: format!("Failed to write to backchannel: {}", e),
+            });
+        }
+
+        return ToolResult::Success(serde_json::json!({
+            "message_id": id,
+            "sent": true,
+            "channel": "backchannel"
+        }));
+    }
 
     let endpoint = match registry.adapter_endpoint(adapter) {
         Some(ep) => ep,
@@ -401,7 +441,7 @@ async fn execute_speak(
     };
 
     let request = OutboundRequest::SendMessage {
-        channel: channel.into(),
+        channel: channel_id.into(),
         content: content.into(),
         reply_to,
     };
