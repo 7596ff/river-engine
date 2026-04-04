@@ -12,7 +12,7 @@ use river_adapter::{Baton, Channel, EventMetadata, InboundEvent};
 use river_context::Flash;
 use river_protocol::conversation::{Conversation, Line, Message, MessageDirection};
 use river_protocol::{Author as ProtocolAuthor, Registry};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Build the router.
 pub fn router(state: SharedState) -> Router {
@@ -108,7 +108,11 @@ async fn handle_notify(
     if let Some((channel, message_id)) = extract_channel_info(&event.adapter, &event.metadata) {
         // If sleeping and channel is watched, wake up
         if s.sleeping && s.is_watched(&channel) {
-            tracing::info!("Waking from sleep due to watched channel notification");
+            tracing::info!(
+                channel = %channel.id,
+                message_id = ?message_id,
+                "Waking from sleep due to watched channel notification"
+            );
             s.sleeping = false;
             s.sleep_until = None;
         }

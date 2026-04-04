@@ -618,17 +618,35 @@ async fn execute_create_flash(
 
     let ttl_minutes = args.get("ttl_minutes").and_then(|v| v.as_u64()).unwrap_or(60) as u32;
 
-    let (registry, dyad, side) = {
+    let (registry, dyad, side, partner_endpoint, ground) = {
         let s = state.read().await;
-        (s.registry.clone(), s.dyad.clone(), s.side.clone())
+        (
+            s.registry.clone(),
+            s.dyad.clone(),
+            s.side.clone(),
+            s.partner_endpoint.clone(),
+            s.ground.clone(),
+        )
     };
 
-    let endpoint = match registry.worker_endpoint(target_dyad, &target_side) {
-        Some(ep) => ep.to_string(),
-        None => {
-            return ToolResult::Error(ToolError::TargetNotFound {
-                target: format!("{}:{:?}", target_dyad, target_side),
-            })
+    // Shortcut: if target is our partner, use cached endpoint
+    let endpoint = if target_dyad == dyad && target_side == state.read().await.partner_side() {
+        match partner_endpoint {
+            Some(ep) => ep,
+            None => {
+                return ToolResult::Error(ToolError::TargetNotFound {
+                    target: format!("{}:{:?}", target_dyad, target_side),
+                })
+            }
+        }
+    } else {
+        match registry.worker_endpoint(target_dyad, &target_side) {
+            Some(ep) => ep.to_string(),
+            None => {
+                return ToolResult::Error(ToolError::TargetNotFound {
+                    target: format!("{}:{:?}", target_dyad, target_side),
+                })
+            }
         }
     };
 
@@ -645,8 +663,8 @@ async fn execute_create_flash(
     let now = chrono::Utc::now();
     let expires = now + chrono::Duration::minutes(ttl_minutes as i64);
 
-    // Format sender as "dyad:side"
-    let from = format!("{}:{:?}", dyad, side);
+    // Format sender as "dyad:side (ground_name)"
+    let from = format!("{}:{:?} ({})", dyad, side, ground.name);
 
     let flash = Flash {
         id: id_str.clone(),
@@ -757,6 +775,10 @@ async fn execute_switch_roles(
                 .to_string();
 
             ToolResult::SwitchRoles { new_baton }
+        }
+        Ok(resp) if resp.status().as_u16() == 422 => {
+            let reason = resp.text().await.unwrap_or_else(|_| "unknown".into());
+            ToolResult::Error(ToolError::PartnerRejected { reason })
         }
         Ok(resp) if resp.status() == 409 => ToolResult::Error(ToolError::SwitchInProgress),
         Ok(resp) if resp.status() == 503 => ToolResult::Error(ToolError::PartnerUnreachable),
