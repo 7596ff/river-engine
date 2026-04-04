@@ -8,6 +8,7 @@ use adapter::AdapterState;
 use clap::Parser;
 use http::router;
 use river_context::OpenAIMessage;
+use river_protocol::conversation::Conversation;
 use river_protocol::{AdapterRegistration, AdapterRegistrationRequest, AdapterRegistrationResponse};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -126,6 +127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         axum::serve(listener, app).await.ok();
     });
 
+    // Clone workspace before passing to tailers (we need it for TUI too)
+    let workspace_for_tui = args.workspace.clone();
+
     // Start context tailers for both sides if workspace provided
     if let Some(workspace) = args.workspace {
         // Tail left side
@@ -143,10 +147,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokio::spawn(async move {
             tail_context(right_path, "right", right_state, right_tx).await;
         });
+
+        // Tail backchannel
+        let bc_workspace = workspace.clone();
+        let bc_state = state.clone();
+        let bc_tx = ui_tx.clone();
+        tokio::spawn(async move {
+            tail_backchannel(bc_workspace, bc_state, bc_tx).await;
+        });
     }
 
     // Run TUI on main thread
-    tui::run(state, ui_rx, registration.worker_endpoint).await?;
+    tui::run(state, ui_rx, registration.worker_endpoint, workspace_for_tui).await?;
 
     Ok(())
 }
@@ -213,6 +225,33 @@ async fn read_context_from_line(path: &PathBuf, skip_lines: usize) -> std::io::R
     }
 
     Ok(entries)
+}
+
+/// Tail the backchannel file and update state with new lines.
+async fn tail_backchannel(
+    workspace: PathBuf,
+    state: SharedState,
+    ui_tx: mpsc::Sender<tui::UiEvent>,
+) {
+    let path = workspace.join("conversations").join("backchannel.txt");
+    let mut last_line_count = 0;
+
+    loop {
+        if path.exists() {
+            if let Ok(convo) = Conversation::load(&path) {
+                if convo.lines.len() > last_line_count {
+                    let new_lines = convo.lines[last_line_count..].to_vec();
+                    let mut s = state.write().await;
+                    for line in new_lines {
+                        s.add_backchannel_line(line);
+                    }
+                    last_line_count = convo.lines.len();
+                    let _ = ui_tx.send(tui::UiEvent::Refresh).await;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[cfg(test)]

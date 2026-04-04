@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use river_adapter::FeatureId;
 use river_context::OpenAIMessage;
+use river_protocol::conversation::Line as BackchannelLine;
 use river_snowflake::{AgentBirth, SnowflakeGenerator, SnowflakeType};
 
 /// Display message types.
@@ -45,6 +46,9 @@ pub struct AdapterState {
     pub left_lines_read: usize,
     pub right_lines_read: usize,
 
+    // Backchannel
+    pub backchannel_lines: Vec<BackchannelLine>,
+
     // Input
     pub input: String,
 
@@ -64,6 +68,7 @@ impl AdapterState {
             conversation_scroll: 0,
             left_lines_read: 0,
             right_lines_read: 0,
+            backchannel_lines: Vec::new(),
             input: String::new(),
             generator: SnowflakeGenerator::new(birth),
         }
@@ -114,6 +119,11 @@ impl AdapterState {
     pub fn generate_message_id(&mut self) -> String {
         self.generator.next(SnowflakeType::Message).unwrap().to_string()
     }
+
+    pub fn add_backchannel_line(&mut self, line: BackchannelLine) {
+        self.backchannel_lines.push(line);
+        self.conversation_scroll = 0;
+    }
 }
 
 /// Features supported by mock adapter.
@@ -153,6 +163,7 @@ mod tests {
         assert_eq!(state.conversation_scroll, 0);
         assert_eq!(state.left_lines_read, 0);
         assert_eq!(state.right_lines_read, 0);
+        assert!(state.backchannel_lines.is_empty());
         assert!(state.input.is_empty());
     }
 

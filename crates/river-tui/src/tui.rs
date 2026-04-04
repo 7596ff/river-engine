@@ -18,7 +18,12 @@ use ratatui::{
 };
 use river_adapter::{Author, EventMetadata, InboundEvent};
 use river_context::OpenAIMessage;
+use river_protocol::conversation::{
+    Conversation, Line as BackchannelLine, Message as BackchannelMessage, MessageDirection,
+};
+use river_protocol::Author as ProtocolAuthor;
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -39,6 +44,7 @@ pub async fn run(
     state: SharedState,
     mut ui_rx: mpsc::Receiver<UiEvent>,
     worker_endpoint: String,
+    workspace: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -77,58 +83,92 @@ pub async fn run(
                             input
                         };
 
-                        if !input.is_empty() {
-                            // Add to display
-                            let msg_id = {
-                                let mut s = state.write().await;
-                                s.add_user_message(&input)
-                            };
+                        if input.is_empty() {
+                            continue;
+                        }
 
-                            // Send to worker
-                            let channel = {
-                                let s = state.read().await;
-                                s.channel.clone()
-                            };
-
-                            let event = InboundEvent {
-                                adapter: "mock".into(),
-                                metadata: EventMetadata::MessageCreate {
-                                    channel: channel.clone(),
-                                    author: Author {
-                                        id: "user-1".into(),
-                                        name: "Human".into(),
+                        // Handle backchannel messages
+                        if input.starts_with("/bc ") {
+                            if let Some(ref ws) = workspace {
+                                let content = input.strip_prefix("/bc ").unwrap().to_string();
+                                let msg = BackchannelMessage {
+                                    direction: MessageDirection::Outgoing,
+                                    timestamp: Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                                    id: format!("tui-{}", Utc::now().timestamp_millis()),
+                                    author: ProtocolAuthor {
+                                        name: "tui".to_string(),
+                                        id: "debug".to_string(),
                                         bot: false,
                                     },
-                                    content: input,
-                                    message_id: msg_id,
-                                    timestamp: Utc::now().to_rfc3339(),
-                                    reply_to: None,
-                                    attachments: vec![],
-                                },
-                            };
+                                    content,
+                                    reactions: vec![],
+                                };
 
-                            // Send to worker's /notify endpoint
-                            let notify_result = http_client
-                                .post(format!("{}/notify", worker_endpoint))
-                                .json(&event)
-                                .timeout(Duration::from_secs(5))
-                                .send()
-                                .await;
-
-                            match notify_result {
-                                Ok(response) => {
-                                    if !response.status().is_success() {
-                                        let mut s = state.write().await;
-                                        s.add_system_message(&format!(
-                                            "Send failed: HTTP {}",
-                                            response.status()
-                                        ));
-                                    }
-                                }
-                                Err(e) => {
+                                let path = ws.join("conversations").join("backchannel.txt");
+                                if let Err(e) = Conversation::append_line(
+                                    &path,
+                                    &BackchannelLine::Message(msg),
+                                ) {
                                     let mut s = state.write().await;
-                                    s.add_system_message(&format!("Send failed: {}", e));
+                                    s.add_system_message(&format!("Backchannel write failed: {}", e));
                                 }
+                            } else {
+                                let mut s = state.write().await;
+                                s.add_system_message("No workspace configured for backchannel");
+                            }
+                            continue;
+                        }
+
+                        // Add to display
+                        let msg_id = {
+                            let mut s = state.write().await;
+                            s.add_user_message(&input)
+                        };
+
+                        // Send to worker
+                        let channel = {
+                            let s = state.read().await;
+                            s.channel.clone()
+                        };
+
+                        let event = InboundEvent {
+                            adapter: "mock".into(),
+                            metadata: EventMetadata::MessageCreate {
+                                channel: channel.clone(),
+                                author: Author {
+                                    id: "user-1".into(),
+                                    name: "Human".into(),
+                                    bot: false,
+                                },
+                                content: input,
+                                message_id: msg_id,
+                                timestamp: Utc::now().to_rfc3339(),
+                                reply_to: None,
+                                attachments: vec![],
+                            },
+                        };
+
+                        // Send to worker's /notify endpoint
+                        let notify_result = http_client
+                            .post(format!("{}/notify", worker_endpoint))
+                            .json(&event)
+                            .timeout(Duration::from_secs(5))
+                            .send()
+                            .await;
+
+                        match notify_result {
+                            Ok(response) => {
+                                if !response.status().is_success() {
+                                    let mut s = state.write().await;
+                                    s.add_system_message(&format!(
+                                        "Send failed: HTTP {}",
+                                        response.status()
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                let mut s = state.write().await;
+                                s.add_system_message(&format!("Send failed: {}", e));
                             }
                         }
                     }
@@ -242,18 +282,31 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
 fn draw_messages(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
     let width = area.width.saturating_sub(2) as usize; // Account for borders
 
-    let items: Vec<ListItem> = state
-        .messages
-        .iter()
-        .rev()
-        .skip(state.conversation_scroll)
-        .take(area.height as usize - 2)
-        .map(|msg| format_message(msg, width))
-        .flatten()
-        .collect();
+    // Build items from messages
+    let mut all_items: Vec<ListItem> = Vec::new();
 
-    // Reverse to show oldest at top
-    let items: Vec<ListItem> = items.into_iter().rev().collect();
+    // Add regular messages
+    for msg in &state.messages {
+        all_items.extend(format_message(msg, width));
+    }
+
+    // Add backchannel messages
+    for line in &state.backchannel_lines {
+        all_items.extend(format_backchannel_line(line));
+    }
+
+    // Apply scrolling and height limit
+    let visible_count = (area.height as usize).saturating_sub(2);
+    let skip = state.conversation_scroll;
+    let items: Vec<ListItem> = all_items
+        .into_iter()
+        .rev()
+        .skip(skip)
+        .take(visible_count)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
 
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Context "));
 
@@ -454,6 +507,26 @@ fn format_context_entry(side: &str, entry: &OpenAIMessage, timestamp: &chrono::D
     }
 }
 
+/// Format a backchannel line for display.
+fn format_backchannel_line(line: &BackchannelLine) -> Vec<ListItem<'static>> {
+    match line {
+        BackchannelLine::Message(msg) => {
+            let style = Style::default().fg(Color::Cyan);
+            let prefix = format!("[BC {}] ", msg.author.id);
+            vec![ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(msg.content.clone(), style),
+            ]))]
+        }
+        BackchannelLine::ReadReceipt { message_id, .. } => {
+            vec![ListItem::new(Line::from(Span::styled(
+                format!("[BC read] {}", message_id),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        }
+    }
+}
+
 /// Truncate a string to max length, adding ellipsis if needed.
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
@@ -470,7 +543,7 @@ fn draw_input(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Type message (Enter=send, Up/Down/PgUp/PgDn=scroll, Ctrl+C=quit) "),
+                .title(" Type message (Enter=send, /bc=backchannel, Up/Down/PgUp/PgDn=scroll, Ctrl+C=quit) "),
         )
         .wrap(Wrap { trim: false });
 
