@@ -3,6 +3,7 @@
 //! This crate provides foundational types used across all River Engine crates.
 //! It has no dependencies on other river-* crates.
 
+pub mod conversation;
 mod identity;
 mod model;
 mod registration;
