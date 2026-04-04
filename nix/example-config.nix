@@ -1,170 +1,111 @@
-# nix/example-config.nix
-# Example NixOS configuration for River Engine
+# Example NixOS configuration for river-engine
 #
-# This shows a complete setup with:
-# - Orchestrator for local model management
-# - Embedding server for semantic memory
-# - Redis for ephemeral memory
-# - An agent named "river" with Discord adapter
+# Add this to your NixOS configuration:
+#   imports = [ ./path/to/river-engine/nix/module.nix ];
 #
-# Usage in your NixOS configuration:
-#   imports = [ /path/to/river-engine/nix/nixos-module.nix ];
-#   # Then add the config below
+# Then configure as shown below.
 
 { config, pkgs, ... }:
 
 {
-  # Import the River Engine module
-  # imports = [ ./nixos-module.nix ];
+  # Import the river-engine module
+  imports = [
+    ./module.nix
+  ];
 
-  services.river = {
-    # Required: path to river-engine source
-    package.src = /path/to/river-engine;
+  # Override the package if building from local source
+  nixpkgs.overlays = [
+    (final: prev: {
+      river-engine = final.callPackage ./package.nix { };
+    })
+  ];
 
-    # ─────────────────────────────────────────────────────────────
-    # Orchestrator - manages local GGUF models via llama.cpp
-    # ─────────────────────────────────────────────────────────────
+  services.river-engine = {
+    enable = true;
+
+    # Environment file with secrets (recommended)
+    # Create this file with:
+    #   ANTHROPIC_API_KEY=sk-ant-...
+    #   DISCORD_TOKEN=...
+    #   DISCORD_DM_CHANNEL_ID=...
+    environmentFile = "/run/secrets/river-engine";
+
+    # Orchestrator settings
     orchestrator = {
       enable = true;
-      port = 5000;
-
-      # Directories containing .gguf model files
-      modelDirs = [
-        /home/user/models
-        /var/lib/models
-      ];
-
-      # Resource management
-      idleTimeout = 900;        # Unload idle models after 15 min
-      reserveVramMb = 500;      # Keep 500MB VRAM free
-      reserveRamMb = 2000;      # Keep 2GB RAM free
-      portRange = "8080-8180";  # Ports for llama-server instances
-
-      # Enable for NVIDIA GPUs
-      cudaSupport = false;
+      port = 4337;
+      openFirewall = false;  # Set true if workers run on different machines
     };
 
-    # ─────────────────────────────────────────────────────────────
-    # Embedding server - for semantic memory (memory_search tool)
-    # ─────────────────────────────────────────────────────────────
-    embedding = {
-      enable = true;
-      port = 8200;
-      modelPath = /home/user/models/nomic-embed-text-v1.5.Q8_0.gguf;
-      gpuLayers = 99;  # Offload all layers to GPU
-      cudaSupport = false;
-    };
+    # Main configuration (becomes river.json)
+    settings = {
+      port = 4337;
 
-    # ─────────────────────────────────────────────────────────────
-    # Redis - for working memory and medium-term memory
-    # ─────────────────────────────────────────────────────────────
-    redis = {
-      enable = true;
-      port = 6379;
-    };
+      # Model definitions
+      models = {
+        "claude-sonnet" = {
+          endpoint = "https://api.anthropic.com/v1/messages";
+          name = "claude-sonnet-4-20250514";
+          api_key = "$ANTHROPIC_API_KEY";
+          context_limit = 200000;
+        };
 
-    # ─────────────────────────────────────────────────────────────
-    # LiteLLM (optional) - proxy for external API providers
-    # Use this OR openrouter/anthropic options below, not both
-    # ─────────────────────────────────────────────────────────────
-    # litellm = {
-    #   enable = true;
-    #   port = 4000;
-    #   apiKeyFile = /run/secrets/anthropic-api-key;
-    #   models = [
-    #     { name = "claude-sonnet"; litellmModel = "claude-sonnet-4-20250514"; }
-    #     { name = "claude-haiku"; litellmModel = "claude-3-5-haiku-20241022"; }
-    #   ];
-    # };
+        "claude-haiku" = {
+          endpoint = "https://api.anthropic.com/v1/messages";
+          name = "claude-haiku-4-20250514";
+          api_key = "$ANTHROPIC_API_KEY";
+          context_limit = 200000;
+        };
 
-    # ─────────────────────────────────────────────────────────────
-    # OpenRouter (optional) - external API with prompt caching
-    # ─────────────────────────────────────────────────────────────
-    # openrouter = {
-    #   enable = true;
-    #   apiKeyFile = /run/secrets/openrouter-api-key;
-    #   model = "anthropic/claude-sonnet-4";
-    # };
-
-    # ─────────────────────────────────────────────────────────────
-    # Anthropic (optional) - direct Claude API access
-    # ─────────────────────────────────────────────────────────────
-    # anthropic = {
-    #   enable = true;
-    #   apiKeyFile = /run/secrets/anthropic-api-key;
-    #   model = "claude-sonnet-4-20250514";
-    # };
-
-    # ─────────────────────────────────────────────────────────────
-    # Agents - define one or more agents
-    # ─────────────────────────────────────────────────────────────
-    agents.river = {
-      enable = true;
-
-      # Workspace must contain actor/ and spectator/ subdirectories
-      # with AGENTS.md, IDENTITY.md, RULES.md files.
-      # Copy from river-engine/workspace/ as a starting point.
-      workspace = /var/lib/river/workspace;
-
-      # Database and logs directory
-      dataDir = /var/lib/river/data;
-
-      # Agent identity (used for Redis namespacing)
-      agentName = "river";
-
-      # Gateway HTTP API port
-      port = 3000;
-
-      # Context window size
-      contextLimit = 131072;
-
-      # Model configuration - use orchestrator for local models
-      orchestratorUrl = "http://localhost:5000";
-      modelUrl = "http://localhost:5000";
-      modelName = "llama-3.2-3b";
-
-      # Spectator can use a different (smaller/faster) model
-      spectatorModelUrl = "http://localhost:5000";
-      spectatorModelName = "llama-3.2-1b";
-
-      # Memory services
-      embeddingUrl = "http://localhost:8200";
-      redisUrl = "redis://localhost:6379";
-
-      # Discord adapter
-      discord = {
-        enable = true;
-        tokenFile = /run/secrets/discord-token;
-        guildId = 123456789012345678;  # Your Discord server ID
-        port = 3002;
-        channels = [
-          123456789012345678  # Channel IDs to listen on
-          234567890123456789
-        ];
+        "nomic-embed" = {
+          enable_embeddings = true;
+          endpoint = "http://localhost:11434/v1/embeddings";
+          name = "nomic-embed-text";
+          api_key = "ollama";
+        };
       };
 
-      # Or define custom adapters
-      # adapters = [
-      #   {
-      #     name = "slack";
-      #     outboundUrl = "http://localhost:3003/send";
-      #     readUrl = "http://localhost:3003/read";
-      #   }
-      # ];
+      # Dyad configurations
+      dyads = {
+        river = {
+          workspace = "/var/lib/river/workspaces/river";
 
-      # Extra environment variables
-      environment = {
-        RUST_LOG = "info,river_gateway=debug";
+          uid = 1000;
+          gid = 1000;
+
+          left.name = "Iris";
+          left.model = "claude-sonnet";
+
+          right.name = "Viola";
+          right.model = "claude-haiku";
+
+          initial.actor = "left";
+
+          # Human operator (ground truth)
+          ground = {
+            name = "Cassie";  # optional, defaults to dyad name
+            id = "123456789012345678";
+            adapter = "discord";
+            channel = "$DISCORD_DM_CHANNEL_ID";
+          };
+
+          # Platform adapters (binary resolved from PATH as river-{type})
+          adapters = [
+            {
+              path = "${pkgs.river-engine}/bin/river-discord";
+              side = "left";
+              token = "$DISCORD_TOKEN";
+              guild_id = "987654321098765432";
+            }
+          ];
+        };
       };
     };
 
-    # You can define multiple agents
-    # agents.assistant = {
-    #   enable = true;
-    #   workspace = /var/lib/river-assistant/workspace;
-    #   dataDir = /var/lib/river-assistant/data;
-    #   port = 3010;
-    #   # ... other options
-    # };
+    # Worker instances
+    # implied from config above
+
+    # Adapter instances
+    # this too
   };
 }

@@ -21,6 +21,7 @@ pub struct Notification {
 #[derive(Debug)]
 pub struct WorkerState {
     // Identity
+    pub name: Option<String>,
     pub dyad: String,
     pub side: Side,
     pub baton: Baton,
@@ -59,13 +60,18 @@ impl WorkerState {
     /// Create initial state from config and registration.
     pub fn new(config: &WorkerConfig, registration: WorkerRegistrationResponse) -> Self {
         Self {
+            name: registration.name,
             dyad: config.dyad.clone(),
             side: config.side.clone(),
             baton: registration.baton,
             partner_endpoint: registration.partner_endpoint,
             ground: registration.ground.clone(),
             workspace: PathBuf::from(&registration.workspace),
-            current_channel: registration.ground.channel.clone(),
+            current_channel: Channel {
+                adapter: registration.ground.adapter.clone(),
+                id: registration.ground.channel.clone(),
+                name: None,
+            },
             watch_list: HashSet::new(),
             registry: Registry::default(),
             model_config: registration.model,

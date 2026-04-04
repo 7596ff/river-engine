@@ -121,7 +121,8 @@ impl Supervisor {
             Side::Left => "left",
             Side::Right => "right",
         };
-        let child = Command::new(&adapter_config.binary)
+        // Use explicit path from config
+        let child = Command::new(&adapter_config.path)
             .arg("--orchestrator")
             .arg(orchestrator_url)
             .arg("--dyad")
@@ -129,7 +130,7 @@ impl Supervisor {
             .arg("--side")
             .arg(side_str)
             .arg("--type")
-            .arg(&adapter_config.adapter_type)
+            .arg(adapter_config.adapter_type())
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -138,7 +139,7 @@ impl Supervisor {
 
         let key = ProcessKey::Adapter {
             dyad: dyad.to_string(),
-            adapter_type: adapter_config.adapter_type.clone(),
+            adapter_type: adapter_config.adapter_type().to_string(),
         };
         self.processes.insert(
             key,

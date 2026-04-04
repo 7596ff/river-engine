@@ -71,10 +71,13 @@ impl Side {
 /// Human operator information.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Ground {
-    /// Human operator name.
-    pub name: String,
+    /// Human operator name (optional, defaults to dyad name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Human operator platform ID.
     pub id: String,
-    /// Channel for reaching the human.
-    pub channel: Channel,
+    /// Adapter type (e.g., "discord").
+    pub adapter: String,
+    /// Channel ID for reaching the human.
+    pub channel: String,
 }

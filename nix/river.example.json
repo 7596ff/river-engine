@@ -14,12 +14,6 @@
       "api_key": "$ANTHROPIC_API_KEY",
       "context_limit": 200000
     },
-    "qwen3-4b": {
-      "endpoint": "http://localhost:11434/v1/chat/completions",
-      "name": "qwen3:4b",
-      "api_key": "ollama",
-      "context_limit": 32000
-    },
     "nomic-embed": {
       "endpoint": "http://localhost:11434/v1/embeddings",
       "name": "nomic-embed-text",

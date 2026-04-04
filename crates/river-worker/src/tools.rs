@@ -664,7 +664,8 @@ async fn execute_create_flash(
     let expires = now + chrono::Duration::minutes(ttl_minutes as i64);
 
     // Format sender as "dyad:side (ground_name)"
-    let from = format!("{}:{:?} ({})", dyad, side, ground.name);
+    let ground_name = ground.name.as_deref().unwrap_or(&dyad);
+    let from = format!("{}:{:?} ({})", dyad, side, ground_name);
 
     let flash = Flash {
         id: id_str.clone(),

@@ -123,13 +123,10 @@ mod tests {
     #[test]
     fn test_ground_serde_roundtrip() {
         let ground = Ground {
-            name: "Cassie".to_string(),
+            name: Some("Cassie".to_string()),
             id: "user789".to_string(),
-            channel: Channel {
-                adapter: "discord".to_string(),
-                id: "dm-channel-123".to_string(),
-                name: Some("Direct Message".to_string()),
-            },
+            adapter: "discord".to_string(),
+            channel: "dm-channel-123".to_string(),
         };
         let json = serde_json::to_string(&ground).unwrap();
         let parsed: Ground = serde_json::from_str(&json).unwrap();
@@ -145,13 +142,10 @@ mod tests {
             baton: Baton::Actor,
             model: "gpt-4".to_string(),
             ground: Ground {
-                name: "Cassie".to_string(),
+                name: Some("Cassie".to_string()),
                 id: "user123".to_string(),
-                channel: Channel {
-                    adapter: "discord".to_string(),
-                    id: "ch123".to_string(),
-                    name: Some("general".to_string()),
-                },
+                adapter: "discord".to_string(),
+                channel: "ch123".to_string(),
             },
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -193,13 +187,10 @@ mod tests {
             baton: Baton::Actor,
             model: "gpt-4".to_string(),
             ground: Ground {
-                name: "Cassie".to_string(),
+                name: Some("Cassie".to_string()),
                 id: "user123".to_string(),
-                channel: Channel {
-                    adapter: "discord".to_string(),
-                    id: "ch123".to_string(),
-                    name: None,
-                },
+                adapter: "discord".to_string(),
+                channel: "ch123".to_string(),
             },
         };
         let json = serde_json::to_string(&worker).unwrap();
@@ -233,13 +224,10 @@ mod tests {
                     baton: Baton::Actor,
                     model: "gpt-4".to_string(),
                     ground: Ground {
-                        name: "Cassie".to_string(),
+                        name: Some("Cassie".to_string()),
                         id: "user123".to_string(),
-                        channel: Channel {
-                            adapter: "discord".to_string(),
-                            id: "ch123".to_string(),
-                            name: Some("general".to_string()),
-                        },
+                        adapter: "discord".to_string(),
+                        channel: "ch123".to_string(),
                     },
                 },
                 ProcessEntry::Adapter {
@@ -315,11 +303,8 @@ mod tests {
             "ground": {
                 "name": "Cassie",
                 "id": "user123",
-                "channel": {
-                    "adapter": "discord",
-                    "id": "ch123",
-                    "name": "general"
-                }
+                "adapter": "discord",
+                "channel": "ch123"
             },
             "workspace": "/path/to/workspace",
             "initial_message": "Hello!",

@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Find adapter config and respawn
                             if let Some(dyad_config) = config.dyads.get(dyad) {
                                 if let Some(adapter_config) = dyad_config.adapters.iter()
-                                    .find(|a| a.adapter_type == *adapter_type)
+                                    .find(|a| a.adapter_type() == adapter_type)
                                 {
                                     let mut sup = supervisor.write().await;
                                     if let Err(e) = sup.spawn_adapter(&orchestrator_url, dyad, adapter_config).await {

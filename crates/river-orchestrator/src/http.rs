@@ -52,6 +52,9 @@ pub struct WorkerRegistration {
 #[derive(Debug, Serialize)]
 pub struct WorkerRegistrationResponse {
     pub accepted: bool,
+    /// Worker's name (e.g., "Iris" or "Viola").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub baton: Baton,
     pub partner_endpoint: Option<String>,
     pub model: WorkerModelConfig,
@@ -222,10 +225,7 @@ async fn handle_worker_registration(
     })?;
 
     // Get model config
-    let model_name = match req.worker.side {
-        Side::Left => &dyad_config.left_model,
-        Side::Right => &dyad_config.right_model,
-    };
+    let model_name = dyad_config.model_for_side(&req.worker.side);
     let model_config = state.config.models.get(model_name).ok_or_else(|| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -235,8 +235,8 @@ async fn handle_worker_registration(
         )
     })?;
 
-    // Determine baton based on initial_actor
-    let baton = if req.worker.side == dyad_config.initial_actor {
+    // Determine baton based on initial.actor
+    let baton = if req.worker.side == dyad_config.initial.actor {
         Baton::Actor
     } else {
         Baton::Spectator
@@ -261,7 +261,7 @@ async fn handle_worker_registration(
             req.worker.side.clone(),
             req.endpoint.clone(),
             baton.clone(),
-            model_name.clone(),
+            model_name.to_string(),
             dyad_config.ground.clone(),
         );
     }
@@ -293,8 +293,12 @@ async fn handle_worker_registration(
     // Push registry to all
     push_registry_to_all(&state).await;
 
+    // Get worker name from dyad config
+    let worker_name = dyad_config.name_for_side(&req.worker.side).cloned();
+
     let response = WorkerRegistrationResponse {
         accepted: true,
+        name: worker_name,
         baton,
         partner_endpoint,
         model: WorkerModelConfig::from(model_config),
@@ -324,7 +328,7 @@ async fn handle_adapter_registration(
     let adapter_config = dyad_config
         .adapters
         .iter()
-        .find(|a| a.adapter_type == req.adapter.adapter_type)
+        .find(|a| a.adapter_type() == req.adapter.adapter_type)
         .ok_or_else(|| {
             (
                 StatusCode::BAD_REQUEST,
@@ -355,7 +359,7 @@ async fn handle_adapter_registration(
     let worker_endpoint = {
         let reg = state.registry.read().await;
         // Find the actor for this dyad
-        reg.get_worker_endpoint(&req.adapter.dyad, &dyad_config.initial_actor)
+        reg.get_worker_endpoint(&req.adapter.dyad, &dyad_config.initial.actor)
     };
 
     // Update supervisor with endpoint
@@ -377,7 +381,7 @@ async fn handle_adapter_registration(
         accepted: true,
         worker_endpoint,
         validated_features: validated.iter().map(|f| *f as u16).collect(),
-        config: adapter_config.config.clone(),
+        config: serde_json::to_value(&adapter_config.config).unwrap_or_default(),
     };
 
     Ok(Json(serde_json::to_value(response).unwrap()))

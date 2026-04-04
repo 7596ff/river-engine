@@ -254,17 +254,13 @@ pub fn new_shared_registry() -> SharedRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use river_protocol::Channel;
 
     fn test_ground() -> Ground {
         Ground {
-            name: "Test User".into(),
+            name: Some("Test User".into()),
             id: "user123".into(),
-            channel: Channel {
-                adapter: "discord".into(),
-                id: "ch123".into(),
-                name: Some("general".into()),
-            },
+            adapter: "discord".into(),
+            channel: "ch123".into(),
         }
     }
 

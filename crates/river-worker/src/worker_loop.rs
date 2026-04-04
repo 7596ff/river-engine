@@ -68,7 +68,16 @@ pub async fn run_loop(
 
         // Inject identity content (defines self-perception)
         if let Some(ref identity) = s.identity_content {
-            messages.push(OpenAIMessage::system(identity.clone()));
+            // Prepend name if available
+            let identity_with_name = if let Some(ref name) = s.name {
+                format!("Your name is {}.\n\n{}", name, identity)
+            } else {
+                identity.clone()
+            };
+            messages.push(OpenAIMessage::system(identity_with_name));
+        } else if let Some(ref name) = s.name {
+            // If no identity file but name is set, still tell the agent its name
+            messages.push(OpenAIMessage::system(format!("Your name is {}.", name)));
         }
 
         // Inject initial message if provided

@@ -17,7 +17,7 @@ pub struct Config {
 }
 
 fn default_port() -> u16 {
-    4000
+    4337
 }
 
 /// Model configuration for LLMs or embedding models.
@@ -36,26 +36,72 @@ pub struct EmbedConfig {
     pub model: String,
 }
 
+/// Side-specific configuration (name and model).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SideConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub model: String,
+}
+
+/// Initial state configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InitialConfig {
+    pub actor: Side,
+}
+
 /// Dyad configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DyadConfig {
     pub workspace: PathBuf,
-    pub left_model: String,
-    pub right_model: String,
-    pub initial_actor: Side,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+    pub left: SideConfig,
+    pub right: SideConfig,
+    pub initial: InitialConfig,
     pub ground: Ground,
     pub adapters: Vec<AdapterConfig>,
+}
+
+impl DyadConfig {
+    /// Get the name for a given side.
+    pub fn name_for_side(&self, side: &Side) -> Option<&String> {
+        match side {
+            Side::Left => self.left.name.as_ref(),
+            Side::Right => self.right.name.as_ref(),
+        }
+    }
+
+    /// Get the model for a given side.
+    pub fn model_for_side(&self, side: &Side) -> &str {
+        match side {
+            Side::Left => &self.left.model,
+            Side::Right => &self.right.model,
+        }
+    }
 }
 
 /// Adapter configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AdapterConfig {
-    #[serde(rename = "type")]
-    pub adapter_type: String,
-    pub binary: String,
+    pub path: String,
     pub side: river_adapter::Side,
-    #[serde(default)]
-    pub config: Value,
+    /// Remaining fields are adapter-specific config (token, guild_id, etc.)
+    #[serde(flatten)]
+    pub config: HashMap<String, Value>,
+}
+
+impl AdapterConfig {
+    /// Derive adapter type from the binary path (e.g., "/path/to/river-discord" -> "discord").
+    pub fn adapter_type(&self) -> &str {
+        std::path::Path::new(&self.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("river-"))
+            .unwrap_or("unknown")
+    }
 }
 
 /// Configuration error.
@@ -154,23 +200,23 @@ fn validate_config(config: &Config) -> Result<(), ConfigError> {
 
     // Check dyad model references
     for (dyad_name, dyad) in &config.dyads {
-        let left_model = config.models.get(&dyad.left_model).ok_or_else(|| ConfigError::UnknownModel {
-            reference: dyad.left_model.clone(),
-            context: format!("dyads.{}.left_model", dyad_name),
+        let left_model = config.models.get(&dyad.left.model).ok_or_else(|| ConfigError::UnknownModel {
+            reference: dyad.left.model.clone(),
+            context: format!("dyads.{}.left.model", dyad_name),
         })?;
         if left_model.context_limit.is_none() {
             return Err(ConfigError::MissingContextLimit {
-                model: dyad.left_model.clone(),
+                model: dyad.left.model.clone(),
             });
         }
 
-        let right_model = config.models.get(&dyad.right_model).ok_or_else(|| ConfigError::UnknownModel {
-            reference: dyad.right_model.clone(),
-            context: format!("dyads.{}.right_model", dyad_name),
+        let right_model = config.models.get(&dyad.right.model).ok_or_else(|| ConfigError::UnknownModel {
+            reference: dyad.right.model.clone(),
+            context: format!("dyads.{}.right.model", dyad_name),
         })?;
         if right_model.context_limit.is_none() {
             return Err(ConfigError::MissingContextLimit {
-                model: dyad.right_model.clone(),
+                model: dyad.right.model.clone(),
             });
         }
     }

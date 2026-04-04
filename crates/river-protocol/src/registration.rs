@@ -24,6 +24,9 @@ pub struct WorkerRegistrationRequest {
 #[derive(Debug, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct WorkerRegistrationResponse {
     pub accepted: bool,
+    /// Worker's name (e.g., "Iris" or "Viola").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub baton: Baton,
     pub partner_endpoint: Option<String>,
     pub model: ModelConfig,
