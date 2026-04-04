@@ -121,7 +121,7 @@ pub async fn run_loop(
         // Check context pressure
         if token_count > context_limit * 95 / 100 {
             tracing::warn!("Context at 95%, forcing summary");
-            return force_summary(&state, config, &mut messages, &mut llm).await;
+            return force_summary(config, &mut messages, &mut llm).await;
         }
 
         if token_count > context_limit * 80 / 100 {
@@ -344,7 +344,6 @@ async fn sleep_until_wake(state: &SharedState, minutes: Option<u64>) {
 
 /// Force a summary when context is exhausted.
 async fn force_summary(
-    state: &SharedState,
     config: &WorkerConfig,
     messages: &mut Vec<OpenAIMessage>,
     llm: &mut LlmClient,

@@ -22,15 +22,6 @@ impl WorkerConfig {
         PathBuf::from(&registration.workspace)
     }
 
-    pub fn context_path(&self, registration: &RegistrationResponse) -> PathBuf {
-        let workspace = self.workspace_path(registration);
-        let side_str = match self.side {
-            Side::Left => "left",
-            Side::Right => "right",
-        };
-        workspace.join(side_str).join("context.jsonl")
-    }
-
     pub fn identity_path(&self, registration: &RegistrationResponse) -> PathBuf {
         let workspace = self.workspace_path(registration);
         let side_str = match self.side {

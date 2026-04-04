@@ -1,7 +1,7 @@
 //! HTTP server for worker endpoints.
 
+use crate::conversation::conversation_path_for_channel;
 use crate::state::SharedState;
-use river_protocol::Registry;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -10,6 +10,8 @@ use axum::{
 };
 use river_adapter::{Baton, Channel, EventMetadata, InboundEvent};
 use river_context::Flash;
+use river_protocol::conversation::{Conversation, Line, Message, MessageDirection};
+use river_protocol::{Author as ProtocolAuthor, Registry};
 use serde::{Deserialize, Serialize};
 
 /// Build the router.
@@ -63,6 +65,44 @@ async fn handle_notify(
     tracing::debug!("Received notify: {:?}", event.metadata.event_type());
 
     let mut s = state.write().await;
+
+    // Write MessageCreate events to conversation files (skip backchannel)
+    if let EventMetadata::MessageCreate {
+        channel,
+        author,
+        content,
+        message_id,
+        timestamp,
+        ..
+    } = &event.metadata
+    {
+        // Skip backchannel - it's a shared file handled by speak tool
+        if channel != "backchannel" {
+            let conv_channel = Channel {
+                adapter: event.adapter.clone(),
+                id: channel.clone(),
+                name: None,
+            };
+            let path = conversation_path_for_channel(&s.workspace, &conv_channel);
+
+            let msg = Message {
+                direction: MessageDirection::Unread,
+                timestamp: timestamp.clone(),
+                id: message_id.clone(),
+                author: ProtocolAuthor {
+                    name: author.name.clone(),
+                    id: author.id.clone(),
+                    bot: author.bot,
+                },
+                content: content.clone(),
+                reactions: vec![],
+            };
+
+            if let Err(e) = Conversation::append_line(&path, &Line::Message(msg)) {
+                tracing::warn!(error = %e, "Failed to write message to conversation file");
+            }
+        }
+    }
 
     // Extract channel info from event
     if let Some((channel, message_id)) = extract_channel_info(&event.adapter, &event.metadata) {
