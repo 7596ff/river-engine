@@ -58,6 +58,7 @@ struct ResponseMessage {
 struct ToolCallResponse {
     id: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)] // Always "function" in OpenAI API, but part of the schema
     call_type: String,
     function: FunctionCallResponse,
 }
@@ -105,7 +106,6 @@ pub struct LlmUsage {
 #[derive(Debug)]
 pub enum LlmError {
     Request(reqwest::Error),
-    Parse(serde_json::Error),
     NoChoices,
     ApiError { status: u16, message: String },
 }
@@ -114,7 +114,6 @@ impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LlmError::Request(e) => write!(f, "Request error: {}", e),
-            LlmError::Parse(e) => write!(f, "Parse error: {}", e),
             LlmError::NoChoices => write!(f, "No choices in response"),
             LlmError::ApiError { status, message } => {
                 write!(f, "API error ({}): {}", status, message)
@@ -137,6 +136,7 @@ impl LlmClient {
     }
 
     /// Update model configuration.
+    #[allow(dead_code)] // For future dynamic model switching
     pub fn update_config(&mut self, config: &ModelConfig) {
         self.endpoint = config.endpoint.clone();
         self.model = config.name.clone();

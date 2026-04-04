@@ -158,7 +158,7 @@ mod tests {
             (OutboundRequest::SendMessage { channel: "ch".into(), content: "hi".into(), reply_to: None }, FeatureId::SendMessage),
             (OutboundRequest::EditMessage { channel: "ch".into(), message_id: "m1".into(), content: "edited".into() }, FeatureId::EditMessage),
             (OutboundRequest::DeleteMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::DeleteMessage),
-            (OutboundRequest::ReadHistory { channel: "ch".into(), limit: Some(10), before: None }, FeatureId::ReadHistory),
+            (OutboundRequest::ReadHistory { channel: "ch".into(), limit: Some(10), before: None, after: None }, FeatureId::ReadHistory),
             (OutboundRequest::PinMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::PinMessage),
             (OutboundRequest::UnpinMessage { channel: "ch".into(), message_id: "m1".into() }, FeatureId::UnpinMessage),
             (OutboundRequest::BulkDeleteMessages { channel: "ch".into(), message_ids: vec!["m1".into(), "m2".into()] }, FeatureId::BulkDeleteMessages),

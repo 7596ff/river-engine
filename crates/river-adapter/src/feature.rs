@@ -118,6 +118,7 @@ pub enum OutboundRequest {
         channel: String,
         limit: Option<u32>,
         before: Option<String>,
+        after: Option<String>,
     },
     PinMessage {
         channel: String,

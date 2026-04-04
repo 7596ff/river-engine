@@ -381,6 +381,7 @@ impl DiscordClient {
                 channel,
                 limit,
                 before,
+                after: _,
             } => {
                 let channel_id = match channel.parse::<u64>() {
                     Ok(id) => Id::<ChannelMarker>::new(id),

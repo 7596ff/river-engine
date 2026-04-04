@@ -93,6 +93,7 @@ async fn execute(
             channel: _,
             limit,
             before: _,
+            after: _,
         } => {
             // Return user messages from our history
             let limit = limit.unwrap_or(50) as usize;

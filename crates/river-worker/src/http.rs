@@ -165,13 +165,6 @@ async fn handle_registry(
     StatusCode::OK
 }
 
-/// Prepare switch request.
-#[derive(Debug, Deserialize)]
-pub struct PrepareSwitchRequest {
-    #[serde(default)]
-    pub phase: String,
-}
-
 /// Prepare switch response.
 #[derive(Debug, Serialize)]
 pub struct PrepareSwitchResponse {
@@ -183,7 +176,6 @@ pub struct PrepareSwitchResponse {
 /// POST /prepare_switch - Prepare for role switch.
 async fn handle_prepare_switch(
     State(state): State<SharedState>,
-    Json(_req): Json<PrepareSwitchRequest>,
 ) -> Result<Json<PrepareSwitchResponse>, StatusCode> {
     let mut s = state.write().await;
 
@@ -204,13 +196,6 @@ async fn handle_prepare_switch(
     }))
 }
 
-/// Commit switch request.
-#[derive(Debug, Deserialize)]
-pub struct CommitSwitchRequest {
-    #[serde(default)]
-    pub phase: String,
-}
-
 /// Commit switch response.
 #[derive(Debug, Serialize)]
 pub struct CommitSwitchResponse {
@@ -221,7 +206,6 @@ pub struct CommitSwitchResponse {
 /// POST /commit_switch - Execute the role switch.
 async fn handle_commit_switch(
     State(state): State<SharedState>,
-    Json(_req): Json<CommitSwitchRequest>,
 ) -> Result<Json<CommitSwitchResponse>, StatusCode> {
     let mut s = state.write().await;
 
