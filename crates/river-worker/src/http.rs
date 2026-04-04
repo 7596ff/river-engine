@@ -122,7 +122,6 @@ async fn handle_notify(
             s.pending_notifications.push(crate::state::Notification {
                 channel,
                 count: 1,
-                since_id: message_id,
             });
         }
     }

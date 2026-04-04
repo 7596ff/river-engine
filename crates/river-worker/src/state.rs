@@ -15,7 +15,6 @@ use tokio::sync::RwLock;
 pub struct Notification {
     pub channel: Channel,
     pub count: usize,
-    pub since_id: Option<String>,
 }
 
 /// Worker state.
