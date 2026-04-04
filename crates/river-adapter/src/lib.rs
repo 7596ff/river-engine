@@ -293,7 +293,7 @@ mod tests {
             ResponseData::ReactionsCleared,
             ResponseData::AttachmentSent { message_id: "m1".into() },
             ResponseData::TypingStarted,
-            ResponseData::History { messages: vec![HistoryMessage { message_id: "m1".into(), channel: "ch".into(), author: Author { id: "u1".into(), name: "User".into(), bot: false }, content: "Hello".into(), timestamp: "2026-01-01T00:00:00Z".into() }] },
+            ResponseData::History { messages: vec![HistoryMessage { message_id: "m1".into(), channel: "ch".into(), author: Author { id: "u1".into(), name: "User".into(), bot: false }, content: "Hello".into(), timestamp: "2026-01-01T00:00:00Z".into(), reply_to: None }] },
             ResponseData::ThreadCreated { thread_id: "t1".into() },
             ResponseData::PollCreated { poll_id: "p1".into() },
             ResponseData::PollVoted,

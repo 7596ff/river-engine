@@ -381,7 +381,7 @@ impl DiscordClient {
                 channel,
                 limit,
                 before,
-                after: _,
+                after,
             } => {
                 let channel_id = match channel.parse::<u64>() {
                     Ok(id) => Id::<ChannelMarker>::new(id),
@@ -399,12 +399,23 @@ impl DiscordClient {
                     builder
                 };
 
-                // Apply before - this converts GetChannelMessages to GetChannelMessagesConfigured
+                // Check mutual exclusivity
+                if before.is_some() && after.is_some() {
+                    return error_response(ErrorCode::InvalidPayload, "Cannot specify both before and after");
+                }
+
+                // Apply before or after for pagination
                 let response = if let Some(ref before_id) = before {
                     if let Ok(msg_id) = before_id.parse::<u64>() {
                         builder.before(Id::<MessageMarker>::new(msg_id)).await
                     } else {
-                        builder.await
+                        return error_response(ErrorCode::InvalidPayload, "Invalid before ID");
+                    }
+                } else if let Some(ref after_id) = after {
+                    if let Ok(msg_id) = after_id.parse::<u64>() {
+                        builder.after(Id::<MessageMarker>::new(msg_id)).await
+                    } else {
+                        return error_response(ErrorCode::InvalidPayload, "Invalid after ID");
                     }
                 } else {
                     builder.await
@@ -425,7 +436,9 @@ impl DiscordClient {
                                     },
                                     content: m.content,
                                     timestamp: format_timestamp(m.timestamp),
-                                    reply_to: None,
+                                    reply_to: m.reference.as_ref()
+                                        .and_then(|r| r.message_id)
+                                        .map(|id| id.to_string()),
                                 })
                                 .collect();
                             OutboundResponse {

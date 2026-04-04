@@ -336,6 +336,7 @@ mod tests {
             channel: "test-channel".into(),
             limit: Some(10),
             before: None,
+            after: None,
         };
 
         let response = app
@@ -389,6 +390,7 @@ mod tests {
             channel: "test-channel".into(),
             limit: Some(10),
             before: None,
+            after: None,
         };
 
         let response = app
