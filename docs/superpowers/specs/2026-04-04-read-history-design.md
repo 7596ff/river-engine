@@ -104,9 +104,10 @@ New tool `read_history`, gated by `FeatureId::ReadHistory`:
 pub struct ReadHistoryResult {
     pub success: bool,
     pub messages_fetched: usize,
-    pub oldest_id: Option<String>,  // for pagination: "before" this for older
-    pub newest_id: Option<String>,  // for pagination: "after" this for newer
+    pub oldest_id: Option<String>,    // for pagination: "before" this for older
+    pub newest_id: Option<String>,    // for pagination: "after" this for newer
     pub error: Option<String>,
+    pub retry_after_ms: Option<u64>,  // rate limit backoff hint
 }
 ```
 
@@ -130,6 +131,26 @@ Example failure:
   "error": "Adapter does not support ReadHistory"
 }
 ```
+
+Example rate limited:
+```json
+{
+  "success": false,
+  "messages_fetched": 0,
+  "oldest_id": null,
+  "newest_id": null,
+  "error": "Rate limited, retry after 2.5 seconds"
+}
+```
+
+### Rate Limit Handling
+
+When rate limited:
+- `success: false`
+- `retry_after_ms` populated with milliseconds to wait
+- LLM can decide to wait and retry, or give up
+
+Discord returns `Retry-After` header or `retry_after` field in 429 responses. Adapter should parse and forward this.
 
 ### Feature Gating
 
