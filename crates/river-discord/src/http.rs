@@ -33,6 +33,7 @@ async fn execute(
             error: Some(ResponseError {
                 code: ErrorCode::PlatformError,
                 message: e.to_string(),
+                retry_after_ms: None,
             }),
         },
     };

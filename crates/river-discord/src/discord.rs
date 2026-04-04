@@ -425,6 +425,7 @@ impl DiscordClient {
                                     },
                                     content: m.content,
                                     timestamp: format_timestamp(m.timestamp),
+                                    reply_to: None,
                                 })
                                 .collect();
                             OutboundResponse {
@@ -657,6 +658,7 @@ fn error_response(code: ErrorCode, message: &str) -> OutboundResponse {
         error: Some(ResponseError {
             code,
             message: message.into(),
+            retry_after_ms: None,
         }),
     }
 }
@@ -669,6 +671,7 @@ fn error_response_rate_limited(retry_after_ms: u64) -> OutboundResponse {
         error: Some(ResponseError {
             code: ErrorCode::RateLimited,
             message: format!("rate limited, retry after {}ms", retry_after_ms),
+            retry_after_ms: Some(retry_after_ms),
         }),
     }
 }

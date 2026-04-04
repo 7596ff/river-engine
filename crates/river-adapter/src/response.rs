@@ -67,6 +67,8 @@ pub struct HistoryMessage {
     pub author: Author,
     pub content: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
 }
 
 /// Error response details.
@@ -74,6 +76,9 @@ pub struct HistoryMessage {
 pub struct ResponseError {
     pub code: ErrorCode,
     pub message: String,
+    /// Rate limit backoff hint in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
 }
 
 impl ResponseError {
@@ -81,6 +86,15 @@ impl ResponseError {
         Self {
             code,
             message: message.into(),
+            retry_after_ms: None,
+        }
+    }
+
+    pub fn rate_limited(message: impl Into<String>, retry_after_ms: u64) -> Self {
+        Self {
+            code: ErrorCode::RateLimited,
+            message: message.into(),
+            retry_after_ms: Some(retry_after_ms),
         }
     }
 }

@@ -117,6 +117,7 @@ async fn execute(
                         },
                         content: content.clone(),
                         timestamp: timestamp.to_rfc3339(),
+                        reply_to: None,
                     }),
                     _ => None,
                 })
@@ -134,6 +135,7 @@ async fn execute(
             error: Some(ResponseError {
                 code: ErrorCode::UnsupportedFeature,
                 message: "Not supported by mock adapter".into(),
+                retry_after_ms: None,
             }),
         },
     };
