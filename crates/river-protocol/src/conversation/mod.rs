@@ -141,7 +141,7 @@ impl Conversation {
             || self.lines.iter().any(|l| matches!(l, Line::ReadReceipt { .. }))
     }
 
-    /// Compact: apply read receipts to messages, sort by timestamp, remove receipts.
+    /// Compact: apply read receipts to messages, sort by timestamp, remove receipts, dedupe by ID.
     pub fn compact(&mut self) {
         // 1. Collect all read receipt message IDs
         let read_ids: HashSet<String> = self
@@ -153,12 +153,19 @@ impl Conversation {
             })
             .collect();
 
-        // 2. Filter to messages, apply read status
+        // 2. Filter to messages, apply read status, dedupe by ID
+        let mut seen_ids: HashSet<String> = HashSet::new();
         let mut messages: Vec<Message> = self
             .lines
             .iter()
             .filter_map(|line| match line {
                 Line::Message(msg) => {
+                    // Skip duplicates (first occurrence wins)
+                    if seen_ids.contains(&msg.id) {
+                        return None;
+                    }
+                    seen_ids.insert(msg.id.clone());
+
                     let mut msg = msg.clone();
                     if read_ids.contains(&msg.id) && msg.direction == MessageDirection::Unread {
                         msg.direction = MessageDirection::Read;
@@ -530,5 +537,61 @@ channel_name: general
         let result = Conversation::from_str(input);
         assert!(result.is_err());
         assert!(result.unwrap_err().0.contains("Unclosed frontmatter"));
+    }
+
+    #[test]
+    fn test_compact_dedupes_by_message_id() {
+        let mut convo = Conversation::default();
+        // Add same message ID twice with different content
+        convo.lines.push(Line::Message(Message {
+            direction: MessageDirection::Unread,
+            timestamp: "2026-04-03 14:30:00".to_string(),
+            id: "msg1".to_string(),
+            author: Author { name: "a".to_string(), id: "1".to_string(), bot: false },
+            content: "first".to_string(),
+            reactions: vec![],
+        }));
+        convo.lines.push(Line::Message(Message {
+            direction: MessageDirection::Unread,
+            timestamp: "2026-04-03 14:30:01".to_string(),
+            id: "msg1".to_string(), // same ID
+            author: Author { name: "a".to_string(), id: "1".to_string(), bot: false },
+            content: "duplicate".to_string(),
+            reactions: vec![],
+        }));
+
+        convo.compact();
+
+        assert_eq!(convo.lines.len(), 1);
+        if let Line::Message(msg) = &convo.lines[0] {
+            assert_eq!(msg.content, "first"); // first occurrence wins
+        } else {
+            panic!("Expected Message");
+        }
+    }
+
+    #[test]
+    fn test_compact_keeps_unique_messages() {
+        let mut convo = Conversation::default();
+        convo.lines.push(Line::Message(Message {
+            direction: MessageDirection::Unread,
+            timestamp: "2026-04-03 14:30:00".to_string(),
+            id: "msg1".to_string(),
+            author: Author { name: "a".to_string(), id: "1".to_string(), bot: false },
+            content: "first".to_string(),
+            reactions: vec![],
+        }));
+        convo.lines.push(Line::Message(Message {
+            direction: MessageDirection::Unread,
+            timestamp: "2026-04-03 14:30:01".to_string(),
+            id: "msg2".to_string(), // different ID
+            author: Author { name: "b".to_string(), id: "2".to_string(), bot: false },
+            content: "second".to_string(),
+            reactions: vec![],
+        }));
+
+        convo.compact();
+
+        assert_eq!(convo.lines.len(), 2);
     }
 }
