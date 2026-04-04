@@ -4,6 +4,7 @@
 //! handling notifications, and managing context.
 
 mod config;
+mod conversation;
 mod http;
 mod llm;
 mod persistence;

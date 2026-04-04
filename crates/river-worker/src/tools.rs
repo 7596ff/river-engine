@@ -580,7 +580,14 @@ async fn execute_create_flash(
         }
     };
 
-    let id = generator.next(SnowflakeType::Flash);
+    let id = match generator.next(SnowflakeType::Flash) {
+        Ok(id) => id,
+        Err(e) => {
+            return ToolResult::Error(ToolError::ParseError {
+                message: format!("Failed to generate snowflake: {:?}", e),
+            })
+        }
+    };
     let id_str = river_snowflake::format(&id);
 
     let now = chrono::Utc::now();
@@ -835,7 +842,14 @@ async fn execute_create_move(
         s.workspace.clone()
     };
 
-    let id = generator.next(SnowflakeType::Move);
+    let id = match generator.next(SnowflakeType::Move) {
+        Ok(id) => id,
+        Err(e) => {
+            return ToolResult::Error(ToolError::ParseError {
+                message: format!("Failed to generate snowflake: {:?}", e),
+            })
+        }
+    };
     let id_str = river_snowflake::format(&id);
 
     let move_entry = serde_json::json!({
@@ -930,7 +944,14 @@ async fn execute_create_moment(
         s.workspace.clone()
     };
 
-    let id = generator.next(SnowflakeType::Moment);
+    let id = match generator.next(SnowflakeType::Moment) {
+        Ok(id) => id,
+        Err(e) => {
+            return ToolResult::Error(ToolError::ParseError {
+                message: format!("Failed to generate snowflake: {:?}", e),
+            })
+        }
+    };
     let id_str = river_snowflake::format(&id);
 
     let moment_entry = serde_json::json!({
