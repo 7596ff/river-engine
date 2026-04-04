@@ -123,9 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_interval = Duration::from_secs(60);
     let mut health_ticker = tokio::time::interval(health_interval);
 
-    // Wake check interval (10s)
-    let wake_interval = Duration::from_secs(10);
-    let mut wake_ticker = tokio::time::interval(wake_interval);
+    // Maximum wake check interval (10s)
+    let max_wake_interval = Duration::from_secs(10);
 
     // Main supervision loop with shutdown handling
     loop {
@@ -188,7 +187,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            _ = wake_ticker.tick() => {
+            _ = async {
+                // Calculate dynamic sleep based on next wake time
+                let sleep_duration = {
+                    let mgr = respawn.read().await;
+                    if let Some(next_wake) = mgr.next_wake_time() {
+                        let now = std::time::Instant::now();
+                        if next_wake > now {
+                            let duration = next_wake - now;
+                            // Cap at max_wake_interval
+                            std::cmp::min(duration, max_wake_interval)
+                        } else {
+                            // Already past wake time, check immediately
+                            Duration::from_millis(0)
+                        }
+                    } else {
+                        // No pending wakes, use max interval
+                        max_wake_interval
+                    }
+                };
+                tokio::time::sleep(sleep_duration).await;
+            } => {
                 // Check for sleeping workers ready to wake
                 let ready = {
                     let mgr = respawn.read().await;

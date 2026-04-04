@@ -171,7 +171,9 @@ impl RegistryState {
         })
     }
 
-    /// Get embed service endpoint.
+    /// Get embed service endpoint by name.
+    /// Note: Not called internally - orchestrator pushes Registry to workers who use embed_endpoint().
+    #[allow(dead_code)]
     pub fn get_embed_endpoint(&self, name: &str) -> Option<String> {
         self.embed_services.get(name).map(|e| e.endpoint().to_string())
     }
