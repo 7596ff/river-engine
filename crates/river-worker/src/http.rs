@@ -22,6 +22,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/registry", post(handle_registry))
         .route("/prepare_switch", post(handle_prepare_switch))
         .route("/commit_switch", post(handle_commit_switch))
+        .route("/abort_switch", post(handle_abort_switch))
         .route("/health", get(handle_health))
         .with_state(state)
 }
@@ -235,6 +236,16 @@ async fn handle_commit_switch(
         committed: true,
         new_baton: baton_str.into(),
     }))
+}
+
+/// POST /abort_switch - Abort a prepared switch.
+async fn handle_abort_switch(State(state): State<SharedState>) -> StatusCode {
+    let mut s = state.write().await;
+    if s.switch_pending {
+        s.switch_pending = false;
+        tracing::info!("Switch aborted");
+    }
+    StatusCode::OK
 }
 
 /// Health response.
