@@ -117,6 +117,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create shared state
     let state = new_shared_state(&config, registration.clone());
 
+    // Compact conversation files on startup
+    let workspace = config.workspace_path(&registration);
+    if let Err(e) = conversation::compact_conversations(&workspace) {
+        tracing::warn!(error = %e, "Failed to compact conversation files");
+    }
+
     // Update context limit from model config
     {
         let mut s = state.write().await;
