@@ -58,7 +58,6 @@ workspace/
 ├── moves/           # Per-turn summaries (spectator writes)
 ├── moments/         # Arc summaries (spectator writes)
 ├── embeddings/      # Files indexed for semantic search
-│   └── room-notes/  # Spectator witness observations
 ├── memory/          # Long-term memory
 ├── notes/           # Working notes
 └── artifacts/       # Generated files
