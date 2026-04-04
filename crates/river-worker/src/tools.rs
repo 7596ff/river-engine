@@ -12,6 +12,17 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
+/// Result from read_history tool.
+#[derive(Debug, Serialize, Default)]
+pub struct ReadHistoryResult {
+    pub success: bool,
+    pub messages_fetched: usize,
+    pub oldest_id: Option<String>,
+    pub newest_id: Option<String>,
+    pub error: Option<String>,
+    pub retry_after_ms: Option<u64>,
+}
+
 /// Tool error codes.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "code", content = "details")]
@@ -83,6 +94,7 @@ pub async fn execute_tool(
         "create_move" => execute_create_move(&args, state, generator).await,
         "create_moment" => execute_create_moment(&args, state, generator).await,
         "adapter" => execute_adapter(&args, state, client).await,
+        "read_history" => execute_read_history(&args, state).await,
         _ => ToolResult::Error(ToolError::UnsupportedOperation {
             operation: call.name.clone(),
         }),
@@ -1093,4 +1105,191 @@ async fn execute_adapter(
             adapter: adapter.into(),
         }),
     }
+}
+
+async fn execute_read_history(
+    args: &serde_json::Value,
+    state: &SharedState,
+) -> ToolResult {
+    // Extract required params
+    let channel = match args.get("channel").and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            return ToolResult::Error(ToolError::MissingParameter {
+                name: "channel".into(),
+            });
+        }
+    };
+
+    let adapter = match args.get("adapter").and_then(|v| v.as_str()) {
+        Some(a) => a.to_string(),
+        None => {
+            return ToolResult::Error(ToolError::MissingParameter {
+                name: "adapter".into(),
+            });
+        }
+    };
+
+    // Optional params
+    let limit = args.get("limit").and_then(|v| v.as_u64()).map(|l| l.min(100) as u32);
+    let before = args.get("before").and_then(|v| v.as_str()).map(String::from);
+    let after = args.get("after").and_then(|v| v.as_str()).map(String::from);
+
+    // Check mutual exclusivity
+    if before.is_some() && after.is_some() {
+        return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+            success: false,
+            error: Some("Cannot specify both 'before' and 'after'".into()),
+            ..Default::default()
+        }).unwrap());
+    }
+
+    let s = state.read().await;
+
+    // Find adapter in registry
+    let adapter_entry = s.registry.processes.iter().find(|p| {
+        if let river_protocol::ProcessEntry::Adapter { adapter_type, .. } = p {
+            adapter_type == &adapter
+        } else {
+            false
+        }
+    });
+
+    let adapter_endpoint = match adapter_entry {
+        Some(river_protocol::ProcessEntry::Adapter { endpoint, features, .. }) => {
+            // Check ReadHistory feature
+            if !features.contains(&(river_adapter::FeatureId::ReadHistory as u16)) {
+                return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+                    success: false,
+                    error: Some("Adapter does not support ReadHistory".into()),
+                    ..Default::default()
+                }).unwrap());
+            }
+            endpoint.clone()
+        }
+        _ => {
+            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+                success: false,
+                error: Some(format!("Adapter '{}' not found", adapter)),
+                ..Default::default()
+            }).unwrap());
+        }
+    };
+
+    let workspace = s.workspace.clone();
+    drop(s);
+
+    // Build request
+    let request = river_adapter::OutboundRequest::ReadHistory {
+        channel: channel.clone(),
+        limit,
+        before,
+        after,
+    };
+
+    // Call adapter
+    let client = reqwest::Client::new();
+    let response = match client
+        .post(format!("{}/execute", adapter_endpoint))
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+                success: false,
+                error: Some(format!("Request failed: {}", e)),
+                ..Default::default()
+            }).unwrap());
+        }
+    };
+
+    // Parse response
+    let resp: river_adapter::OutboundResponse = match response.json().await {
+        Ok(r) => r,
+        Err(e) => {
+            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+                success: false,
+                error: Some(format!("Invalid response: {}", e)),
+                ..Default::default()
+            }).unwrap());
+        }
+    };
+
+    if !resp.ok {
+        let err = resp.error.unwrap_or_else(|| river_adapter::ResponseError::new(
+            river_adapter::ErrorCode::PlatformError,
+            "Unknown error",
+        ));
+        return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+            success: false,
+            error: Some(err.message),
+            retry_after_ms: err.retry_after_ms,
+            ..Default::default()
+        }).unwrap());
+    }
+
+    // Extract messages
+    let messages = match resp.data {
+        Some(river_adapter::ResponseData::History { messages }) => messages,
+        _ => {
+            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+                success: false,
+                error: Some("Unexpected response format".into()),
+                ..Default::default()
+            }).unwrap());
+        }
+    };
+
+    // Write to conversation file
+    let conv_channel = river_adapter::Channel {
+        adapter: adapter.clone(),
+        id: channel.clone(),
+        name: None,
+    };
+    let path = crate::conversation::conversation_path_for_channel(&workspace, &conv_channel);
+
+    let mut oldest_id: Option<String> = None;
+    let mut newest_id: Option<String> = None;
+
+    for msg in &messages {
+        // Track oldest/newest
+        if oldest_id.is_none() || msg.message_id < *oldest_id.as_ref().unwrap() {
+            oldest_id = Some(msg.message_id.clone());
+        }
+        if newest_id.is_none() || msg.message_id > *newest_id.as_ref().unwrap() {
+            newest_id = Some(msg.message_id.clone());
+        }
+
+        let line = river_protocol::conversation::Message {
+            direction: river_protocol::conversation::MessageDirection::Unread,
+            timestamp: msg.timestamp.clone(),
+            id: msg.message_id.clone(),
+            author: river_protocol::Author {
+                name: msg.author.name.clone(),
+                id: msg.author.id.clone(),
+                bot: msg.author.bot,
+            },
+            content: msg.content.clone(),
+            reactions: vec![],
+        };
+
+        if let Err(e) = river_protocol::conversation::Conversation::append_line(
+            &path,
+            &river_protocol::conversation::Line::Message(line),
+        ) {
+            tracing::warn!(error = %e, "Failed to write history message to conversation file");
+        }
+    }
+
+    ToolResult::Success(serde_json::to_value(ReadHistoryResult {
+        success: true,
+        messages_fetched: messages.len(),
+        oldest_id,
+        newest_id,
+        error: None,
+        retry_after_ms: None,
+    }).unwrap())
 }
