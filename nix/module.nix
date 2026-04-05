@@ -205,34 +205,35 @@ in
 
     users.groups.${cfg.group} = { };
 
-    # Orchestrator service
-    systemd.services.river-orchestrator = lib.mkIf cfg.orchestrator.enable {
-      description = "River Engine Orchestrator";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+    # Systemd services (orchestrator, workers, adapters)
+    systemd.services = {
+      # Orchestrator service
+      river-orchestrator = lib.mkIf cfg.orchestrator.enable {
+        description = "River Engine Orchestrator";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
 
-      serviceConfig = {
-        Type = "simple";
-        User = cfg.user;
-        Group = cfg.group;
-        WorkingDirectory = cfg.dataDir;
-        ExecStart = "${cfg.package}/bin/river-orchestrator --config ${configFile} --port ${toString cfg.orchestrator.port}";
-        Restart = "on-failure";
-        RestartSec = "5s";
+        serviceConfig = {
+          Type = "simple";
+          User = cfg.user;
+          Group = cfg.group;
+          WorkingDirectory = cfg.dataDir;
+          ExecStart = "${cfg.package}/bin/river-orchestrator --config ${configFile} --port ${toString cfg.orchestrator.port}";
+          Restart = "on-failure";
+          RestartSec = "5s";
 
-        # Hardening
-        NoNewPrivileges = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        PrivateTmp = true;
-        ReadWritePaths = [ cfg.dataDir ];
-      } // lib.optionalAttrs (cfg.environmentFile != null) {
-        EnvironmentFile = cfg.environmentFile;
+          # Hardening
+          NoNewPrivileges = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          PrivateTmp = true;
+          ReadWritePaths = [ cfg.dataDir ];
+        } // lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
       };
-    };
-
-    # Worker services
-    systemd.services = lib.mapAttrs' (name: workerCfg:
+    } // (lib.mapAttrs' (name: workerCfg:
+      # Worker services
       lib.nameValuePair "river-worker-${name}" (lib.mkIf workerCfg.enable {
         description = "River Engine Worker - ${name}";
         wantedBy = [ "multi-user.target" ];
@@ -264,10 +265,8 @@ in
           EnvironmentFile = cfg.environmentFile;
         };
       })
-    ) cfg.workers;
-
-    # Adapter services
-    systemd.services = lib.mapAttrs' (name: adapterCfg:
+    ) cfg.workers) // (lib.mapAttrs' (name: adapterCfg:
+      # Adapter services
       lib.nameValuePair "river-adapter-${name}" (lib.mkIf adapterCfg.enable {
         description = "River Engine Adapter - ${name}";
         wantedBy = [ "multi-user.target" ];
@@ -299,7 +298,7 @@ in
           EnvironmentFile = cfg.environmentFile;
         };
       })
-    ) cfg.adapters;
+    ) cfg.adapters);
 
     # Firewall
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.orchestrator.openFirewall [
