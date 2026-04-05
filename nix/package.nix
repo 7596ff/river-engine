@@ -1,21 +1,16 @@
 {
   lib,
   rustPlatform,
-  fetchgit,
   pkg-config,
   openssl,
+  src,
 }:
 
-rustPlatform.buildRustPackage rec {
+rustPlatform.buildRustPackage {
   pname = "river-engine";
   version = "0.1.0";
 
-  src = fetchgit {
-    url = "git@athena.7596ff.com:river-engine.git";
-    rev = "main";
-    # Replace with actual hash after first build attempt
-    hash = lib.fakeHash;
-  };
+  inherit src;
 
   cargoLock = {
     lockFile = "${src}/Cargo.lock";

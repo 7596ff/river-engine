@@ -13,7 +13,7 @@
       in
       {
         packages = {
-          river-engine = pkgs.callPackage ./package.nix { };
+          river-engine = pkgs.callPackage ./nix/package.nix { src = self; };
           default = self.packages.${system}.river-engine;
         };
 
@@ -29,13 +29,13 @@
       }
     ) // {
       nixosModules = {
-        river-engine = import ./module.nix;
+        river-engine = import ./nix/module.nix;
         default = self.nixosModules.river-engine;
       };
 
       # Overlay for adding river-engine to pkgs
       overlays.default = final: prev: {
-        river-engine = final.callPackage ./package.nix { };
+        river-engine = final.callPackage "${self}/nix/package.nix" { src = self; };
       };
     };
 }
