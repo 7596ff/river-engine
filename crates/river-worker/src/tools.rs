@@ -964,6 +964,10 @@ async fn execute_create_move(
         });
     }
 
+    // Write to inbox
+    let summary = format!("{}-{}", start_id, end_id);
+    let _ = crate::inbox::write_inbox_item(&workspace, adapter, channel_id, "create_move", &summary).await;
+
     ToolResult::Success(serde_json::json!({
         "id": id_str,
         "created": true
@@ -1065,6 +1069,10 @@ async fn execute_create_moment(
             path: e.to_string(),
         });
     }
+
+    // Write to inbox
+    let summary = format!("{}-{}", start_id, end_id);
+    let _ = crate::inbox::write_inbox_item(&workspace, adapter, channel_id, "create_moment", &summary).await;
 
     ToolResult::Success(serde_json::json!({
         "id": id_str,
@@ -1291,6 +1299,13 @@ async fn execute_read_history(
             tracing::warn!(error = %e, "Failed to write history message to conversation file");
         }
     }
+
+    // Write to inbox
+    let summary = format!("{}-{}",
+        oldest_id.as_deref().unwrap_or("?"),
+        newest_id.as_deref().unwrap_or("?")
+    );
+    let _ = crate::inbox::write_inbox_item(&workspace, &adapter, &channel, "read_history", &summary).await;
 
     ToolResult::Success(serde_json::to_value(ReadHistoryResult {
         success: true,
