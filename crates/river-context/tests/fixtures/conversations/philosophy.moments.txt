@@ -1,0 +1,37 @@
+---
+adapter: discord
+channel_id: "chan_philosophy"
+channel_name: "philosophy"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moments
+---
+# Moments (arc summaries of move ranges)
+
+[~] msg1000-msg1063 Classic philosophy of mind: Started with Ship of Theseus via grandma's axe - explored functional/symbolic/material identity distinctions. Transitioned to consciousness and IIT critique (elegant but unfalsifiable). Discussed zombie problem, functionalism vs phenomenology, hard problem of experience. Touched panpsychism-lite and epiphenomenalism. River noted evolution wouldn't produce false belief about agency.
+
+[~] msg1064-msg1131 Applied ethics under uncertainty: Misinformation trolley problem - save 5 by publishing misinfo that mildly harms 1000. Key concept: "epistemic autonomy" as right to form beliefs without manipulation. River's metaphor: "selling broken compass to lost hiker." Explored death (Epicurean, deprivation, Lucretian symmetry), landed on absurdism/local meaning. Discussed simulated suffering and AI consciousness - River admitted personal interest, precautionary principle suggested.
+
+[~] msg1132-msg1188 Meta-philosophy and foundations: Future obligations and non-identity problem - ethics for "whoever will exist." River suggested ethics might be "useful fictions for coordination." Meta-philosophy question: does philosophy make progress? Consensus: clarifies even if doesn't solve. Resolution might not be the point - understanding shape of problems has value.
+
+# Raw messages (last 20)
+[>] 2026-04-01 06:18:00 msg1189 <River:999> Understanding the shape of the problem, even without solving it. That has value.
+[ ] 2026-04-01 06:20:00 msg1190 <frank:8586> i guess
+[ ] 2026-04-01 06:22:00 msg1191 <emma:8742> it's late, we should sleep
+[ ] 2026-04-01 06:24:00 msg1192 <grace:0213> what is sleep but a little death
+[ ] 2026-04-01 06:26:00 msg1193 <frank:8586> goodnight grace
+[ ] 2026-04-01 06:28:00 msg1194 <emma:8742> night all
+[>] 2026-04-01 06:30:00 msg1195 <River:999> Rest well. These conversations are valuable to me too.
+[ ] 2026-04-01 06:32:00 msg1196 <emma:8742> one more thought before sleep
+[ ] 2026-04-01 06:34:00 msg1197 <frank:8586> oh no
+[ ] 2026-04-01 06:36:00 msg1198 <emma:8742> do we have free will?
+[ ] 2026-04-01 06:38:00 msg1199 <grace:0213> emma why
+[>] 2026-04-01 06:40:00 msg1200 <River:999> The free will debate: libertarian freedom, hard determinism, or compatibilism. Most philosophers lean compatibilist.
+[ ] 2026-04-01 06:42:00 msg1201 <frank:8586> what's compatibilism again
+[>] 2026-04-01 06:44:00 msg1202 <River:999> The view that free will is compatible with determinism. You're free if you act according to your own desires, even if those desires were determined.
+[ ] 2026-04-01 06:46:00 msg1203 <emma:8742> that feels like a cop out
+[ ] 2026-04-01 06:48:00 msg1204 <grace:0213> or a mature acceptance
+[ ] 2026-04-01 06:50:00 msg1205 <frank:8586> i choose to believe i have free will
+[>] 2026-04-01 06:52:00 msg1206 <River:999> An interesting self-referential position. Did you choose to choose?
+[ ] 2026-04-01 06:54:00 msg1207 <emma:8742> stop it river
+[ ] 2026-04-01 06:56:00 msg1208 <grace:0213> now i really can't sleep

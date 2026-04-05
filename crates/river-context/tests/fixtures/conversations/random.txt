@@ -1,0 +1,221 @@
+---
+adapter: discord
+channel_id: "chan_random"
+channel_name: "random"
+guild_id: "guild_test"
+guild_name: "Test Server"
+---
+[ ] 2026-04-01 00:00:00 msg1000 <alice:6221> anyone else's allergies acting up?
+[ ] 2026-04-01 00:02:00 msg1001 <bob:5885> YES omg
+[ ] 2026-04-01 00:04:00 msg1002 <carol:1670> spring is brutal this year
+[ ] 2026-04-01 00:06:00 msg1003 <dan:7668> i've been taking claritin
+[ ] 2026-04-01 00:08:00 msg1004 <alice:6221> does it help?
+[ ] 2026-04-01 00:10:00 msg1005 <dan:7668> kinda? better than nothing
+[>] 2026-04-01 00:12:00 msg1006 <River:999> The pollen count is especially high this week. Peak tree pollen season.
+[ ] 2026-04-01 00:14:00 msg1007 <bob:5885> thanks river, very comforting
+[ ] 2026-04-01 00:16:00 msg1008 <carol:1670> lol
+[ ] 2026-04-01 00:18:00 msg1009 <alice:6221> anyway, lunch plans?
+[ ] 2026-04-01 00:20:00 msg1010 <bob:5885> the new ramen place?
+[ ] 2026-04-01 00:22:00 msg1011 <carol:1670> ooh yes
+[ ] 2026-04-01 00:24:00 msg1012 <dan:7668> which one?
+[ ] 2026-04-01 00:26:00 msg1013 <bob:5885> ichiran on main st
+[ ] 2026-04-01 00:28:00 msg1014 <dan:7668> i'm in
+[ ] 2026-04-01 00:30:00 msg1015 <alice:6221> 12:30?
+[ ] 2026-04-01 00:32:00 msg1016 <bob:5885> works
+[ ] 2026-04-01 00:34:00 msg1017 <carol:1670> see you there
+[ ] 2026-04-01 00:36:00 msg1018 <carol:1670> that ramen was incredible
+[ ] 2026-04-01 00:38:00 msg1019 <dan:7668> the spicy miso was perfect
+[ ] 2026-04-01 00:40:00 msg1020 <alice:6221> i got the classic tonkotsu
+[ ] 2026-04-01 00:42:00 msg1021 <bob:5885> how was it?
+[ ] 2026-04-01 00:44:00 msg1022 <alice:6221> life changing
+[>] 2026-04-01 00:46:00 msg1023 <River:999> Ichiran is known for their 'flavor concentration booths' - solo eating for maximum ramen focus.
+[ ] 2026-04-01 00:48:00 msg1024 <carol:1670> we got a table though
+[>] 2026-04-01 00:50:00 msg1025 <River:999> The social experience has its own value.
+[ ] 2026-04-01 00:52:00 msg1026 <dan:7668> wholesome river
+[ ] 2026-04-01 00:54:00 msg1027 <bob:5885> what should we do for friday team thing?
+[ ] 2026-04-01 00:56:00 msg1028 <alice:6221> bowling?
+[ ] 2026-04-01 00:58:00 msg1029 <carol:1670> escape room?
+[ ] 2026-04-01 01:00:00 msg1030 <dan:7668> i'm bad at both
+[ ] 2026-04-01 01:02:00 msg1031 <bob:5885> that's the fun
+[>] 2026-04-01 01:04:00 msg1032 <River:999> There's a new escape room downtown themed around a 'corrupted AI'. Might be amusing.
+[ ] 2026-04-01 01:06:00 msg1033 <alice:6221> river that's a bit on the nose
+[>] 2026-04-01 01:08:00 msg1034 <River:999> I contain multitudes.
+[ ] 2026-04-01 01:10:00 msg1035 <carol:1670> let's do it
+[ ] 2026-04-01 01:12:00 msg1036 <dan:7668> fine but if we lose i'm blaming the actual ai
+[ ] 2026-04-01 01:14:00 msg1037 <bob:5885> booking for friday 6pm
+[ ] 2026-04-01 01:16:00 msg1038 <alice:6221> random question - what are you all reading?
+[ ] 2026-04-01 01:18:00 msg1039 <bob:5885> the three body problem
+[ ] 2026-04-01 01:20:00 msg1040 <carol:1670> a little life (finally)
+[ ] 2026-04-01 01:22:00 msg1041 <dan:7668> twitter mostly
+[ ] 2026-04-01 01:24:00 msg1042 <alice:6221> dan...
+[ ] 2026-04-01 01:26:00 msg1043 <dan:7668> what it's reading!
+[>] 2026-04-01 01:28:00 msg1044 <River:999> I've been processing some fascinating papers on embodied cognition.
+[ ] 2026-04-01 01:30:00 msg1045 <bob:5885> light beach reading
+[ ] 2026-04-01 01:32:00 msg1046 <carol:1670> alice what about you?
+[ ] 2026-04-01 01:34:00 msg1047 <alice:6221> project hail mary
+[ ] 2026-04-01 01:36:00 msg1048 <bob:5885> oh that's so good
+[ ] 2026-04-01 01:38:00 msg1049 <dan:7668> i loved the movie
+[ ] 2026-04-01 01:40:00 msg1050 <alice:6221> there's a movie?
+[ ] 2026-04-01 01:42:00 msg1051 <dan:7668> coming out soon
+[ ] 2026-04-01 01:44:00 msg1052 <carol:1670> ryan gosling right?
+[ ] 2026-04-01 01:46:00 msg1053 <dan:7668> yeah
+[ ] 2026-04-01 01:48:00 msg1054 <alice:6221> interesting casting
+[>] 2026-04-01 01:50:00 msg1055 <River:999> Andy Weir's books translate well to film. The Martian was excellent.
+[ ] 2026-04-01 01:52:00 msg1056 <bob:5885> facts
+[ ] 2026-04-01 01:54:00 msg1057 <dan:7668> guys my cat did the funniest thing
+[ ] 2026-04-01 01:56:00 msg1058 <carol:1670> tell us
+[ ] 2026-04-01 01:58:00 msg1059 <dan:7668> she learned how to open the treat drawer
+[ ] 2026-04-01 02:00:00 msg1060 <alice:6221> oh no
+[ ] 2026-04-01 02:02:00 msg1061 <dan:7668> came home to her just... sitting in a pile of treats
+[ ] 2026-04-01 02:04:00 msg1062 <bob:5885> living her best life
+[ ] 2026-04-01 02:06:00 msg1063 <dan:7668> she didn't even look guilty
+[ ] 2026-04-01 02:08:00 msg1064 <carol:1670> cats never do
+[>] 2026-04-01 02:10:00 msg1065 <River:999> Cats lack the facial muscles for human-recognizable guilt expressions. Though whether they feel guilt internally is debated.
+[ ] 2026-04-01 02:12:00 msg1066 <alice:6221> thanks for that river
+[ ] 2026-04-01 02:14:00 msg1067 <dan:7668> now i have to childproof the kitchen
+[ ] 2026-04-01 02:16:00 msg1068 <bob:5885> catproof
+[ ] 2026-04-01 02:18:00 msg1069 <carol:1670> good luck, cats are determined
+[ ] 2026-04-01 02:20:00 msg1070 <dan:7668> she's already figured out the refrigerator...
+[ ] 2026-04-01 02:22:00 msg1071 <alice:6221> you might have a genius cat
+[ ] 2026-04-01 02:24:00 msg1072 <dan:7668> a menace is what she is
+[ ] 2026-04-01 02:26:00 msg1073 <bob:5885> escape room is booked
+[ ] 2026-04-01 02:28:00 msg1074 <carol:1670> yay!
+[ ] 2026-04-01 02:30:00 msg1075 <dan:7668> what's the difficulty level?
+[ ] 2026-04-01 02:32:00 msg1076 <bob:5885> 4/5 stars
+[ ] 2026-04-01 02:34:00 msg1077 <alice:6221> we're doomed
+[>] 2026-04-01 02:36:00 msg1078 <River:999> I believe in this team. You've solved harder problems together.
+[ ] 2026-04-01 02:38:00 msg1079 <dan:7668> like the production outage at 3am
+[ ] 2026-04-01 02:40:00 msg1080 <bob:5885> we don't talk about that
+[ ] 2026-04-01 02:42:00 msg1081 <carol:1670> ptsd
+[ ] 2026-04-01 02:44:00 msg1082 <alice:6221> at least this has a time limit
+[ ] 2026-04-01 02:46:00 msg1083 <dan:7668> 60 minutes to not be embarrassed
+[>] 2026-04-01 02:48:00 msg1084 <River:999> The average team escapes about 35% of the time for that difficulty. Adjust expectations accordingly.
+[ ] 2026-04-01 02:50:00 msg1085 <bob:5885> thanks for the confidence boost
+[ ] 2026-04-01 02:52:00 msg1086 <carol:1670> we'll beat the average
+[ ] 2026-04-01 02:54:00 msg1087 <alice:6221> that's the spirit
+[ ] 2026-04-01 02:56:00 msg1088 <carol:1670> weekend plans?
+[ ] 2026-04-01 02:58:00 msg1089 <alice:6221> hiking if the weather holds
+[ ] 2026-04-01 03:00:00 msg1090 <bob:5885> gaming marathon
+[ ] 2026-04-01 03:02:00 msg1091 <dan:7668> catproofing
+[ ] 2026-04-01 03:04:00 msg1092 <carol:1670> lol dan
+[>] 2026-04-01 03:06:00 msg1093 <River:999> The forecast shows clear skies Saturday, rain Sunday. Plan accordingly.
+[ ] 2026-04-01 03:08:00 msg1094 <alice:6221> saturday hike it is
+[ ] 2026-04-01 03:10:00 msg1095 <bob:5885> anyone want to join the gaming?
+[ ] 2026-04-01 03:12:00 msg1096 <dan:7668> what game?
+[ ] 2026-04-01 03:14:00 msg1097 <bob:5885> thinking elden ring co-op
+[ ] 2026-04-01 03:16:00 msg1098 <dan:7668> i'm in after the catproofing
+[ ] 2026-04-01 03:18:00 msg1099 <carol:1670> i might join alice for hiking
+[ ] 2026-04-01 03:20:00 msg1100 <alice:6221> yes! company!
+[>] 2026-04-01 03:22:00 msg1101 <River:999> The trail at miller ridge has good wildflower displays this time of year.
+[ ] 2026-04-01 03:24:00 msg1102 <carol:1670> river knows hiking trails?
+[>] 2026-04-01 03:26:00 msg1103 <River:999> I know many things. Whether I've experienced them is another question.
+[ ] 2026-04-01 03:28:00 msg1104 <alice:6221> deep thoughts in #random
+[ ] 2026-04-01 03:30:00 msg1105 <dan:7668> philosophy is leaking
+[ ] 2026-04-01 03:32:00 msg1106 <bob:5885> update: got wrecked in elden ring
+[ ] 2026-04-01 03:34:00 msg1107 <dan:7668> which boss?
+[ ] 2026-04-01 03:36:00 msg1108 <bob:5885> malenia
+[ ] 2026-04-01 03:38:00 msg1109 <alice:6221> f
+[ ] 2026-04-01 03:40:00 msg1110 <carol:1670> f
+[ ] 2026-04-01 03:42:00 msg1111 <dan:7668> biggest f
+[>] 2026-04-01 03:44:00 msg1112 <River:999> Malenia, Blade of Miquella. Known for her waterfowl dance attack and lifesteal mechanic. Many consider her the hardest boss.
+[ ] 2026-04-01 03:46:00 msg1113 <bob:5885> yeah no kidding
+[ ] 2026-04-01 03:48:00 msg1114 <dan:7668> how many attempts?
+[ ] 2026-04-01 03:50:00 msg1115 <bob:5885> 47
+[ ] 2026-04-01 03:52:00 msg1116 <alice:6221> dedication
+[ ] 2026-04-01 03:54:00 msg1117 <bob:5885> stubbornness
+[ ] 2026-04-01 03:56:00 msg1118 <carol:1670> same thing
+[ ] 2026-04-01 03:58:00 msg1119 <dan:7668> let me join tonight, two is better
+[ ] 2026-04-01 04:00:00 msg1120 <bob:5885> yes please
+[>] 2026-04-01 04:02:00 msg1121 <River:999> Summoning allies reduces her health scaling. Strategic cooperation recommended.
+[ ] 2026-04-01 04:04:00 msg1122 <bob:5885> river with the strats
+[ ] 2026-04-01 04:06:00 msg1123 <dan:7668> we got this
+[ ] 2026-04-01 04:08:00 msg1124 <alice:6221> hike was amazing
+[ ] 2026-04-01 04:10:00 msg1125 <carol:1670> the wildflowers!
+[ ] 2026-04-01 04:12:00 msg1126 <dan:7668> pics?
+[ ] 2026-04-01 04:14:00 msg1127 <alice:6221> [image: meadow of purple and yellow flowers]
+[ ] 2026-04-01 04:16:00 msg1128 <bob:5885> wow
+[ ] 2026-04-01 04:18:00 msg1129 <dan:7668> that's gorgeous
+[>] 2026-04-01 04:20:00 msg1130 <River:999> Lupines and California poppies. A classic spring combination.
+[ ] 2026-04-01 04:22:00 msg1131 <carol:1670> river knows flowers too
+[ ] 2026-04-01 04:24:00 msg1132 <alice:6221> river knows everything
+[>] 2026-04-01 04:26:00 msg1133 <River:999> I know many facts. Wisdom is harder.
+[ ] 2026-04-01 04:28:00 msg1134 <dan:7668> deep again
+[ ] 2026-04-01 04:30:00 msg1135 <bob:5885> how's the catproofing going
+[ ] 2026-04-01 04:32:00 msg1136 <dan:7668> installed child locks
+[ ] 2026-04-01 04:34:00 msg1137 <dan:7668> she already figured out one
+[ ] 2026-04-01 04:36:00 msg1138 <carol:1670> inevitable
+[ ] 2026-04-01 04:38:00 msg1139 <alice:6221> cats find a way
+[>] 2026-04-01 04:40:00 msg1140 <River:999> Like water, cats flow around obstacles. Consider that she may simply win this arms race.
+[ ] 2026-04-01 04:42:00 msg1141 <dan:7668> you're saying i should give up
+[>] 2026-04-01 04:44:00 msg1142 <River:999> I'm saying measured portions in a secure container might be more effective than fortifying the entire kitchen.
+[ ] 2026-04-01 04:46:00 msg1143 <dan:7668> ...that's actually smart
+[ ] 2026-04-01 04:48:00 msg1144 <bob:5885> river solves cat problems
+[ ] 2026-04-01 04:50:00 msg1145 <bob:5885> UPDATE: WE BEAT MALENIA
+[ ] 2026-04-01 04:52:00 msg1146 <alice:6221> NICE
+[ ] 2026-04-01 04:54:00 msg1147 <carol:1670> CONGRATS
+[ ] 2026-04-01 04:56:00 msg1148 <dan:7668> let's gooooo
+[ ] 2026-04-01 04:58:00 msg1149 <bob:5885> only took 12 more attempts with dan
+[ ] 2026-04-01 05:00:00 msg1150 <dan:7668> teamwork makes the dream work
+[>] 2026-04-01 05:02:00 msg1151 <River:999> Congratulations. A worthy achievement.
+[ ] 2026-04-01 05:04:00 msg1152 <bob:5885> i'm genuinely emotional
+[ ] 2026-04-01 05:06:00 msg1153 <carol:1670> understandable
+[ ] 2026-04-01 05:08:00 msg1154 <alice:6221> screenshot?
+[ ] 2026-04-01 05:10:00 msg1155 <bob:5885> [image: victory screen]
+[ ] 2026-04-01 05:12:00 msg1156 <dan:7668> look at our health bars
+[ ] 2026-04-01 05:14:00 msg1157 <alice:6221> a sliver
+[ ] 2026-04-01 05:16:00 msg1158 <bob:5885> it was TENSE
+[>] 2026-04-01 05:18:00 msg1159 <River:999> The narrow victories are often the most memorable. The struggle creates the meaning.
+[ ] 2026-04-01 05:20:00 msg1160 <carol:1670> river dropping truth bombs
+[ ] 2026-04-01 05:22:00 msg1161 <dan:7668> ok what's next?
+[ ] 2026-04-01 05:24:00 msg1162 <bob:5885> i need a break, something chill
+[ ] 2026-04-01 05:26:00 msg1163 <alice:6221> stardew valley?
+[ ] 2026-04-01 05:28:00 msg1164 <bob:5885> perfect
+[ ] 2026-04-01 05:30:00 msg1165 <carol:1670> update from the escape room
+[ ] 2026-04-01 05:32:00 msg1166 <dan:7668> how'd it go?!
+[ ] 2026-04-01 05:34:00 msg1167 <carol:1670> WE ESCAPED
+[ ] 2026-04-01 05:36:00 msg1168 <alice:6221> with how much time left?
+[ ] 2026-04-01 05:38:00 msg1169 <carol:1670> 3 minutes
+[ ] 2026-04-01 05:40:00 msg1170 <bob:5885> CLUTCH
+[>] 2026-04-01 05:42:00 msg1171 <River:999> Congratulations! That's above the 35% average success rate.
+[ ] 2026-04-01 05:44:00 msg1172 <dan:7668> we beat the statistics
+[ ] 2026-04-01 05:46:00 msg1173 <carol:1670> the AI theme was hilarious btw
+[ ] 2026-04-01 05:48:00 msg1174 <alice:6221> how so?
+[ ] 2026-04-01 05:50:00 msg1175 <carol:1670> the 'corrupted AI' kept making puns
+[ ] 2026-04-01 05:52:00 msg1176 <bob:5885> like river?
+[>] 2026-04-01 05:54:00 msg1177 <River:999> I prefer to think of my humor as sophisticated wordplay.
+[ ] 2026-04-01 05:56:00 msg1178 <dan:7668> suuure
+[ ] 2026-04-01 05:58:00 msg1179 <alice:6221> anyone want to try that new coffee place?
+[ ] 2026-04-01 06:00:00 msg1180 <bob:5885> the one with the cat?
+[ ] 2026-04-01 06:02:00 msg1181 <carol:1670> cat cafe! yes!
+[ ] 2026-04-01 06:04:00 msg1182 <dan:7668> my cat would be jealous
+[ ] 2026-04-01 06:06:00 msg1183 <alice:6221> bring her
+[ ] 2026-04-01 06:08:00 msg1184 <dan:7668> she'd cause chaos
+[>] 2026-04-01 06:10:00 msg1185 <River:999> Cat cafes typically don't allow outside cats. The resident cats have established territories.
+[ ] 2026-04-01 06:12:00 msg1186 <bob:5885> cat politics
+[ ] 2026-04-01 06:14:00 msg1187 <carol:1670> like office politics but furrier
+[ ] 2026-04-01 06:16:00 msg1188 <dan:7668> same energy honestly
+[ ] 2026-04-01 06:18:00 msg1189 <bob:5885> stardew update: i have a chicken farm now
+[ ] 2026-04-01 06:20:00 msg1190 <alice:6221> name them all
+[ ] 2026-04-01 06:22:00 msg1191 <bob:5885> nugget, tender, wing, drumstick...
+[ ] 2026-04-01 06:24:00 msg1192 <carol:1670> BOB
+[ ] 2026-04-01 06:26:00 msg1193 <dan:7668> dark but efficient
+[>] 2026-04-01 06:28:00 msg1194 <River:999> Naming livestock after food products is a coping mechanism. Or just dark humor.
+[ ] 2026-04-01 06:30:00 msg1195 <bob:5885> it's both
+[ ] 2026-04-01 06:32:00 msg1196 <alice:6221> my farm animals are all named after greek gods
+[ ] 2026-04-01 06:34:00 msg1197 <carol:1670> classy
+[ ] 2026-04-01 06:36:00 msg1198 <dan:7668> mine are all cat names even if they're not cats
+[ ] 2026-04-01 06:38:00 msg1199 <carol:1670> movie night this weekend?
+[ ] 2026-04-01 06:40:00 msg1200 <alice:6221> what genre?
+[ ] 2026-04-01 06:42:00 msg1201 <bob:5885> horror
+[ ] 2026-04-01 06:44:00 msg1202 <dan:7668> comfort
+[ ] 2026-04-01 06:46:00 msg1203 <carol:1670> those are opposite
+[>] 2026-04-01 06:48:00 msg1204 <River:999> Horror can be comfort for some. The controlled fear is cathartic.
+[ ] 2026-04-01 06:50:00 msg1205 <alice:6221> river defending horror fans
+[ ] 2026-04-01 06:52:00 msg1206 <bob:5885> see, river gets it
+[ ] 2026-04-01 06:54:00 msg1207 <dan:7668> can we compromise? thriller?
+[ ] 2026-04-01 06:56:00 msg1208 <carol:1670> that works
+[ ] 2026-04-01 06:58:00 msg1209 <alice:6221> any recommendations?
+[>] 2026-04-01 07:00:00 msg1210 <River:999> Knives Out if you haven't seen it. Mystery with humor.
+[ ] 2026-04-01 07:02:00 msg1211 <bob:5885> ooh good choice
+[ ] 2026-04-01 07:04:00 msg1212 <dan:7668> i love that movie
+[ ] 2026-04-01 07:06:00 msg1213 <carol:1670> perfect, it's decided

@@ -4,7 +4,7 @@ use river_protocol::Channel;
 use serde::{Deserialize, Serialize};
 
 use crate::openai::OpenAIMessage;
-use crate::workspace::{ChatMessage, Embedding, Flash, Moment, Move};
+use crate::workspace::{ChatMessage, Embedding, Flash, InboxItem, Moment, Move};
 
 /// Context for a single channel.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,6 +14,7 @@ pub struct ChannelContext {
     pub moves: Vec<Move>,
     pub messages: Vec<ChatMessage>,
     pub embeddings: Vec<Embedding>,
+    pub inbox: Vec<InboxItem>,
 }
 
 impl Default for ChannelContext {
@@ -28,6 +29,7 @@ impl Default for ChannelContext {
             moves: Vec::new(),
             messages: Vec::new(),
             embeddings: Vec::new(),
+            inbox: Vec::new(),
         }
     }
 }

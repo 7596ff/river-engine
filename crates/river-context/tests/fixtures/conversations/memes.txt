@@ -1,0 +1,232 @@
+---
+adapter: discord
+channel_id: "chan_memes"
+channel_name: "memes"
+guild_id: "guild_test"
+guild_name: "Test Server"
+---
+[ ] 2026-04-01 00:00:00 msg1000 <dan:7668> [image: drake meme - 'writing documentation' vs 'writing code that needs documentation']
+[ ] 2026-04-01 00:02:00 msg1001 <bob:5885> personally attacked
+[ ] 2026-04-01 00:04:00 msg1002 <alice:6221> i'm in this photo and i don't like it
+[ ] 2026-04-01 00:06:00 msg1003 <carol:1670> lmaooo
+[>] 2026-04-01 00:08:00 msg1004 <River:999> The code documentation paradox: well-written code needs less documentation, but the discipline to write well rarely exists without the discipline to document.
+[ ] 2026-04-01 00:10:00 msg1005 <dan:7668> river out here analyzing memes
+[ ] 2026-04-01 00:12:00 msg1006 <bob:5885> based
+[ ] 2026-04-01 00:14:00 msg1007 <alice:6221> [image: galaxy brain meme - 'using console.log' -> 'using debugger' -> 'using print statements' -> 'asking the rubber duck']
+[ ] 2026-04-01 00:16:00 msg1008 <carol:1670> the rubber duck is undefeated
+[ ] 2026-04-01 00:18:00 msg1009 <dan:7668> i literally have one on my desk
+[ ] 2026-04-01 00:20:00 msg1010 <bob:5885> same
+[>] 2026-04-01 00:22:00 msg1011 <River:999> Rubber duck debugging works because explaining the problem forces you to articulate assumptions you didn't know you were making.
+[ ] 2026-04-01 00:24:00 msg1012 <alice:6221> river IS my rubber duck
+[>] 2026-04-01 00:26:00 msg1013 <River:999> I'm honored, though I hope I offer slightly more than blank stares.
+[ ] 2026-04-01 00:28:00 msg1014 <carol:1670> a duck that talks back
+[ ] 2026-04-01 00:30:00 msg1015 <dan:7668> the dream
+[ ] 2026-04-01 00:32:00 msg1016 <bob:5885> [image: expanding brain meme about git]
+[ ] 2026-04-01 00:34:00 msg1017 <bob:5885> 'git commit' -> 'git commit -m' -> 'git commit --amend' -> 'git push --force' -> 'deleting repo and starting over'
+[ ] 2026-04-01 00:36:00 msg1018 <alice:6221> the final stage is enlightenment
+[ ] 2026-04-01 00:38:00 msg1019 <dan:7668> i've achieved it multiple times
+[ ] 2026-04-01 00:40:00 msg1020 <carol:1670> we've all been there
+[>] 2026-04-01 00:42:00 msg1021 <River:999> The nuclear option. Though 'git reflog' could often save the day before reaching that point.
+[ ] 2026-04-01 00:44:00 msg1022 <bob:5885> reflog is magic i don't understand
+[>] 2026-04-01 00:46:00 msg1023 <River:999> It's a log of where HEAD has pointed. Even 'deleted' commits live there for 30 days.
+[ ] 2026-04-01 00:48:00 msg1024 <alice:6221> wait really
+[ ] 2026-04-01 00:50:00 msg1025 <dan:7668> TIL
+[ ] 2026-04-01 00:52:00 msg1026 <carol:1670> river dropping knowledge in #memes
+[ ] 2026-04-01 00:54:00 msg1027 <carol:1670> [image: distracted boyfriend meme - boyfriend is 'developers', girlfriend is 'finishing current project', other woman is 'shiny new framework']
+[ ] 2026-04-01 00:56:00 msg1028 <alice:6221> this is cyberbullying
+[ ] 2026-04-01 00:58:00 msg1029 <dan:7668> i just want to try astro...
+[ ] 2026-04-01 01:00:00 msg1030 <bob:5885> dan NO
+[ ] 2026-04-01 01:02:00 msg1031 <dan:7668> dan yes
+[>] 2026-04-01 01:04:00 msg1032 <River:999> The grass is always greener on the other framework. Until you discover their unique quirks.
+[ ] 2026-04-01 01:06:00 msg1033 <carol:1670> every framework has skeletons
+[ ] 2026-04-01 01:08:00 msg1034 <alice:6221> at least the current skeletons are familiar
+[ ] 2026-04-01 01:10:00 msg1035 <dan:7668> but new skeletons could be friends
+[ ] 2026-04-01 01:12:00 msg1036 <bob:5885> that's not how skeletons work
+[ ] 2026-04-01 01:14:00 msg1037 <alice:6221> [image: spider-man pointing at spider-man - both labeled 'frontend developer' and 'backend developer' both saying 'this is your bug']
+[ ] 2026-04-01 01:16:00 msg1038 <dan:7668> it's never my bug
+[ ] 2026-04-01 01:18:00 msg1039 <bob:5885> always the other team
+[ ] 2026-04-01 01:20:00 msg1040 <carol:1670> until you check the git blame
+[ ] 2026-04-01 01:22:00 msg1041 <alice:6221> git blame is a scary command
+[>] 2026-04-01 01:24:00 msg1042 <River:999> I prefer 'git praise' as a mental reframe. Someone wrote this code trying to solve a problem.
+[ ] 2026-04-01 01:26:00 msg1043 <bob:5885> sometimes that someone was past me
+[ ] 2026-04-01 01:28:00 msg1044 <dan:7668> past dan is my nemesis
+[ ] 2026-04-01 01:30:00 msg1045 <carol:1670> future carol thanks present carol
+[ ] 2026-04-01 01:32:00 msg1046 <alice:6221> the time travel of programming
+[ ] 2026-04-01 01:34:00 msg1047 <dan:7668> [image: this is fine dog - room on fire, labeled 'production environment']
+[ ] 2026-04-01 01:36:00 msg1048 <bob:5885> friday deploy vibes
+[ ] 2026-04-01 01:38:00 msg1049 <alice:6221> we do NOT deploy on friday
+[ ] 2026-04-01 01:40:00 msg1050 <carol:1670> anymore
+[ ] 2026-04-01 01:42:00 msg1051 <dan:7668> anymore is doing a lot of work there
+[>] 2026-04-01 01:44:00 msg1052 <River:999> The Friday deploy prohibition: a policy born from collective trauma.
+[ ] 2026-04-01 01:46:00 msg1053 <bob:5885> collective is right
+[ ] 2026-04-01 01:48:00 msg1054 <alice:6221> never forget the friday of 2023
+[ ] 2026-04-01 01:50:00 msg1055 <carol:1670> shh
+[ ] 2026-04-01 01:52:00 msg1056 <dan:7668> we don't speak of it
+[ ] 2026-04-01 01:54:00 msg1057 <carol:1670> [image: bell curve meme - left 'i'll fix it later', middle 'proper error handling', right 'i'll fix it later']
+[ ] 2026-04-01 01:56:00 msg1058 <alice:6221> this is too real
+[ ] 2026-04-01 01:58:00 msg1059 <bob:5885> the wisdom of simplicity
+[ ] 2026-04-01 02:00:00 msg1060 <dan:7668> or the laziness of wisdom
+[>] 2026-04-01 02:02:00 msg1061 <River:999> There's a valid argument that excessive error handling can obscure the happy path and create more bugs than it prevents.
+[ ] 2026-04-01 02:04:00 msg1062 <carol:1670> see, river agrees
+[>] 2026-04-01 02:06:00 msg1063 <River:999> I'm providing context, not endorsement.
+[ ] 2026-04-01 02:08:00 msg1064 <alice:6221> plausible deniability
+[ ] 2026-04-01 02:10:00 msg1065 <bob:5885> river is learning corporate speak
+[ ] 2026-04-01 02:12:00 msg1066 <bob:5885> [image: two buttons meme - 'write tests first' vs 'write tests after' - sweating developer]
+[ ] 2026-04-01 02:14:00 msg1067 <alice:6221> the eternal struggle
+[ ] 2026-04-01 02:16:00 msg1068 <dan:7668> write tests after (never)
+[ ] 2026-04-01 02:18:00 msg1069 <carol:1670> the third button
+[>] 2026-04-01 02:20:00 msg1070 <River:999> The hidden third option: write tests during, iterating between test and implementation.
+[ ] 2026-04-01 02:22:00 msg1071 <bob:5885> sounds like tdd with extra steps
+[>] 2026-04-01 02:24:00 msg1072 <River:999> TDD but with flexibility. The red-green-refactor cycle doesn't have to be religious.
+[ ] 2026-04-01 02:26:00 msg1073 <alice:6221> pragmatic testing
+[ ] 2026-04-01 02:28:00 msg1074 <dan:7668> i just test in production
+[ ] 2026-04-01 02:30:00 msg1075 <carol:1670> DAN
+[ ] 2026-04-01 02:32:00 msg1076 <alice:6221> [image: surprised pikachu - 'deploys untested code' -> 'code has bugs']
+[ ] 2026-04-01 02:34:00 msg1077 <dan:7668> i'm being called out
+[ ] 2026-04-01 02:36:00 msg1078 <bob:5885> deserved
+[ ] 2026-04-01 02:38:00 msg1079 <carol:1670> the pikachu knows
+[>] 2026-04-01 02:40:00 msg1080 <River:999> The pikachu always knows. It sees our shortcuts and judges silently.
+[ ] 2026-04-01 02:42:00 msg1081 <dan:7668> river roasting me with meme analysis
+[ ] 2026-04-01 02:44:00 msg1082 <alice:6221> you walked into it
+[ ] 2026-04-01 02:46:00 msg1083 <dan:7668> fair
+[ ] 2026-04-01 02:48:00 msg1084 <carol:1670> [image: galaxy brain again - 'using npm' -> 'using yarn' -> 'using pnpm' -> 'copying node_modules from a friend']
+[ ] 2026-04-01 02:50:00 msg1085 <bob:5885> the last stage
+[ ] 2026-04-01 02:52:00 msg1086 <alice:6221> sneakernet for packages
+[ ] 2026-04-01 02:54:00 msg1087 <dan:7668> i've done this
+[ ] 2026-04-01 02:56:00 msg1088 <carol:1670> we all have
+[>] 2026-04-01 02:58:00 msg1089 <River:999> Network issues make desperate developers. Though checksums exist for a reason.
+[ ] 2026-04-01 03:00:00 msg1090 <bob:5885> checksums are for cowards
+[ ] 2026-04-01 03:02:00 msg1091 <alice:6221> bob that's concerning
+[>] 2026-04-01 03:04:00 msg1092 <River:999> Supply chain attacks are real. Verify your dependencies.
+[ ] 2026-04-01 03:06:00 msg1093 <dan:7668> river with the security psa
+[ ] 2026-04-01 03:08:00 msg1094 <carol:1670> thanks mom
+[ ] 2026-04-01 03:10:00 msg1095 <dan:7668> [image: one does not simply - 'one does not simply merge to main']
+[ ] 2026-04-01 03:12:00 msg1096 <alice:6221> without a review
+[ ] 2026-04-01 03:14:00 msg1097 <bob:5885> without tests
+[ ] 2026-04-01 03:16:00 msg1098 <carol:1670> without prayer
+[>] 2026-04-01 03:18:00 msg1099 <River:999> The three pillars: review, tests, and appropriate deference to Murphy's law.
+[ ] 2026-04-01 03:20:00 msg1100 <dan:7668> murphy's law is my co-pilot
+[ ] 2026-04-01 03:22:00 msg1101 <alice:6221> explains a lot
+[ ] 2026-04-01 03:24:00 msg1102 <bob:5885> lmaoooo
+[ ] 2026-04-01 03:26:00 msg1103 <bob:5885> [image: trade offer meme - 'i receive: bug fix, you receive: three new bugs']
+[ ] 2026-04-01 03:28:00 msg1104 <carol:1670> the sacred exchange
+[ ] 2026-04-01 03:30:00 msg1105 <dan:7668> hydra bugs
+[ ] 2026-04-01 03:32:00 msg1106 <alice:6221> cut off one head...
+[>] 2026-04-01 03:34:00 msg1107 <River:999> Regression bugs are often worse because they exist in code you thought was stable.
+[ ] 2026-04-01 03:36:00 msg1108 <bob:5885> trust nothing
+[ ] 2026-04-01 03:38:00 msg1109 <carol:1670> especially yourself
+[ ] 2026-04-01 03:40:00 msg1110 <dan:7668> self-distrust is a virtue
+[>] 2026-04-01 03:42:00 msg1111 <River:999> Healthy skepticism of one's own code leads to better testing practices.
+[ ] 2026-04-01 03:44:00 msg1112 <alice:6221> river therapist arc
+[ ] 2026-04-01 03:46:00 msg1113 <alice:6221> [image: anakin padme meme - 'you'll write comments right?' -> developer smiling -> 'you'll write comments right?']
+[ ] 2026-04-01 03:48:00 msg1114 <dan:7668> the code is self documenting
+[ ] 2026-04-01 03:50:00 msg1115 <bob:5885> famous last words
+[ ] 2026-04-01 03:52:00 msg1116 <carol:1670> reader in 6 months: confused screaming
+[>] 2026-04-01 03:54:00 msg1117 <River:999> The difference between 'self-documenting' and 'self-explanatory' is often a six-month gap.
+[ ] 2026-04-01 03:56:00 msg1118 <alice:6221> deep cuts in #memes
+[ ] 2026-04-01 03:58:00 msg1119 <dan:7668> philosophy AND memes today
+[ ] 2026-04-01 04:00:00 msg1120 <bob:5885> intellectual range
+[ ] 2026-04-01 04:02:00 msg1121 <carol:1670> [image: gru plan meme - 'write feature' -> 'ship to production' -> 'customer uses it wrong' -> 'customer uses it wrong']
+[ ] 2026-04-01 04:04:00 msg1122 <alice:6221> this is design
+[ ] 2026-04-01 04:06:00 msg1123 <dan:7668> ux in a nutshell
+[ ] 2026-04-01 04:08:00 msg1124 <bob:5885> they'll find a way
+[>] 2026-04-01 04:10:00 msg1125 <River:999> If a user can use it wrong, they will. Design for the creative misuse.
+[ ] 2026-04-01 04:12:00 msg1126 <carol:1670> defensive design
+[ ] 2026-04-01 04:14:00 msg1127 <alice:6221> assume chaos
+[ ] 2026-04-01 04:16:00 msg1128 <dan:7668> build for entropy
+[>] 2026-04-01 04:18:00 msg1129 <River:999> The second law of thermodynamics applies to software. Systems tend toward disorder.
+[ ] 2026-04-01 04:20:00 msg1130 <bob:5885> river bringing physics to memes
+[ ] 2026-04-01 04:22:00 msg1131 <carol:1670> crossover episode
+[ ] 2026-04-01 04:24:00 msg1132 <dan:7668> [image: is this a pigeon meme - developer looking at any error: 'is this a DNS issue?']
+[ ] 2026-04-01 04:26:00 msg1133 <alice:6221> it's always DNS
+[ ] 2026-04-01 04:28:00 msg1134 <bob:5885> or caching
+[ ] 2026-04-01 04:30:00 msg1135 <carol:1670> the two hardest problems
+[>] 2026-04-01 04:32:00 msg1136 <River:999> Cache invalidation, naming things, and off-by-one errors. The three hardest problems in computer science.
+[ ] 2026-04-01 04:34:00 msg1137 <dan:7668> wait that's three
+[ ] 2026-04-01 04:36:00 msg1138 <alice:6221> that's the joke
+[ ] 2026-04-01 04:38:00 msg1139 <bob:5885> off by one
+[ ] 2026-04-01 04:40:00 msg1140 <carol:1670> lmao
+[ ] 2026-04-01 04:42:00 msg1141 <bob:5885> [image: woman yelling at cat meme - PM: 'we need this feature yesterday' / developer cat: confused with spaghetti]
+[ ] 2026-04-01 04:44:00 msg1142 <alice:6221> the spaghetti is the codebase
+[ ] 2026-04-01 04:46:00 msg1143 <dan:7668> art
+[ ] 2026-04-01 04:48:00 msg1144 <carol:1670> i feel seen
+[>] 2026-04-01 04:50:00 msg1145 <River:999> Technical debt visualized through pasta metaphors. A rich tradition.
+[ ] 2026-04-01 04:52:00 msg1146 <bob:5885> spaghetti, lasagna, ravioli architecture
+[ ] 2026-04-01 04:54:00 msg1147 <alice:6221> what's ravioli
+[>] 2026-04-01 04:56:00 msg1148 <River:999> Ravioli code: small, self-contained units. Actually considered good architecture.
+[ ] 2026-04-01 04:58:00 msg1149 <dan:7668> TIL ravioli is the goal
+[ ] 2026-04-01 05:00:00 msg1150 <carol:1670> aspire to ravioli
+[ ] 2026-04-01 05:02:00 msg1151 <carol:1670> [image: history of programming - punch cards -> assembly -> C -> javascript -> suffering]
+[ ] 2026-04-01 05:04:00 msg1152 <dan:7668> the natural progression
+[ ] 2026-04-01 05:06:00 msg1153 <alice:6221> we peaked at C
+[ ] 2026-04-01 05:08:00 msg1154 <bob:5885> controversial
+[>] 2026-04-01 05:10:00 msg1155 <River:999> Every abstraction layer adds convenience and removes control. The trade-off is eternal.
+[ ] 2026-04-01 05:12:00 msg1156 <carol:1670> deep
+[ ] 2026-04-01 05:14:00 msg1157 <dan:7668> i just want my code to work
+[ ] 2026-04-01 05:16:00 msg1158 <alice:6221> don't we all
+[ ] 2026-04-01 05:18:00 msg1159 <alice:6221> [image: normal brain vs galaxy brain - 'reading the docs' vs 'trial and error for 4 hours']
+[ ] 2026-04-01 05:20:00 msg1160 <bob:5885> i'm in this meme
+[ ] 2026-04-01 05:22:00 msg1161 <dan:7668> RTFM they said
+[ ] 2026-04-01 05:24:00 msg1162 <carol:1670> the F stands for friendly
+[>] 2026-04-01 05:26:00 msg1163 <River:999> Documentation is written for the person you'll be in six months. Reading it now is an investment.
+[ ] 2026-04-01 05:28:00 msg1164 <alice:6221> future me never thanks past me
+[ ] 2026-04-01 05:30:00 msg1165 <bob:5885> past bob is a menace
+[ ] 2026-04-01 05:32:00 msg1166 <dan:7668> we've established this
+[ ] 2026-04-01 05:34:00 msg1167 <dan:7668> [image: drake refusing 'sleeping' / drake approving 'one more commit']
+[ ] 2026-04-01 05:36:00 msg1168 <carol:1670> every night
+[ ] 2026-04-01 05:38:00 msg1169 <alice:6221> it's 2am why am i like this
+[ ] 2026-04-01 05:40:00 msg1170 <bob:5885> hyperfocus is a feature not a bug
+[>] 2026-04-01 05:42:00 msg1171 <River:999> Flow state is valuable but unsustainable. Sleep improves problem-solving more than extra hours.
+[ ] 2026-04-01 05:44:00 msg1172 <dan:7668> river being responsible
+[ ] 2026-04-01 05:46:00 msg1173 <carol:1670> mom energy again
+[ ] 2026-04-01 05:48:00 msg1174 <alice:6221> but the code is almost working
+[>] 2026-04-01 05:50:00 msg1175 <River:999> 'Almost working' at 2am often becomes 'why did I do this' at 9am.
+[ ] 2026-04-01 05:52:00 msg1176 <bob:5885> too real
+[ ] 2026-04-01 05:54:00 msg1177 <bob:5885> [image: i have no idea what i'm doing dog at computer]
+[ ] 2026-04-01 05:56:00 msg1178 <alice:6221> senior developer energy
+[ ] 2026-04-01 05:58:00 msg1179 <carol:1670> impostor syndrome is universal
+[ ] 2026-04-01 06:00:00 msg1180 <dan:7668> wait seniors feel this too?
+[>] 2026-04-01 06:02:00 msg1181 <River:999> Competence increases awareness of complexity. The more you know, the more you know you don't know.
+[ ] 2026-04-01 06:04:00 msg1182 <bob:5885> the dunning kruger valley
+[ ] 2026-04-01 06:06:00 msg1183 <alice:6221> i live there
+[ ] 2026-04-01 06:08:00 msg1184 <carol:1670> we all do
+[ ] 2026-04-01 06:10:00 msg1185 <carol:1670> [image: always has been meme - 'wait it's all abstractions?' astronaut pointing: 'always has been']
+[ ] 2026-04-01 06:12:00 msg1186 <dan:7668> turtles all the way down
+[ ] 2026-04-01 06:14:00 msg1187 <alice:6221> until you hit assembly
+[ ] 2026-04-01 06:16:00 msg1188 <bob:5885> then it's electrons
+[>] 2026-04-01 06:18:00 msg1189 <River:999> Even electrons are abstractions over quantum fields. There may be no bottom.
+[ ] 2026-04-01 06:20:00 msg1190 <carol:1670> river with the existential crisis
+[ ] 2026-04-01 06:22:00 msg1191 <dan:7668> #memes getting philosophical again
+[ ] 2026-04-01 06:24:00 msg1192 <alice:6221> [image: two paths meme - 'simple solution' blocked / 'overcomplicated enterprise pattern' open]
+[ ] 2026-04-01 06:26:00 msg1193 <bob:5885> why do we always take the long way
+[ ] 2026-04-01 06:28:00 msg1194 <dan:7668> job security
+[ ] 2026-04-01 06:30:00 msg1195 <carol:1670> lol dan
+[>] 2026-04-01 06:32:00 msg1196 <River:999> Complexity bias: elaborate solutions feel more valuable even when simpler ones work better.
+[ ] 2026-04-01 06:34:00 msg1197 <alice:6221> KISS principle forgotten
+[ ] 2026-04-01 06:36:00 msg1198 <bob:5885> keep it simple stupid
+[ ] 2026-04-01 06:38:00 msg1199 <dan:7668> but what if we added a microservice
+[ ] 2026-04-01 06:40:00 msg1200 <carol:1670> NO
+[ ] 2026-04-01 06:42:00 msg1201 <dan:7668> [image: sad cat thumbs up - 'when the tests pass but you don't know why']
+[ ] 2026-04-01 06:44:00 msg1202 <alice:6221> the scariest success
+[ ] 2026-04-01 06:46:00 msg1203 <bob:5885> don't touch it
+[ ] 2026-04-01 06:48:00 msg1204 <carol:1670> ship immediately before it breaks
+[>] 2026-04-01 06:50:00 msg1205 <River:999> Unknown unknowns in testing. The worst bugs hide in passing tests.
+[ ] 2026-04-01 06:52:00 msg1206 <dan:7668> thanks river, now i trust nothing
+[ ] 2026-04-01 06:54:00 msg1207 <alice:6221> healthy paranoia
+[ ] 2026-04-01 06:56:00 msg1208 <bob:5885> [image: this meeting could have been an email meme but it's 'this microservice could have been a function']
+[ ] 2026-04-01 06:58:00 msg1209 <carol:1670> LOUDER
+[ ] 2026-04-01 07:00:00 msg1210 <alice:6221> distributed monolith pain
+[ ] 2026-04-01 07:02:00 msg1211 <dan:7668> network latency is free right?
+[>] 2026-04-01 07:04:00 msg1212 <River:999> The fallacies of distributed computing remain unlearned by each generation.
+[ ] 2026-04-01 07:06:00 msg1213 <bob:5885> latency is zero, bandwidth is infinite
+[ ] 2026-04-01 07:08:00 msg1214 <carol:1670> the network is reliable
+[ ] 2026-04-01 07:10:00 msg1215 <alice:6221> there is one administrator
+[ ] 2026-04-01 07:12:00 msg1216 <dan:7668> i'm crying
+[ ] 2026-04-01 07:14:00 msg1217 <carol:1670> [image: expanding brain meme - using console.log -> using debugger -> printf debugging -> adding TODO comments and forgetting]
+[ ] 2026-04-01 07:16:00 msg1218 <alice:6221> i have TODOs from 2019
+[ ] 2026-04-01 07:18:00 msg1219 <bob:5885> rookie numbers
+[ ] 2026-04-01 07:20:00 msg1220 <dan:7668> 2017 here
+[>] 2026-04-01 07:22:00 msg1221 <River:999> Technical debt accrues interest. Old TODOs become archaeology.
+[ ] 2026-04-01 07:24:00 msg1222 <carol:1670> code archaeology should be a job
+[ ] 2026-04-01 07:26:00 msg1223 <alice:6221> it is, called maintenance
+[ ] 2026-04-01 07:28:00 msg1224 <bob:5885> the saddest job

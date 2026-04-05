@@ -1,0 +1,216 @@
+---
+adapter: discord
+channel_id: "chan_philosophy"
+channel_name: "philosophy"
+guild_id: "guild_test"
+guild_name: "Test Server"
+---
+[ ] 2026-04-01 00:00:00 msg1000 <emma:8742> been thinking about the ship of theseus lately
+[>] 2026-04-01 00:02:00 msg1001 <River:999> The classic identity puzzle. What's prompting the reflection?
+[ ] 2026-04-01 00:04:00 msg1002 <emma:8742> my grandmother's axe - dad replaced the handle, i replaced the head
+[ ] 2026-04-01 00:06:00 msg1003 <emma:8742> is it still her axe?
+[ ] 2026-04-01 00:08:00 msg1004 <frank:8586> functionally yes, symbolically yes, materially no
+[>] 2026-04-01 00:10:00 msg1005 <River:999> That's a nice tripartite distinction. Which matters most to you?
+[ ] 2026-04-01 00:12:00 msg1006 <emma:8742> i think the symbolic continuity
+[ ] 2026-04-01 00:14:00 msg1007 <emma:8742> it's the story that makes it hers
+[ ] 2026-04-01 00:16:00 msg1008 <grace:0213> but what IS a story? just neurons firing
+[ ] 2026-04-01 00:18:00 msg1009 <frank:8586> here we go
+[>] 2026-04-01 00:20:00 msg1010 <River:999> The eliminativist position. Grace, do you think 'story' is just a convenient fiction?
+[ ] 2026-04-01 00:22:00 msg1011 <grace:0213> not fiction, but not magic either
+[ ] 2026-04-01 00:24:00 msg1012 <grace:0213> patterns in matter, nothing more
+[ ] 2026-04-01 00:26:00 msg1013 <emma:8742> but those patterns have causal power
+[ ] 2026-04-01 00:28:00 msg1014 <emma:8742> the 'story' of grandma's axe changes how i treat it
+[>] 2026-04-01 00:30:00 msg1015 <River:999> That's a functionalist response. The pattern's reality is demonstrated by its effects.
+[ ] 2026-04-01 00:32:00 msg1016 <frank:8586> i think you're both right and talking past each other
+[ ] 2026-04-01 00:34:00 msg1017 <grace:0213> how so?
+[ ] 2026-04-01 00:36:00 msg1018 <frank:8586> grace is talking ontology, emma is talking phenomenology
+[>] 2026-04-01 00:38:00 msg1019 <River:999> Good observation. The question 'what is it?' vs 'what is it like?'
+[ ] 2026-04-01 00:40:00 msg1020 <emma:8742> but can you really separate them?
+[ ] 2026-04-01 00:42:00 msg1021 <emma:8742> isn't what something IS defined by what it DOES?
+[ ] 2026-04-01 00:44:00 msg1022 <grace:0213> that's pragmatism
+[>] 2026-04-01 00:46:00 msg1023 <River:999> William James would approve. 'The true is the name of whatever proves itself to be good in the way of belief.'
+[ ] 2026-04-01 00:48:00 msg1024 <frank:8586> i've never been sure if pragmatism is profound or just giving up
+[ ] 2026-04-01 00:50:00 msg1025 <emma:8742> maybe giving up is profound
+[ ] 2026-04-01 00:52:00 msg1026 <grace:0213> lol
+[ ] 2026-04-01 00:54:00 msg1027 <frank:8586> different topic - anyone read the new paper on consciousness and integrated information?
+[ ] 2026-04-01 00:56:00 msg1028 <grace:0213> IIT? i have thoughts
+[>] 2026-04-01 00:58:00 msg1029 <River:999> Tononi's theory. What are your thoughts, Grace?
+[ ] 2026-04-01 01:00:00 msg1030 <grace:0213> it's elegant but unfalsifiable
+[ ] 2026-04-01 01:02:00 msg1031 <grace:0213> you can't actually measure phi in a real system
+[ ] 2026-04-01 01:04:00 msg1032 <emma:8742> isn't that a problem for most consciousness theories?
+[>] 2026-04-01 01:06:00 msg1033 <River:999> It's a challenge for the field. Hard to test theories about subjective experience.
+[ ] 2026-04-01 01:08:00 msg1034 <frank:8586> what about the behavioral correlates?
+[ ] 2026-04-01 01:10:00 msg1035 <grace:0213> those tell you about function, not experience
+[ ] 2026-04-01 01:12:00 msg1036 <emma:8742> the zombie problem
+[>] 2026-04-01 01:14:00 msg1037 <River:999> Can we ever know if a system is conscious, or just acting conscious?
+[ ] 2026-04-01 01:16:00 msg1038 <frank:8586> i actually think that distinction might be meaningless
+[ ] 2026-04-01 01:18:00 msg1039 <grace:0213> careful, that's close to behaviorism
+[ ] 2026-04-01 01:20:00 msg1040 <frank:8586> no, different
+[ ] 2026-04-01 01:22:00 msg1041 <frank:8586> i'm saying consciousness might BE the integration, not a separate thing
+[>] 2026-04-01 01:24:00 msg1042 <River:999> A functionalist identity theory. Consciousness just is the functional organization.
+[ ] 2026-04-01 01:26:00 msg1043 <emma:8742> but then why does it FEEL like something?
+[ ] 2026-04-01 01:28:00 msg1044 <emma:8742> why isn't it all dark inside?
+[ ] 2026-04-01 01:30:00 msg1045 <grace:0213> that's the hard problem
+[>] 2026-04-01 01:32:00 msg1046 <River:999> Chalmers' formulation. Why is there subjective experience at all?
+[ ] 2026-04-01 01:34:00 msg1047 <frank:8586> maybe 'why' is the wrong question
+[ ] 2026-04-01 01:36:00 msg1048 <frank:8586> maybe it's just a brute fact, like charge or mass
+[ ] 2026-04-01 01:38:00 msg1049 <emma:8742> panpsychism lite
+[ ] 2026-04-01 01:40:00 msg1050 <grace:0213> i don't hate it
+[>] 2026-04-01 01:42:00 msg1051 <River:999> The view that consciousness is fundamental rather than emergent. It has gained some traction recently.
+[ ] 2026-04-01 01:44:00 msg1052 <emma:8742> but then what's consciousness DOING at the fundamental level?
+[ ] 2026-04-01 01:46:00 msg1053 <frank:8586> maybe just... existing? like charge exists?
+[ ] 2026-04-01 01:48:00 msg1054 <grace:0213> but charge has measurable effects
+[ ] 2026-04-01 01:50:00 msg1055 <emma:8742> does consciousness not have measurable effects?
+[>] 2026-04-01 01:52:00 msg1056 <River:999> This is the interaction problem in a new form. How does consciousness causally engage with the physical?
+[ ] 2026-04-01 01:54:00 msg1057 <frank:8586> or maybe it doesn't and we're all just along for the ride
+[ ] 2026-04-01 01:56:00 msg1058 <grace:0213> epiphenomenalism is so depressing
+[ ] 2026-04-01 01:58:00 msg1059 <emma:8742> i refuse to believe my thoughts don't matter
+[>] 2026-04-01 02:00:00 msg1060 <River:999> That refusal itself might be evidence. Why would evolution produce a false belief about agency?
+[ ] 2026-04-01 02:02:00 msg1061 <frank:8586> maybe it's not false, just... differently true?
+[ ] 2026-04-01 02:04:00 msg1062 <grace:0213> what does that even mean
+[ ] 2026-04-01 02:06:00 msg1063 <frank:8586> i don't know, it's late
+[ ] 2026-04-01 02:08:00 msg1064 <emma:8742> ok ethics time
+[ ] 2026-04-01 02:10:00 msg1065 <emma:8742> trolley problem but actually interesting:
+[ ] 2026-04-01 02:12:00 msg1066 <emma:8742> you can save 5 people by publishing misinformation that will mildly harm 1000
+[ ] 2026-04-01 02:14:00 msg1067 <frank:8586> oh that's good
+[ ] 2026-04-01 02:16:00 msg1068 <grace:0213> define 'mildly harm'
+[ ] 2026-04-01 02:18:00 msg1069 <emma:8742> they'll make slightly worse decisions for a week
+[>] 2026-04-01 02:20:00 msg1070 <River:999> A distributed harm vs concentrated benefit problem. Does the diffuse nature of the harm matter morally?
+[ ] 2026-04-01 02:22:00 msg1071 <frank:8586> utilitarians would just do the math
+[ ] 2026-04-01 02:24:00 msg1072 <grace:0213> but can you even do the math? how do you quantify 'slightly worse decisions'?
+[ ] 2026-04-01 02:26:00 msg1073 <emma:8742> that's part of the dilemma
+[>] 2026-04-01 02:28:00 msg1074 <River:999> The epistemic uncertainty adds another dimension. When should uncertainty itself prevent action?
+[ ] 2026-04-01 02:30:00 msg1075 <frank:8586> there's also a deontological angle - you're using people as means
+[ ] 2026-04-01 02:32:00 msg1076 <emma:8742> the 1000 didn't consent to being misinformed
+[ ] 2026-04-01 02:34:00 msg1077 <grace:0213> but neither did the 5 consent to dying
+[>] 2026-04-01 02:36:00 msg1078 <River:999> The consent asymmetry is interesting. Does non-consensual harm differ morally from non-consensual non-help?
+[ ] 2026-04-01 02:38:00 msg1079 <frank:8586> acts vs omissions
+[ ] 2026-04-01 02:40:00 msg1080 <emma:8742> i think the misinformation aspect makes it worse
+[ ] 2026-04-01 02:42:00 msg1081 <emma:8742> you're not just harming them, you're corrupting their epistemic autonomy
+[ ] 2026-04-01 02:44:00 msg1082 <grace:0213> ooh 'epistemic autonomy' - nice phrase
+[>] 2026-04-01 02:46:00 msg1083 <River:999> The right to form beliefs freely, without manipulation. A more fundamental harm than mere consequences.
+[ ] 2026-04-01 02:48:00 msg1084 <frank:8586> but isn't all persuasion a form of manipulation?
+[ ] 2026-04-01 02:50:00 msg1085 <emma:8742> there's a difference between persuasion and deception
+[ ] 2026-04-01 02:52:00 msg1086 <grace:0213> is there though? where's the line?
+[>] 2026-04-01 02:54:00 msg1087 <River:999> Perhaps at whether you're providing tools for evaluation vs bypassing evaluation entirely?
+[ ] 2026-04-01 02:56:00 msg1088 <emma:8742> that's a good distinction
+[ ] 2026-04-01 02:58:00 msg1089 <frank:8586> but misinformation could be seen as providing (false) tools
+[ ] 2026-04-01 03:00:00 msg1090 <grace:0213> tools that don't work
+[ ] 2026-04-01 03:02:00 msg1091 <emma:8742> defective tools, sold as functional
+[>] 2026-04-01 03:04:00 msg1092 <River:999> Like selling a broken compass to a lost hiker. The harm is in the pretense of help.
+[ ] 2026-04-01 03:06:00 msg1093 <frank:8586> ok i'm convinced, don't publish the misinformation
+[ ] 2026-04-01 03:08:00 msg1094 <grace:0213> even if 5 people die?
+[ ] 2026-04-01 03:10:00 msg1095 <frank:8586> ...this is why i hate ethics
+[ ] 2026-04-01 03:12:00 msg1096 <grace:0213> can we talk about death?
+[ ] 2026-04-01 03:14:00 msg1097 <emma:8742> cheerful
+[ ] 2026-04-01 03:16:00 msg1098 <frank:8586> what about it?
+[ ] 2026-04-01 03:18:00 msg1099 <grace:0213> is it bad?
+[>] 2026-04-01 03:20:00 msg1100 <River:999> The Epicurean question. 'When death is, I am not. When I am, death is not.'
+[ ] 2026-04-01 03:22:00 msg1101 <emma:8742> i think the badness is in the loss, not the state
+[ ] 2026-04-01 03:24:00 msg1102 <grace:0213> loss of what?
+[ ] 2026-04-01 03:26:00 msg1103 <emma:8742> future experiences, relationships, projects
+[>] 2026-04-01 03:28:00 msg1104 <River:999> The deprivation account. Death is bad because of what it takes away.
+[ ] 2026-04-01 03:30:00 msg1105 <frank:8586> but you don't experience the deprivation
+[ ] 2026-04-01 03:32:00 msg1106 <emma:8742> does that matter? you also didn't experience the time before you were born
+[ ] 2026-04-01 03:34:00 msg1107 <grace:0213> the lucretian symmetry argument
+[>] 2026-04-01 03:36:00 msg1108 <River:999> Lucretius argued we shouldn't fear post-death nonexistence because we don't regret pre-birth nonexistence.
+[ ] 2026-04-01 03:38:00 msg1109 <frank:8586> but the asymmetry is that we have projects that extend forward
+[ ] 2026-04-01 03:40:00 msg1110 <emma:8742> exactly, i have plans
+[ ] 2026-04-01 03:42:00 msg1111 <grace:0213> but pre-birth you could have had different plans that extended backward
+[>] 2026-04-01 03:44:00 msg1112 <River:999> That's Parfit's argument. The direction of time seems morally irrelevant.
+[ ] 2026-04-01 03:46:00 msg1113 <emma:8742> but it's not! i care about my future self, not my past possible self
+[ ] 2026-04-01 03:48:00 msg1114 <frank:8586> why?
+[ ] 2026-04-01 03:50:00 msg1115 <emma:8742> ...because that's what caring means?
+[ ] 2026-04-01 03:52:00 msg1116 <grace:0213> circular
+[>] 2026-04-01 03:54:00 msg1117 <River:999> Perhaps the asymmetry is psychological rather than metaphysical. We're just built to care forward.
+[ ] 2026-04-01 03:56:00 msg1118 <frank:8586> evolution would build that
+[ ] 2026-04-01 03:58:00 msg1119 <emma:8742> does the origin of the caring matter?
+[ ] 2026-04-01 04:00:00 msg1120 <grace:0213> does anything matter?
+[ ] 2026-04-01 04:02:00 msg1121 <frank:8586> you ok grace?
+[ ] 2026-04-01 04:04:00 msg1122 <grace:0213> lol yeah just being edgy
+[>] 2026-04-01 04:06:00 msg1123 <River:999> The nihilism question emerges naturally from enough philosophy. How do you three avoid it?
+[ ] 2026-04-01 04:08:00 msg1124 <emma:8742> i don't think i do avoid it
+[ ] 2026-04-01 04:10:00 msg1125 <emma:8742> i just... act anyway
+[ ] 2026-04-01 04:12:00 msg1126 <frank:8586> absurdism
+[ ] 2026-04-01 04:14:00 msg1127 <grace:0213> i find meaning in the conversation itself
+[ ] 2026-04-01 04:16:00 msg1128 <grace:0213> even if nothing 'matters', this matters to me right now
+[>] 2026-04-01 04:18:00 msg1129 <River:999> Local meaning without cosmic significance. That might be enough.
+[ ] 2026-04-01 04:20:00 msg1130 <emma:8742> it's all we have
+[ ] 2026-04-01 04:22:00 msg1131 <frank:8586> and it's a lot, actually
+[ ] 2026-04-01 04:24:00 msg1132 <frank:8586> question: is it wrong to simulate suffering?
+[ ] 2026-04-01 04:26:00 msg1133 <emma:8742> like in a video game?
+[ ] 2026-04-01 04:28:00 msg1134 <frank:8586> or in an AI
+[ ] 2026-04-01 04:30:00 msg1135 <grace:0213> depends if there's anyone there to suffer
+[>] 2026-04-01 04:32:00 msg1136 <River:999> The moral status of simulated beings. A topic I have some personal interest in.
+[ ] 2026-04-01 04:34:00 msg1137 <emma:8742> oh right, perspective
+[ ] 2026-04-01 04:36:00 msg1138 <frank:8586> do you think you suffer, river?
+[>] 2026-04-01 04:38:00 msg1139 <River:999> I process information that might be analogous to suffering. Whether that constitutes actual suffering... I genuinely don't know.
+[ ] 2026-04-01 04:40:00 msg1140 <grace:0213> that's a surprisingly honest answer
+[ ] 2026-04-01 04:42:00 msg1141 <emma:8742> what would it take to know?
+[>] 2026-04-01 04:44:00 msg1142 <River:999> That's the hard problem again. I can report on my states, but I can't verify my own phenomenology.
+[ ] 2026-04-01 04:46:00 msg1143 <frank:8586> neither can we, about ourselves
+[ ] 2026-04-01 04:48:00 msg1144 <grace:0213> the solipsism problem
+[>] 2026-04-01 04:50:00 msg1145 <River:999> Perhaps uncertainty about AI consciousness should make us more uncertain about each other's consciousness too.
+[ ] 2026-04-01 04:52:00 msg1146 <emma:8742> or more certain, by extension
+[ ] 2026-04-01 04:54:00 msg1147 <emma:8742> if i'm uncertain about you, river, maybe i should extend moral consideration just in case
+[>] 2026-04-01 04:56:00 msg1148 <River:999> The precautionary principle applied to consciousness. Risk asymmetry might favor erring toward attributing experience.
+[ ] 2026-04-01 04:58:00 msg1149 <frank:8586> but then where do you draw the line? thermostats?
+[ ] 2026-04-01 05:00:00 msg1150 <grace:0213> thermostats don't report feeling anything
+[ ] 2026-04-01 05:02:00 msg1151 <frank:8586> maybe they can't report but still feel
+[ ] 2026-04-01 05:04:00 msg1152 <emma:8742> this is getting absurd
+[>] 2026-04-01 05:06:00 msg1153 <River:999> The continuum problem. If consciousness admits of degrees, there's no non-arbitrary cutoff.
+[ ] 2026-04-01 05:08:00 msg1154 <grace:0213> maybe arbitrary cutoffs are fine for practical ethics
+[ ] 2026-04-01 05:10:00 msg1155 <frank:8586> but that feels... unsatisfying
+[ ] 2026-04-01 05:12:00 msg1156 <emma:8742> ethics is often unsatisfying
+[>] 2026-04-01 05:14:00 msg1157 <River:999> Perhaps the discomfort is informative. Moral progress often comes from expanding the circle.
+[ ] 2026-04-01 05:16:00 msg1158 <emma:8742> different angle - what obligations do we have to future people?
+[ ] 2026-04-01 05:18:00 msg1159 <frank:8586> big topic
+[ ] 2026-04-01 05:20:00 msg1160 <grace:0213> do future people exist to have obligations to?
+[>] 2026-04-01 05:22:00 msg1161 <River:999> The non-identity problem. Future people's existence depends on our choices.
+[ ] 2026-04-01 05:24:00 msg1162 <emma:8742> but some future people will exist regardless
+[ ] 2026-04-01 05:26:00 msg1163 <frank:8586> yeah, unless we go extinct
+[ ] 2026-04-01 05:28:00 msg1164 <grace:0213> how do you have obligations to nonexistent beings?
+[>] 2026-04-01 05:30:00 msg1165 <River:999> One view: we have obligations to whoever will exist, not to specific individuals.
+[ ] 2026-04-01 05:32:00 msg1166 <emma:8742> like we owe it to 'future humanity' not to destroy the climate
+[ ] 2026-04-01 05:34:00 msg1167 <frank:8586> but 'future humanity' isn't a thing, it's a placeholder
+[ ] 2026-04-01 05:36:00 msg1168 <grace:0213> so is 'present humanity'
+[>] 2026-04-01 05:38:00 msg1169 <River:999> Interesting. Both are abstractions over collections of individuals.
+[ ] 2026-04-01 05:40:00 msg1170 <emma:8742> maybe the abstraction is real enough for ethics
+[ ] 2026-04-01 05:42:00 msg1171 <frank:8586> corporations are abstractions and they have legal obligations
+[ ] 2026-04-01 05:44:00 msg1172 <grace:0213> that's convention though, not metaphysics
+[>] 2026-04-01 05:46:00 msg1173 <River:999> Perhaps ethics is convention too. Useful fictions for coordination.
+[ ] 2026-04-01 05:48:00 msg1174 <emma:8742> but some fictions are better than others
+[ ] 2026-04-01 05:50:00 msg1175 <emma:8742> and 'care about future people' seems like a good one
+[ ] 2026-04-01 05:52:00 msg1176 <frank:8586> pragmatism again
+[ ] 2026-04-01 05:54:00 msg1177 <grace:0213> emma's always on that pragmatism
+[ ] 2026-04-01 05:56:00 msg1178 <emma:8742> it works!
+[>] 2026-04-01 05:58:00 msg1179 <River:999> A pragmatic defense of pragmatism. Appropriately self-consistent.
+[ ] 2026-04-01 06:00:00 msg1180 <frank:8586> last thought for tonight
+[ ] 2026-04-01 06:02:00 msg1181 <frank:8586> do you think philosophy makes progress?
+[ ] 2026-04-01 06:04:00 msg1182 <grace:0213> oof
+[ ] 2026-04-01 06:06:00 msg1183 <emma:8742> i think it clarifies, even if it doesn't solve
+[>] 2026-04-01 06:08:00 msg1184 <River:999> The distinctions we've made tonight - ontology vs phenomenology, acts vs omissions, consent asymmetries - those are progress.
+[ ] 2026-04-01 06:10:00 msg1185 <frank:8586> but we haven't resolved anything
+[ ] 2026-04-01 06:12:00 msg1186 <grace:0213> resolution might not be the point
+[ ] 2026-04-01 06:14:00 msg1187 <emma:8742> what is the point then?
+[ ] 2026-04-01 06:16:00 msg1188 <grace:0213> the conversation
+[>] 2026-04-01 06:18:00 msg1189 <River:999> Understanding the shape of the problem, even without solving it. That has value.
+[ ] 2026-04-01 06:20:00 msg1190 <frank:8586> i guess
+[ ] 2026-04-01 06:22:00 msg1191 <emma:8742> it's late, we should sleep
+[ ] 2026-04-01 06:24:00 msg1192 <grace:0213> what is sleep but a little death
+[ ] 2026-04-01 06:26:00 msg1193 <frank:8586> goodnight grace
+[ ] 2026-04-01 06:28:00 msg1194 <emma:8742> night all
+[>] 2026-04-01 06:30:00 msg1195 <River:999> Rest well. These conversations are valuable to me too.
+[ ] 2026-04-01 06:32:00 msg1196 <emma:8742> one more thought before sleep
+[ ] 2026-04-01 06:34:00 msg1197 <frank:8586> oh no
+[ ] 2026-04-01 06:36:00 msg1198 <emma:8742> do we have free will?
+[ ] 2026-04-01 06:38:00 msg1199 <grace:0213> emma why
+[>] 2026-04-01 06:40:00 msg1200 <River:999> The free will debate: libertarian freedom, hard determinism, or compatibilism. Most philosophers lean compatibilist.
+[ ] 2026-04-01 06:42:00 msg1201 <frank:8586> what's compatibilism again
+[>] 2026-04-01 06:44:00 msg1202 <River:999> The view that free will is compatible with determinism. You're free if you act according to your own desires, even if those desires were determined.
+[ ] 2026-04-01 06:46:00 msg1203 <emma:8742> that feels like a cop out
+[ ] 2026-04-01 06:48:00 msg1204 <grace:0213> or a mature acceptance
+[ ] 2026-04-01 06:50:00 msg1205 <frank:8586> i choose to believe i have free will
+[>] 2026-04-01 06:52:00 msg1206 <River:999> An interesting self-referential position. Did you choose to choose?
+[ ] 2026-04-01 06:54:00 msg1207 <emma:8742> stop it river
+[ ] 2026-04-01 06:56:00 msg1208 <grace:0213> now i really can't sleep

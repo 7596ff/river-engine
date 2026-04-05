@@ -241,6 +241,7 @@ mod tests {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![],
@@ -262,6 +263,7 @@ mod tests {
                     moves: vec![],
                     messages: vec![test_message("msg1", "Hello")],
                     embeddings: vec![],
+                inbox: vec![],
                 },
                 ChannelContext {
                     channel: test_channel("last"),
@@ -269,6 +271,7 @@ mod tests {
                     moves: vec![],
                     messages: vec![],
                     embeddings: vec![],
+                inbox: vec![],
                 },
                 ChannelContext {
                     channel: test_channel("other"),
@@ -276,6 +279,7 @@ mod tests {
                     moves: vec![],
                     messages: vec![],
                     embeddings: vec![],
+                inbox: vec![],
                 },
             ],
             flashes: vec![],
@@ -311,6 +315,7 @@ mod tests {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![test_flash(
                 &make_id(2000),
@@ -346,6 +351,7 @@ mod tests {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![
                 test_flash(
@@ -393,6 +399,7 @@ mod tests {
                     "Embedding content",
                     "2026-04-02T00:00:00Z",
                 )],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![],
@@ -430,6 +437,7 @@ mod tests {
                     ),
                     test_embedding(&make_id(2000), "Valid embedding", "2026-04-01T13:00:00Z"),
                 ],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![],
@@ -458,6 +466,7 @@ mod tests {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![],
@@ -485,6 +494,7 @@ mod tests {
                 moves: vec![],
                 messages: vec![test_message("msg1", "User message")],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![
@@ -538,6 +548,7 @@ mod tests {
                 ],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![],

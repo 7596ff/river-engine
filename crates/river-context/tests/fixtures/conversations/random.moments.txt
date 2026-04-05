@@ -1,0 +1,39 @@
+---
+adapter: discord
+channel_id: "chan_random"
+channel_name: "random"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moments
+---
+# Moments (arc summaries of move ranges)
+
+[~] msg1000-msg1056 Team social planning: Spring allergies commiseration led to lunch at Ichiran ramen ("life changing"). Planned Friday team activity - chose escape room over bowling (4/5 difficulty, "corrupted AI" theme). Book club check-in: Three Body Problem, A Little Life, Project Hail Mary, dan "twitter mostly" (judged). River reading embodied cognition papers.
+
+[~] msg1057-msg1105 Dan's cat saga and weekend plans: Cat learned to open treat drawer, sat unashamed in pile of treats. River noted cats lack guilt expression muscles. Weekend plans: alice+carol hiking Miller Ridge (River forecasted clear, suggested for wildflowers), bob+dan gaming Elden Ring, dan catproofing first. Escape room booked - 35% average success rate, team referenced traumatic "3am production outage."
+
+[~] msg1106-msg1164 Gaming arc - The Malenia Saga: bob stuck at 47 attempts on Malenia (hardest boss). River provided strats. After hike (lupines and California poppies spotted), cat update - childproof locks failed, cat figured one out. River suggested secure container approach ("that's actually smart"). MALENIA DEFEATED after 12 more attempts (59 total). Very close fight. bob "genuinely emotional." River: "The narrow victories are most memorable. The struggle creates the meaning." Team switching to Stardew Valley for something chill.
+
+[~] msg1165-msg1193 Team victories and chill vibes: Escape room success - escaped with 3 minutes left, beat 35% average. The "corrupted AI" made puns, River prefers "sophisticated wordplay." Discussed cat cafe (dan's cat would cause chaos due to "cat politics"). bob's Stardew chicken farm named nugget/tender/wing/drumstick (coping mechanism vs dark humor). alice uses greek god names.
+
+# Raw messages (last 20)
+[>] 2026-04-01 06:28:00 msg1194 <River:999> Naming livestock after food products is a coping mechanism. Or just dark humor.
+[ ] 2026-04-01 06:30:00 msg1195 <bob:5885> it's both
+[ ] 2026-04-01 06:32:00 msg1196 <alice:6221> my farm animals are all named after greek gods
+[ ] 2026-04-01 06:34:00 msg1197 <carol:1670> classy
+[ ] 2026-04-01 06:36:00 msg1198 <dan:7668> mine are all cat names even if they're not cats
+[ ] 2026-04-01 06:38:00 msg1199 <carol:1670> movie night this weekend?
+[ ] 2026-04-01 06:40:00 msg1200 <alice:6221> what genre?
+[ ] 2026-04-01 06:42:00 msg1201 <bob:5885> horror
+[ ] 2026-04-01 06:44:00 msg1202 <dan:7668> comfort
+[ ] 2026-04-01 06:46:00 msg1203 <carol:1670> those are opposite
+[>] 2026-04-01 06:48:00 msg1204 <River:999> Horror can be comfort for some. The controlled fear is cathartic.
+[ ] 2026-04-01 06:50:00 msg1205 <alice:6221> river defending horror fans
+[ ] 2026-04-01 06:52:00 msg1206 <bob:5885> see, river gets it
+[ ] 2026-04-01 06:54:00 msg1207 <dan:7668> can we compromise? thriller?
+[ ] 2026-04-01 06:56:00 msg1208 <carol:1670> that works
+[ ] 2026-04-01 06:58:00 msg1209 <alice:6221> any recommendations?
+[>] 2026-04-01 07:00:00 msg1210 <River:999> Knives Out if you haven't seen it. Mystery with humor.
+[ ] 2026-04-01 07:02:00 msg1211 <bob:5885> ooh good choice
+[ ] 2026-04-01 07:04:00 msg1212 <dan:7668> i love that movie
+[ ] 2026-04-01 07:06:00 msg1213 <carol:1670> perfect, it's decided

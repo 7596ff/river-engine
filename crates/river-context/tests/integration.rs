@@ -62,6 +62,7 @@ fn test_full_context_assembly() {
                     source: "docs/api.md:15-42".into(),
                     expires_at: "2026-04-01T18:00:00Z".into(),
                 }],
+                inbox: vec![],
             },
             // Last active channel (index 1)
             ChannelContext {
@@ -83,6 +84,7 @@ fn test_full_context_assembly() {
                     source: "notes/timeline.md".into(),
                     expires_at: "2026-04-01T18:00:00Z".into(),
                 }],
+                inbox: vec![],
             },
         ],
         flashes: vec![
@@ -194,6 +196,7 @@ fn test_timestamp_ordering_across_channels() {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             },
             ChannelContext {
                 channel: Channel {
@@ -209,6 +212,7 @@ fn test_timestamp_ordering_across_channels() {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             },
         ],
         flashes: vec![Flash {

@@ -1,0 +1,53 @@
+---
+adapter: discord
+channel_id: "chan_random"
+channel_name: "random"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moves
+---
+# Moves (summaries of message ranges)
+
+[^] msg1000-msg1017 Allergies and lunch: team commiserating about spring allergies (peak pollen). Planned lunch at Ichiran ramen on Main St, 12:30.
+
+[^] msg1018-msg1037 Ramen review and team activity planning: ramen was "life changing." Discussed Friday team activity - bowling vs escape room. Chose escape room with "corrupted AI" theme (River noted it's on the nose). bob booking for Friday 6pm.
+
+[^] msg1038-msg1056 Book club: bob reading Three Body Problem, carol A Little Life, dan "twitter mostly" (alice judged him), alice Project Hail Mary (movie with Ryan Gosling coming). River reading embodied cognition papers.
+
+[^] msg1057-msg1072 Dan's cat crisis: cat learned to open treat drawer, came home to her sitting in pile of treats looking unashamed. River noted cats lack guilt expression muscles. dan needs to catproof kitchen, cat already figured out fridge.
+
+[^] msg1073-msg1087 Escape room booked: 4/5 difficulty. alice pessimistic, River noted 35% average success rate. Team referenced traumatic 3am production outage. carol optimistic: "we'll beat the average."
+
+[^] msg1088-msg1105 Weekend plans: alice hiking Saturday (River forecasted clear), bob+dan Elden Ring gaming, carol joining hike. River suggested Miller Ridge trail for wildflowers. dan catproofing first.
+
+[^] msg1106-msg1123 Elden Ring Malenia struggle: bob stuck at 47 attempts on Malenia (hardest boss). dan offered to join. River provided strats - summoning reduces health scaling.
+
+[^] msg1124-msg1144 Hike success + cat update: alice and carol hiked, saw lupines and California poppies. dan's childproof locks failed - cat already figured one out. River suggested measured portions in secure container instead of fortifying kitchen. dan: "that's actually smart."
+
+[^] msg1145-msg1164 MALENIA DEFEATED: bob and dan beat her after 12 more attempts (59 total). Very close fight (health bars "a sliver"). bob "genuinely emotional." River: "The narrow victories are most memorable. The struggle creates the meaning." Switching to Stardew Valley for something chill.
+
+[^] msg1165-msg1178 Escape room success: team escaped with 3 minutes left, beating the 35% average. The "corrupted AI" made puns. River: "I prefer sophisticated wordplay."
+
+[^] msg1179-msg1193 Cat cafe + Stardew: discussed visiting cat cafe, dan's cat would cause chaos due to "cat politics." bob started chicken farm in Stardew, named them nugget/tender/wing/drumstick. River: "coping mechanism or dark humor." alice uses greek god names.
+
+# Raw messages (last 20)
+[>] 2026-04-01 06:28:00 msg1194 <River:999> Naming livestock after food products is a coping mechanism. Or just dark humor.
+[ ] 2026-04-01 06:30:00 msg1195 <bob:5885> it's both
+[ ] 2026-04-01 06:32:00 msg1196 <alice:6221> my farm animals are all named after greek gods
+[ ] 2026-04-01 06:34:00 msg1197 <carol:1670> classy
+[ ] 2026-04-01 06:36:00 msg1198 <dan:7668> mine are all cat names even if they're not cats
+[ ] 2026-04-01 06:38:00 msg1199 <carol:1670> movie night this weekend?
+[ ] 2026-04-01 06:40:00 msg1200 <alice:6221> what genre?
+[ ] 2026-04-01 06:42:00 msg1201 <bob:5885> horror
+[ ] 2026-04-01 06:44:00 msg1202 <dan:7668> comfort
+[ ] 2026-04-01 06:46:00 msg1203 <carol:1670> those are opposite
+[>] 2026-04-01 06:48:00 msg1204 <River:999> Horror can be comfort for some. The controlled fear is cathartic.
+[ ] 2026-04-01 06:50:00 msg1205 <alice:6221> river defending horror fans
+[ ] 2026-04-01 06:52:00 msg1206 <bob:5885> see, river gets it
+[ ] 2026-04-01 06:54:00 msg1207 <dan:7668> can we compromise? thriller?
+[ ] 2026-04-01 06:56:00 msg1208 <carol:1670> that works
+[ ] 2026-04-01 06:58:00 msg1209 <alice:6221> any recommendations?
+[>] 2026-04-01 07:00:00 msg1210 <River:999> Knives Out if you haven't seen it. Mystery with humor.
+[ ] 2026-04-01 07:02:00 msg1211 <bob:5885> ooh good choice
+[ ] 2026-04-01 07:04:00 msg1212 <dan:7668> i love that movie
+[ ] 2026-04-01 07:06:00 msg1213 <carol:1670> perfect, it's decided

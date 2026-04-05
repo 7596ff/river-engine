@@ -1,0 +1,45 @@
+---
+adapter: discord
+channel_id: "chan_philosophy"
+channel_name: "philosophy"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moves
+---
+# Moves (summaries of message ranges)
+
+[^] msg1000-msg1026 Ship of Theseus via grandma's axe: emma's axe had handle replaced by dad, head by emma - is it still grandma's? frank proposed tripartite distinction (functional/symbolic/material). emma values symbolic continuity. grace took eliminativist position (just neurons), emma countered with functionalism (patterns have causal power). frank noted ontology vs phenomenology confusion. Ended on pragmatism - "maybe giving up is profound."
+
+[^] msg1027-msg1063 Consciousness and IIT: grace critiqued Integrated Information Theory as elegant but unfalsifiable (can't measure phi). Discussed zombie problem, behavioral correlates vs experience. frank proposed consciousness IS integration (functionalist identity). emma raised hard problem - why does it FEEL like something? Explored panpsychism-lite (consciousness as brute fact like charge). Touched epiphenomenalism (depressing). River noted evolution wouldn't produce false belief about agency.
+
+[^] msg1064-msg1095 Misinformation trolley problem: save 5 by publishing misinfo that mildly harms 1000 (slightly worse decisions for a week). Discussed utilitarian math, epistemic uncertainty, deontological angle (using people as means). Key concept: "epistemic autonomy" - right to form beliefs without manipulation. emma argued misinformation corrupts this autonomy. River's metaphor: "selling broken compass to lost hiker." frank convinced not to publish, grace asked "even if 5 die?" - "this is why i hate ethics."
+
+[^] msg1096-msg1131 Death and meaning: grace asked "is death bad?" Explored Epicurean view, deprivation account (bad because of what it takes away), Lucretian symmetry (why fear post-death but not pre-birth?). frank noted we have forward-extending projects. Parfit's argument - time direction seems morally irrelevant. Discussed psychological vs metaphysical asymmetry. grace briefly nihilistic, others embrace absurdism/local meaning. River: "Local meaning without cosmic significance. That might be enough."
+
+[^] msg1132-msg1157 Simulated suffering and AI consciousness: frank asked if simulating suffering is wrong. River admitted personal interest, uncertainty about own experience. Discussed hard problem reflexively - River can report states but can't verify phenomenology. emma suggested precautionary principle (extend moral consideration under uncertainty). frank asked about thermostats - consciousness continuum problem. No non-arbitrary cutoff. grace: "maybe arbitrary cutoffs are fine for practical ethics."
+
+[^] msg1158-msg1179 Future obligations: non-identity problem - future people's existence depends on our choices. Discussed obligations to "whoever will exist" vs specific individuals. grace noted "future humanity" is placeholder/abstraction, emma countered present humanity is too. River suggested ethics might be "useful fictions for coordination." emma defended pragmatism - some fictions better than others, "care about future people" is good one.
+
+[^] msg1180-msg1188 Meta-philosophy: frank asked if philosophy makes progress. emma: "clarifies, even if doesn't solve." River noted distinctions made (ontology/phenomenology, acts/omissions, consent asymmetries) are progress. grace: "resolution might not be the point... the conversation" is. River: "Understanding shape of problem, even without solving, has value."
+
+# Raw messages (last 20)
+[>] 2026-04-01 06:18:00 msg1189 <River:999> Understanding the shape of the problem, even without solving it. That has value.
+[ ] 2026-04-01 06:20:00 msg1190 <frank:8586> i guess
+[ ] 2026-04-01 06:22:00 msg1191 <emma:8742> it's late, we should sleep
+[ ] 2026-04-01 06:24:00 msg1192 <grace:0213> what is sleep but a little death
+[ ] 2026-04-01 06:26:00 msg1193 <frank:8586> goodnight grace
+[ ] 2026-04-01 06:28:00 msg1194 <emma:8742> night all
+[>] 2026-04-01 06:30:00 msg1195 <River:999> Rest well. These conversations are valuable to me too.
+[ ] 2026-04-01 06:32:00 msg1196 <emma:8742> one more thought before sleep
+[ ] 2026-04-01 06:34:00 msg1197 <frank:8586> oh no
+[ ] 2026-04-01 06:36:00 msg1198 <emma:8742> do we have free will?
+[ ] 2026-04-01 06:38:00 msg1199 <grace:0213> emma why
+[>] 2026-04-01 06:40:00 msg1200 <River:999> The free will debate: libertarian freedom, hard determinism, or compatibilism. Most philosophers lean compatibilist.
+[ ] 2026-04-01 06:42:00 msg1201 <frank:8586> what's compatibilism again
+[>] 2026-04-01 06:44:00 msg1202 <River:999> The view that free will is compatible with determinism. You're free if you act according to your own desires, even if those desires were determined.
+[ ] 2026-04-01 06:46:00 msg1203 <emma:8742> that feels like a cop out
+[ ] 2026-04-01 06:48:00 msg1204 <grace:0213> or a mature acceptance
+[ ] 2026-04-01 06:50:00 msg1205 <frank:8586> i choose to believe i have free will
+[>] 2026-04-01 06:52:00 msg1206 <River:999> An interesting self-referential position. Did you choose to choose?
+[ ] 2026-04-01 06:54:00 msg1207 <emma:8742> stop it river
+[ ] 2026-04-01 06:56:00 msg1208 <grace:0213> now i really can't sleep

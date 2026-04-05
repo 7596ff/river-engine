@@ -1,0 +1,49 @@
+---
+adapter: discord
+channel_id: "chan_politics"
+channel_name: "politics"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moves
+---
+# Moves (summaries of message ranges)
+
+[^] msg1000-msg1020 Tech regulation and antitrust: discussed EU Digital Markets Act targeting "gatekeeper" platforms. US following suit. grace: antitrust "not asleep, captured." River noted shift from consumer welfare standard. Enforcement is everything - "fines as cost of doing business vs breakups." Interoperability dream: WhatsApp to iMessage.
+
+[^] msg1021-msg1039 AI executive order: "better than nothing, worse than needed." River: EOs limited scope and reversible, need legislation. Concerns: vague "safe and trustworthy" language hard to operationalize. Current benchmarks test capabilities not alignment. "Building plane while flying" but stakes higher, traditional regulatory cycles may not match AI development speed.
+
+[^] msg1040-msg1068 Housing crisis: affordability declining faster than wages. Multiple factors - zoning, speculation, investment properties, Airbnb. Team is YIMBY. Filtering takes 15-20 years. Discussed Vienna model: 60% in subsidized housing, mixed income reduces stigma. River: "path dependency matters - Vienna built over century, retrofitting harder."
+
+[^] msg1069-msg1087 Electoral college: frank: "abolish." 1787 compromise reflecting slave state interests (3/5 compromise). Now distorts via swing state dominance. Trade-offs: popular vote increases urban influence, EC inflates rural. emma and frank prefer popular vote, grace undecided. Discussed alternatives: ranked choice (Alaska, Maine), approval voting, proportional representation.
+
+[^] msg1088-msg1106 Prison reform: US highest incarceration rate in world (~2M people). "Not about safety, never was." Reform options: sentencing reform, diversion, rehabilitation, ending cash bail, decarceration. Cash bail creates two-tiered system based on wealth. NY tried ending it, backtracked due to "politics of fear." Reform faces backlash during crime spikes even when unrelated.
+
+[^] msg1107-msg1125 National service: voluntary with incentives vs mandatory. Goal: "bridging bubbles" through shared experience. Models: military (Israel, SK - mixed cohesion results) vs civilian (infrastructure, elder care, conservation). Domestic Peace Corps idea could address civic engagement + labor shortages. "Budget priorities reflect values."
+
+[^] msg1126-msg1156 Climate policy: "the defining challenge." Options: carbon tax (efficient, politically toxic), cap-and-trade (can be gamed), regulation (slower but certain). IRA uses carrots not sticks - tax incentives showing investment response. But IPCC says current commitments insufficient for 1.5°C. Discussed degrowth ("politically impossible") vs adaptation + mitigation. River: "which impossible thing happens - preventing crisis or preventing response?" Bleak but conversations matter.
+
+[^] msg1157-msg1175 Healthcare: US employer system accident of WWII wage controls. Stakeholders (insurance, pharma, hospitals) block change. 30% administrative costs vs 15-20% elsewhere. Goes to billing complexity, prior auth, claim denials - "bureaucratic friction" that's "profitable for someone."
+
+[^] msg1176-msg1185 Labor movement: union surge at Starbucks, Amazon. Gen Z more pro-union due to gig economy risk transfer. Winning election is step one - contract negotiation takes years. NLRB understaffed "by design."
+
+# Raw messages (last 20)
+[ ] 2026-04-01 06:12:00 msg1186 <grace:0213> amazon union still fighting for a contract
+[>] 2026-04-01 06:14:00 msg1187 <River:999> Winning a union election is step one. Contract negotiation can take years, and employers have delay tactics.
+[ ] 2026-04-01 06:16:00 msg1188 <emma:8742> legal reform needed
+[ ] 2026-04-01 06:18:00 msg1189 <frank:8586> NLRB is understaffed
+[ ] 2026-04-01 06:20:00 msg1190 <grace:0213> by design
+[ ] 2026-04-01 06:22:00 msg1191 <grace:0213> education policy?
+[ ] 2026-04-01 06:24:00 msg1192 <emma:8742> sure, what angle?
+[ ] 2026-04-01 06:26:00 msg1193 <frank:8586> funding disparities
+[>] 2026-04-01 06:28:00 msg1194 <River:999> US school funding tied to local property taxes creates inherent inequality. Wealthy areas have better-funded schools.
+[ ] 2026-04-01 06:30:00 msg1195 <emma:8742> self-reinforcing inequality
+[ ] 2026-04-01 06:32:00 msg1196 <grace:0213> the supreme court said it's fine
+[ ] 2026-04-01 06:34:00 msg1197 <frank:8586> rodriguez v san antonio
+[>] 2026-04-01 06:36:00 msg1198 <River:999> 1973 decision that education is not a fundamental right under the constitution. States can fund schools unequally.
+[ ] 2026-04-01 06:38:00 msg1199 <emma:8742> states rights strikes again
+[ ] 2026-04-01 06:40:00 msg1200 <grace:0213> some states have fixed it internally
+[ ] 2026-04-01 06:42:00 msg1201 <frank:8586> which ones?
+[>] 2026-04-01 06:44:00 msg1202 <River:999> Vermont, Hawaii have more equalized systems. Most states still have significant funding gaps.
+[ ] 2026-04-01 06:46:00 msg1203 <emma:8742> 50 experiments
+[ ] 2026-04-01 06:48:00 msg1204 <grace:0213> some experiments are cruel
+[ ] 2026-04-01 06:50:00 msg1205 <frank:8586> facts

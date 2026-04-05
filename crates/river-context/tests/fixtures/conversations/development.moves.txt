@@ -1,0 +1,48 @@
+---
+adapter: discord
+channel_id: "chan_development"
+channel_name: "development"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moves
+---
+# Moves (summaries of message ranges)
+# Format: [^] msg_start-msg_end summary
+
+[^] msg1000-msg1028 Morning standup: alice finished auth refactor (PR up, working on tests), bob blocked on DB migration circular FK issue (users<->teams), carol polishing dashboard animations, dan working on push notifications (FCM/APNs). Carol offered to pair with bob on FK issue after lunch.
+
+[^] msg1029-msg1058 Auth PR review: bob reviewed alice's auth refactor. Discussed switch from bcrypt to argon2id (GPU-resistant, won password hashing competition). Found error handling issue (all errors returning 401, should split 400/401/500). Discussed timing attack prevention via sleep(100ms), River suggested adding jitter. PR approved with 94% test coverage, carol gave second approval.
+
+[^] msg1059-msg1085 DB migration pairing: bob and carol resolved circular FK (users.team_id <-> teams.owner_id). Solution: make team_id nullable since users can exist without teams but teams need owners. Migration succeeded. River reminded to add index on team_id.
+
+[^] msg1086-msg1108 Android push notification debugging: dan's push notifications failing on Android (iOS fine). Error: MismatchSenderId. Root cause: FCM server key was regenerated but google-services.json not updated in Android app. Fixed by updating config and incrementing version code. River suggested adding FCM health check endpoint.
+
+[^] msg1109-msg1119 Code style discussion: alice asked about Result<T,E> vs Option<T>. Consensus: Option for "might not exist and that's okay" (find_user_by_id), Result for "should exist, error if not" (get_user_or_fail). River suggested providing both variants. alice to add to style guide.
+
+[^] msg1120-msg1133 Day 1 wrap-up: auth PR merged, DB migration deployed to staging, dashboard polished, push notifications working. Team agreed to do full staging test tomorrow.
+
+[^] msg1134-msg1178 Day 2 staging test: validated full user journey (signup -> team create -> invite -> collaborate). Tested edge cases: expired invite shows friendly error with link to request new one (dan's UX improvement), duplicate invite blocked with clear message. All systems nominal. Deployed to production. Team went to thai place for celebratory lunch.
+
+[^] msg1179-msg1204 API versioning RFC: discussed URL path vs Accept header versioning. Chose URL path (/v1/users, /v2/users) for explicitness despite route duplication. Deprecation strategy: Deprecation header with sunset date, Link header to new endpoint, log deprecated calls. 6-month minimum support period. alice writing RFC.
+
+# Raw messages (last 20)
+[ ] 2026-04-01 06:50:00 msg1205 <dan:7668> got a bug report from a user
+[ ] 2026-04-01 06:52:00 msg1206 <dan:7668> they say file uploads are failing intermittently
+[ ] 2026-04-01 06:54:00 msg1207 <alice:6221> intermittently? that's the worst kind
+[>] 2026-04-01 06:56:00 msg1208 <River:999> What's the error they're seeing?
+[ ] 2026-04-01 06:58:00 msg1209 <dan:7668> just 'upload failed', our generic error
+[ ] 2026-04-01 07:00:00 msg1210 <dan:7668> logs show... timeout
+[ ] 2026-04-01 07:02:00 msg1211 <bob:5885> what's our timeout set to?
+[ ] 2026-04-01 07:04:00 msg1212 <dan:7668> 30 seconds
+[ ] 2026-04-01 07:06:00 msg1213 <carol:1670> and what size files are they uploading?
+[ ] 2026-04-01 07:08:00 msg1214 <dan:7668> looking... some are 500MB+
+[>] 2026-04-01 07:10:00 msg1215 <River:999> That's likely the issue. 500MB on a slow connection could easily exceed 30 seconds.
+[ ] 2026-04-01 07:12:00 msg1216 <alice:6221> we should switch to chunked uploads
+[ ] 2026-04-01 07:14:00 msg1217 <bob:5885> or at least increase the timeout for large files
+[>] 2026-04-01 07:16:00 msg1218 <River:999> Chunked uploads are better long-term. They also allow resumable uploads.
+[ ] 2026-04-01 07:18:00 msg1219 <carol:1670> plus progress indicators
+[ ] 2026-04-01 07:20:00 msg1220 <dan:7668> users have been asking for progress bars
+[ ] 2026-04-01 07:22:00 msg1221 <alice:6221> ok this is going on the roadmap
+[ ] 2026-04-01 07:24:00 msg1222 <alice:6221> dan can you reply to the user with a workaround for now?
+[ ] 2026-04-01 07:26:00 msg1223 <dan:7668> yeah, i'll suggest smaller files or better connection
+[>] 2026-04-01 07:28:00 msg1224 <River:999> You could also suggest they try during off-peak hours as a temporary measure.

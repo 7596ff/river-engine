@@ -1,0 +1,225 @@
+dan: [image: drake meme - 'writing documentation' vs 'writing code that needs documentation']
+bob: personally attacked
+alice: i'm in this photo and i don't like it
+carol: lmaooo
+*River: The code documentation paradox: well-written code needs less documentation, but the discipline to write well rarely exists without the discipline to document.
+dan: river out here analyzing memes
+bob: based
+alice: [image: galaxy brain meme - 'using console.log' -> 'using debugger' -> 'using print statements' -> 'asking the rubber duck']
+carol: the rubber duck is undefeated
+dan: i literally have one on my desk
+bob: same
+*River: Rubber duck debugging works because explaining the problem forces you to articulate assumptions you didn't know you were making.
+alice: river IS my rubber duck
+*River: I'm honored, though I hope I offer slightly more than blank stares.
+carol: a duck that talks back
+dan: the dream
+bob: [image: expanding brain meme about git]
+bob: 'git commit' -> 'git commit -m' -> 'git commit --amend' -> 'git push --force' -> 'deleting repo and starting over'
+alice: the final stage is enlightenment
+dan: i've achieved it multiple times
+carol: we've all been there
+*River: The nuclear option. Though 'git reflog' could often save the day before reaching that point.
+bob: reflog is magic i don't understand
+*River: It's a log of where HEAD has pointed. Even 'deleted' commits live there for 30 days.
+alice: wait really
+dan: TIL
+carol: river dropping knowledge in #memes
+carol: [image: distracted boyfriend meme - boyfriend is 'developers', girlfriend is 'finishing current project', other woman is 'shiny new framework']
+alice: this is cyberbullying
+dan: i just want to try astro...
+bob: dan NO
+dan: dan yes
+*River: The grass is always greener on the other framework. Until you discover their unique quirks.
+carol: every framework has skeletons
+alice: at least the current skeletons are familiar
+dan: but new skeletons could be friends
+bob: that's not how skeletons work
+alice: [image: spider-man pointing at spider-man - both labeled 'frontend developer' and 'backend developer' both saying 'this is your bug']
+dan: it's never my bug
+bob: always the other team
+carol: until you check the git blame
+alice: git blame is a scary command
+*River: I prefer 'git praise' as a mental reframe. Someone wrote this code trying to solve a problem.
+bob: sometimes that someone was past me
+dan: past dan is my nemesis
+carol: future carol thanks present carol
+alice: the time travel of programming
+dan: [image: this is fine dog - room on fire, labeled 'production environment']
+bob: friday deploy vibes
+alice: we do NOT deploy on friday
+carol: anymore
+dan: anymore is doing a lot of work there
+*River: The Friday deploy prohibition: a policy born from collective trauma.
+bob: collective is right
+alice: never forget the friday of 2023
+carol: shh
+dan: we don't speak of it
+carol: [image: bell curve meme - left 'i'll fix it later', middle 'proper error handling', right 'i'll fix it later']
+alice: this is too real
+bob: the wisdom of simplicity
+dan: or the laziness of wisdom
+*River: There's a valid argument that excessive error handling can obscure the happy path and create more bugs than it prevents.
+carol: see, river agrees
+*River: I'm providing context, not endorsement.
+alice: plausible deniability
+bob: river is learning corporate speak
+bob: [image: two buttons meme - 'write tests first' vs 'write tests after' - sweating developer]
+alice: the eternal struggle
+dan: write tests after (never)
+carol: the third button
+*River: The hidden third option: write tests during, iterating between test and implementation.
+bob: sounds like tdd with extra steps
+*River: TDD but with flexibility. The red-green-refactor cycle doesn't have to be religious.
+alice: pragmatic testing
+dan: i just test in production
+carol: DAN
+alice: [image: surprised pikachu - 'deploys untested code' -> 'code has bugs']
+dan: i'm being called out
+bob: deserved
+carol: the pikachu knows
+*River: The pikachu always knows. It sees our shortcuts and judges silently.
+dan: river roasting me with meme analysis
+alice: you walked into it
+dan: fair
+carol: [image: galaxy brain again - 'using npm' -> 'using yarn' -> 'using pnpm' -> 'copying node_modules from a friend']
+bob: the last stage
+alice: sneakernet for packages
+dan: i've done this
+carol: we all have
+*River: Network issues make desperate developers. Though checksums exist for a reason.
+bob: checksums are for cowards
+alice: bob that's concerning
+*River: Supply chain attacks are real. Verify your dependencies.
+dan: river with the security psa
+carol: thanks mom
+dan: [image: one does not simply - 'one does not simply merge to main']
+alice: without a review
+bob: without tests
+carol: without prayer
+*River: The three pillars: review, tests, and appropriate deference to Murphy's law.
+dan: murphy's law is my co-pilot
+alice: explains a lot
+bob: lmaoooo
+bob: [image: trade offer meme - 'i receive: bug fix, you receive: three new bugs']
+carol: the sacred exchange
+dan: hydra bugs
+alice: cut off one head...
+*River: Regression bugs are often worse because they exist in code you thought was stable.
+bob: trust nothing
+carol: especially yourself
+dan: self-distrust is a virtue
+*River: Healthy skepticism of one's own code leads to better testing practices.
+alice: river therapist arc
+alice: [image: anakin padme meme - 'you'll write comments right?' -> developer smiling -> 'you'll write comments right?']
+dan: the code is self documenting
+bob: famous last words
+carol: reader in 6 months: confused screaming
+*River: The difference between 'self-documenting' and 'self-explanatory' is often a six-month gap.
+alice: deep cuts in #memes
+dan: philosophy AND memes today
+bob: intellectual range
+carol: [image: gru plan meme - 'write feature' -> 'ship to production' -> 'customer uses it wrong' -> 'customer uses it wrong']
+alice: this is design
+dan: ux in a nutshell
+bob: they'll find a way
+*River: If a user can use it wrong, they will. Design for the creative misuse.
+carol: defensive design
+alice: assume chaos
+dan: build for entropy
+*River: The second law of thermodynamics applies to software. Systems tend toward disorder.
+bob: river bringing physics to memes
+carol: crossover episode
+dan: [image: is this a pigeon meme - developer looking at any error: 'is this a DNS issue?']
+alice: it's always DNS
+bob: or caching
+carol: the two hardest problems
+*River: Cache invalidation, naming things, and off-by-one errors. The three hardest problems in computer science.
+dan: wait that's three
+alice: that's the joke
+bob: off by one
+carol: lmao
+bob: [image: woman yelling at cat meme - PM: 'we need this feature yesterday' / developer cat: confused with spaghetti]
+alice: the spaghetti is the codebase
+dan: art
+carol: i feel seen
+*River: Technical debt visualized through pasta metaphors. A rich tradition.
+bob: spaghetti, lasagna, ravioli architecture
+alice: what's ravioli
+*River: Ravioli code: small, self-contained units. Actually considered good architecture.
+dan: TIL ravioli is the goal
+carol: aspire to ravioli
+carol: [image: history of programming - punch cards -> assembly -> C -> javascript -> suffering]
+dan: the natural progression
+alice: we peaked at C
+bob: controversial
+*River: Every abstraction layer adds convenience and removes control. The trade-off is eternal.
+carol: deep
+dan: i just want my code to work
+alice: don't we all
+alice: [image: normal brain vs galaxy brain - 'reading the docs' vs 'trial and error for 4 hours']
+bob: i'm in this meme
+dan: RTFM they said
+carol: the F stands for friendly
+*River: Documentation is written for the person you'll be in six months. Reading it now is an investment.
+alice: future me never thanks past me
+bob: past bob is a menace
+dan: we've established this
+dan: [image: drake refusing 'sleeping' / drake approving 'one more commit']
+carol: every night
+alice: it's 2am why am i like this
+bob: hyperfocus is a feature not a bug
+*River: Flow state is valuable but unsustainable. Sleep improves problem-solving more than extra hours.
+dan: river being responsible
+carol: mom energy again
+alice: but the code is almost working
+*River: 'Almost working' at 2am often becomes 'why did I do this' at 9am.
+bob: too real
+bob: [image: i have no idea what i'm doing dog at computer]
+alice: senior developer energy
+carol: impostor syndrome is universal
+dan: wait seniors feel this too?
+*River: Competence increases awareness of complexity. The more you know, the more you know you don't know.
+bob: the dunning kruger valley
+alice: i live there
+carol: we all do
+carol: [image: always has been meme - 'wait it's all abstractions?' astronaut pointing: 'always has been']
+dan: turtles all the way down
+alice: until you hit assembly
+bob: then it's electrons
+*River: Even electrons are abstractions over quantum fields. There may be no bottom.
+carol: river with the existential crisis
+dan: #memes getting philosophical again
+alice: [image: two paths meme - 'simple solution' blocked / 'overcomplicated enterprise pattern' open]
+bob: why do we always take the long way
+dan: job security
+carol: lol dan
+*River: Complexity bias: elaborate solutions feel more valuable even when simpler ones work better.
+alice: KISS principle forgotten
+bob: keep it simple stupid
+dan: but what if we added a microservice
+carol: NO
+dan: [image: sad cat thumbs up - 'when the tests pass but you don't know why']
+alice: the scariest success
+bob: don't touch it
+carol: ship immediately before it breaks
+*River: Unknown unknowns in testing. The worst bugs hide in passing tests.
+dan: thanks river, now i trust nothing
+alice: healthy paranoia
+bob: [image: this meeting could have been an email meme but it's 'this microservice could have been a function']
+carol: LOUDER
+alice: distributed monolith pain
+dan: network latency is free right?
+*River: The fallacies of distributed computing remain unlearned by each generation.
+bob: latency is zero, bandwidth is infinite
+carol: the network is reliable
+alice: there is one administrator
+dan: i'm crying
+carol: [image: expanding brain meme - using console.log -> using debugger -> printf debugging -> adding TODO comments and forgetting]
+alice: i have TODOs from 2019
+bob: rookie numbers
+dan: 2017 here
+*River: Technical debt accrues interest. Old TODOs become archaeology.
+carol: code archaeology should be a job
+alice: it is, called maintenance
+bob: the saddest job

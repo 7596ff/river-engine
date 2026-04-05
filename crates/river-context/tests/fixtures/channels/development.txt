@@ -1,0 +1,225 @@
+alice: morning everyone, standup time
+bob: here
+carol: present
+dan: yo
+*River: Good morning! Ready when you are.
+alice: i'll go first - finished the auth refactor yesterday, PR is up
+alice: today working on the test coverage for it
+bob: nice, i'll review that after standup
+bob: i'm still on the database migration, hit some issues with foreign keys
+*River: What kind of foreign key issues? Circular dependencies?
+bob: yeah exactly, users -> teams -> users
+*River: Classic. You might need to defer the constraint or do a two-phase migration.
+carol: i had that same issue last month, happy to pair on it
+bob: that would be great, maybe after lunch?
+carol: works for me
+carol: my update: frontend dashboard is mostly done, just polishing animations
+dan: the animations look sick btw, saw the preview
+carol: thanks! trying to keep it subtle but satisfying
+dan: my turn - working on the notification system
+dan: got email working, now doing push notifications
+*River: Are you using FCM for push?
+dan: yeah, and APNs for iOS
+*River: Make sure to handle the token refresh edge cases. They expire.
+dan: good point, i'll add that to my list
+alice: any blockers anyone?
+bob: just the FK thing but carol's helping
+carol: none here
+dan: all good
+alice: cool, let's sync again tomorrow same time
+bob: looking at the auth PR now
+bob: alice why did you switch from bcrypt to argon2?
+alice: argon2 won the password hashing competition, it's the new standard
+alice: also more resistant to GPU attacks
+*River: Good choice. Argon2id specifically is recommended - it combines Argon2i and Argon2d.
+bob: oh you're using argon2id, nice
+bob: line 47 - this error handling looks wrong
+alice: which part?
+bob: you're catching all errors and returning 401
+bob: but some of these could be 500s
+alice: hmm good catch, let me look
+*River: Bob's right. Database errors should be 500, auth failures 401, validation errors 400.
+alice: yeah you're both right, i was being lazy
+alice: i'll split those out
+bob: also line 89 - why the sleep(100ms)?
+alice: timing attack prevention
+alice: without it you can tell if a user exists by response time
+bob: oh smart
+*River: That's a good security practice. You might also want to make the sleep time slightly random to prevent statistical analysis.
+alice: ooh good idea, i'll add jitter
+bob: rest of it looks good to me
+bob: approved with those changes
+alice: thanks! pushing fixes now
+carol: i'll take a look too for a second pair of eyes
+alice: appreciated
+carol: the test coverage is impressive, 94%
+alice: yeah i went a bit overboard
+*River: 94% is great. Make sure the remaining 6% isn't critical paths.
+alice: it's mostly error branches that are hard to trigger
+carol: lgtm from me too
+bob: carol you free to pair on the FK issue?
+carol: yep, hopping on a call now
+bob: cool, sharing screen
+bob: so here's the problem - users has team_id, teams has owner_id
+carol: ah circular reference
+*River: One approach: create both tables without the FKs, then add them in a separate migration.
+bob: wouldn't that leave a window where data could be inconsistent?
+*River: Yes, but it's during migration only. You can wrap it in a transaction.
+carol: or we could make one of them nullable initially
+bob: which one makes more sense?
+carol: probably team_id on users
+carol: a user can exist without a team, but a team needs an owner
+bob: that's true, we do have solo users
+*River: That's the cleaner approach. Users without teams is a valid state. Teams without owners isn't.
+bob: ok let me try that
+bob: CREATE TABLE users ... team_id INT NULL
+bob: then CREATE TABLE teams ... owner_id INT NOT NULL REFERENCES users
+bob: then ALTER TABLE users ADD CONSTRAINT ... REFERENCES teams
+carol: that should work
+bob: running migration... success!
+bob: finally
+carol: nice!
+*River: Don't forget to add an index on team_id if you'll be querying users by team.
+bob: good call, adding that now
+dan: congrats on fixing it, that was bugging you all morning
+bob: thanks, couldn't have done it without carol
+carol: happy to help
+dan: ugh push notifications aren't working on android
+dan: ios is fine though
+*River: What error are you seeing?
+dan: MismatchSenderId
+alice: that usually means wrong FCM credentials
+dan: but i'm using the same project as before
+*River: Did you recently regenerate the server key? The sender ID might have changed.
+dan: ...let me check
+dan: oh
+dan: i did update the key last week
+dan: but i only updated the server, not the android app
+alice: there's your problem
+dan: updating google-services.json now
+*River: Make sure to increment the version code too or the Play Store might reject the update.
+dan: good thinking
+dan: rebuilding...
+dan: testing...
+dan: IT WORKS
+bob: nice
+carol: celebration time
+dan: i spent 2 hours on that lol
+*River: Credentials mismatches are always tricky. Consider adding a startup check that validates the FCM config.
+dan: that's a good idea, i'll add a health check endpoint
+alice: hey quick question about code style
+alice: should we be using Result<T, E> or Option<T> for functions that might not find something?
+bob: depends on whether not-finding is an error or expected
+carol: yeah like find_user_by_id should return Option
+carol: but get_user_or_fail should return Result
+*River: Good distinction. Option means 'might not exist and that's okay'. Result means 'should exist, something went wrong if not'.
+dan: what about when it could be either?
+*River: Then provide both: find_user (Option) and get_user (Result). Let the caller choose.
+alice: that makes sense
+bob: we should document this in our style guide
+alice: i'll add it
+alice: wrapping up for the day
+alice: auth PR is merged, style guide updated
+bob: migration is done and deployed to staging
+carol: dashboard animations are polished, PR incoming
+dan: push notifications working on both platforms
+*River: Great progress today everyone. Anything to flag for tomorrow?
+bob: we should probably do a staging test of the full flow
+alice: good idea, i'll set that up first thing
+carol: i can help with that
+dan: me too
+alice: cool, see everyone tomorrow
+bob: night!
+carol: bye!
+dan: later
+alice: morning round 2
+bob: coffee acquired
+carol: same
+dan: let's do that staging test
+*River: I can help coordinate the test. What's the flow we're validating?
+alice: full user journey: signup -> team create -> invite -> collaborate
+bob: i'll create a test account
+carol: i'll be the invited user
+dan: i'll monitor the notifications
+alice: perfect, starting now
+bob: signup worked
+bob: creating team...
+bob: team created
+bob: sending invite to carol's test email
+dan: email sent, i see it in the logs
+carol: got the email
+carol: clicking accept...
+carol: i'm in the team!
+dan: push notification sent to bob
+bob: got it!
+alice: perfect, the flow works end to end
+*River: Excellent. All systems nominal. Should we test any edge cases?
+bob: what if the invite expires?
+alice: good one, let me create an expired invite
+alice: sent one with -1 day expiry
+carol: clicking it...
+carol: got a nice error message: 'This invite has expired'
+alice: with a link to request a new one?
+carol: yep!
+alice: great, that was dan's addition
+dan: ux matters
+*River: Good attention to the error path. What about duplicate invites?
+bob: oh let me try that
+bob: inviting carol again...
+bob: 'User is already a team member'
+bob: nice, it handles that
+alice: ok i think we're good for production
+carol: agreed
+dan: ship it
+alice: deploying to prod now
+alice: ...deployed
+*River: Monitoring dashboards look healthy. Congrats on the release!
+bob: time for celebratory lunch
+carol: thai place?
+dan: always
+alice: ok what's next on the roadmap?
+bob: i think we're doing the API versioning
+carol: oh that's going to be fun
+dan: /s?
+carol: definitely /s
+*River: API versioning can be tricky. What approach are you considering? URL path, header, or query param?
+alice: i was thinking URL path, like /v1/users, /v2/users
+bob: that's the most common
+*River: URL path is explicit and easy to understand. The downside is it can lead to a lot of route duplication.
+carol: what's the alternative?
+*River: Accept header versioning: Accept: application/vnd.api+json;version=2. Cleaner URLs but less discoverable.
+dan: i've seen that cause issues with caching
+*River: True, you need to set Vary: Accept properly.
+alice: let's stick with URL path, it's simpler
+bob: agreed
+carol: how do we handle deprecated endpoints?
+*River: Add a Deprecation header with the sunset date, and include a Link header pointing to the new endpoint.
+alice: and log when deprecated endpoints are called?
+*River: Yes, that helps you know when it's safe to remove them.
+dan: should we have a minimum support period?
+alice: 6 months?
+bob: that seems reasonable
+carol: gives people time to migrate
+*River: 6 months is industry standard. Make sure to communicate it clearly in your API docs.
+alice: i'll write up an RFC for this
+bob: thanks alice
+dan: got a bug report from a user
+dan: they say file uploads are failing intermittently
+alice: intermittently? that's the worst kind
+*River: What's the error they're seeing?
+dan: just 'upload failed', our generic error
+dan: logs show... timeout
+bob: what's our timeout set to?
+dan: 30 seconds
+carol: and what size files are they uploading?
+dan: looking... some are 500MB+
+*River: That's likely the issue. 500MB on a slow connection could easily exceed 30 seconds.
+alice: we should switch to chunked uploads
+bob: or at least increase the timeout for large files
+*River: Chunked uploads are better long-term. They also allow resumable uploads.
+carol: plus progress indicators
+dan: users have been asking for progress bars
+alice: ok this is going on the roadmap
+alice: dan can you reply to the user with a workaround for now?
+dan: yeah, i'll suggest smaller files or better connection
+*River: You could also suggest they try during off-peak hours as a temporary measure.

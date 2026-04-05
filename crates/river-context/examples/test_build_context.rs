@@ -125,6 +125,7 @@ fn main() {
                     chat_msg(&make_id(4100), "bob", "Let's use JWT"),
                 ],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![],
             history: vec![
@@ -150,6 +151,7 @@ fn main() {
                     chat_msg(&make_id(4000), "alice", "Current message"),
                 ],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![
                 flash(&make_id(2000), "worker-b", "FLASH: Check PR #42"),
@@ -176,6 +178,7 @@ fn main() {
                     embeddings: vec![
                         embedding(&make_id(5200), "[dev] Embedding about testing", "docs/testing.md"),
                     ],
+                    inbox: vec![],
                 },
                 // Index 1: LAST channel
                 ChannelContext {
@@ -188,6 +191,7 @@ fn main() {
                     embeddings: vec![
                         embedding(&make_id(3200), "[general] Embedding from last channel", "docs/sprint.md"),
                     ],
+                    inbox: vec![],
                 },
                 // Index 2+: OTHER channels
                 ChannelContext {
@@ -200,6 +204,7 @@ fn main() {
                     embeddings: vec![
                         embedding(&make_id(1200), "[random] Embedding - should NOT appear (other channel)", "docs/fun.md"),
                     ],
+                    inbox: vec![],
                 },
             ],
             flashes: vec![
@@ -227,6 +232,7 @@ fn main() {
                     moves: vec![],
                     messages: vec![], // No messages yet in new channel
                     embeddings: vec![],
+                inbox: vec![],
                 },
                 // Last: #general (where we came from)
                 ChannelContext {
@@ -235,6 +241,7 @@ fn main() {
                     moves: vec![],
                     messages: vec![], // Raw messages not shown for non-current
                     embeddings: vec![],
+                inbox: vec![],
                 },
             ],
             flashes: vec![],
@@ -258,6 +265,7 @@ fn main() {
                 moves: vec![],
                 messages: vec![],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![
                 Flash {
@@ -290,6 +298,7 @@ fn main() {
                     chat_msg(&make_id(6000), "alice", "Current message"),
                 ],
                 embeddings: vec![],
+                inbox: vec![],
             }],
             flashes: vec![
                 flash(&make_id(500), "worker-a", "Flash at t=500 (earliest)"),

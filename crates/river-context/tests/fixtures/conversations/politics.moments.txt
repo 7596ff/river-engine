@@ -1,0 +1,39 @@
+---
+adapter: discord
+channel_id: "chan_politics"
+channel_name: "politics"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moments
+---
+# Moments (arc summaries of move ranges)
+
+[~] msg1000-msg1039 Tech policy and AI governance: Discussed EU Digital Markets Act targeting "gatekeeper" platforms, US following suit. grace: antitrust "not asleep, captured." River noted shift from consumer welfare standard. Enforcement debates - fines as cost of doing business vs breakups. Interoperability dream. AI executive order: "better than nothing, worse than needed." EOs limited scope and reversible. Current benchmarks test capabilities not alignment. "Building plane while flying" but regulatory cycles may not match AI development speed.
+
+[~] msg1040-msg1106 Domestic policy debates: Housing crisis - affordability declining faster than wages. Team is YIMBY. Discussed Vienna model (60% subsidized, mixed income). River: "path dependency matters - retrofitting harder." Electoral college: frank wants abolition, traces to 3/5 compromise. Trade-offs between popular vote (urban influence) and EC (rural inflation). Alternatives discussed: ranked choice, approval voting. Prison reform: US highest incarceration rate (~2M). "Not about safety, never was." Cash bail creates two-tiered system. NY backtracked due to "politics of fear."
+
+[~] msg1107-msg1156 Big systems and existential challenges: National service debate - voluntary with incentives vs mandatory for "bridging bubbles." Models: military (mixed results) vs civilian (Domestic Peace Corps for civic engagement + labor). "Budget priorities reflect values." Climate policy: "the defining challenge." Carbon tax politically toxic, cap-and-trade gameable, regulation slower but certain. IRA carrots showing investment response but insufficient for 1.5°C. Discussed degrowth vs adaptation. River: "which impossible thing happens - preventing crisis or preventing response?"
+
+[~] msg1157-msg1185 Systems captured by stakeholders: Healthcare - US employer system accident of WWII wage controls. Insurance/pharma/hospitals block change. 30% administrative costs vs 15-20% elsewhere - billing complexity, prior auth, claim denials as "bureaucratic friction" that's "profitable for someone." Labor movement surge at Starbucks, Amazon. Gen Z more pro-union due to gig economy risk transfer. But winning election is step one - contract negotiation takes years. NLRB understaffed "by design."
+
+# Raw messages (last 20)
+[ ] 2026-04-01 06:12:00 msg1186 <grace:0213> amazon union still fighting for a contract
+[>] 2026-04-01 06:14:00 msg1187 <River:999> Winning a union election is step one. Contract negotiation can take years, and employers have delay tactics.
+[ ] 2026-04-01 06:16:00 msg1188 <emma:8742> legal reform needed
+[ ] 2026-04-01 06:18:00 msg1189 <frank:8586> NLRB is understaffed
+[ ] 2026-04-01 06:20:00 msg1190 <grace:0213> by design
+[ ] 2026-04-01 06:22:00 msg1191 <grace:0213> education policy?
+[ ] 2026-04-01 06:24:00 msg1192 <emma:8742> sure, what angle?
+[ ] 2026-04-01 06:26:00 msg1193 <frank:8586> funding disparities
+[>] 2026-04-01 06:28:00 msg1194 <River:999> US school funding tied to local property taxes creates inherent inequality. Wealthy areas have better-funded schools.
+[ ] 2026-04-01 06:30:00 msg1195 <emma:8742> self-reinforcing inequality
+[ ] 2026-04-01 06:32:00 msg1196 <grace:0213> the supreme court said it's fine
+[ ] 2026-04-01 06:34:00 msg1197 <frank:8586> rodriguez v san antonio
+[>] 2026-04-01 06:36:00 msg1198 <River:999> 1973 decision that education is not a fundamental right under the constitution. States can fund schools unequally.
+[ ] 2026-04-01 06:38:00 msg1199 <emma:8742> states rights strikes again
+[ ] 2026-04-01 06:40:00 msg1200 <grace:0213> some states have fixed it internally
+[ ] 2026-04-01 06:42:00 msg1201 <frank:8586> which ones?
+[>] 2026-04-01 06:44:00 msg1202 <River:999> Vermont, Hawaii have more equalized systems. Most states still have significant funding gaps.
+[ ] 2026-04-01 06:46:00 msg1203 <emma:8742> 50 experiments
+[ ] 2026-04-01 06:48:00 msg1204 <grace:0213> some experiments are cruel
+[ ] 2026-04-01 06:50:00 msg1205 <frank:8586> facts

@@ -1,0 +1,228 @@
+--- Message 1 [user] ---
+[Chat: development]
+[2026-04-01T00:00:00Z] <alice> morning everyone, standup time
+[2026-04-01T00:02:00Z] <bob> here
+[2026-04-01T00:04:00Z] <carol> present
+[2026-04-01T00:06:00Z] <dan> yo
+[2026-04-01T00:08:00Z] <River> Good morning! Ready when you are.
+[2026-04-01T00:10:00Z] <alice> i'll go first - finished the auth refactor yesterday, PR is up
+[2026-04-01T00:12:00Z] <alice> today working on the test coverage for it
+[2026-04-01T00:14:00Z] <bob> nice, i'll review that after standup
+[2026-04-01T00:16:00Z] <bob> i'm still on the database migration, hit some issues with foreign keys
+[2026-04-01T00:18:00Z] <River> What kind of foreign key issues? Circular dependencies?
+[2026-04-01T00:20:00Z] <bob> yeah exactly, users -> teams -> users
+[2026-04-01T00:22:00Z] <River> Classic. You might need to defer the constraint or do a two-phase migration.
+[2026-04-01T00:24:00Z] <carol> i had that same issue last month, happy to pair on it
+[2026-04-01T00:26:00Z] <bob> that would be great, maybe after lunch?
+[2026-04-01T00:28:00Z] <carol> works for me
+[2026-04-01T00:30:00Z] <carol> my update: frontend dashboard is mostly done, just polishing animations
+[2026-04-01T00:32:00Z] <dan> the animations look sick btw, saw the preview
+[2026-04-01T00:34:00Z] <carol> thanks! trying to keep it subtle but satisfying
+[2026-04-01T00:36:00Z] <dan> my turn - working on the notification system
+[2026-04-01T00:38:00Z] <dan> got email working, now doing push notifications
+[2026-04-01T00:40:00Z] <River> Are you using FCM for push?
+[2026-04-01T00:42:00Z] <dan> yeah, and APNs for iOS
+[2026-04-01T00:44:00Z] <River> Make sure to handle the token refresh edge cases. They expire.
+[2026-04-01T00:46:00Z] <dan> good point, i'll add that to my list
+[2026-04-01T00:48:00Z] <alice> any blockers anyone?
+[2026-04-01T00:50:00Z] <bob> just the FK thing but carol's helping
+[2026-04-01T00:52:00Z] <carol> none here
+[2026-04-01T00:54:00Z] <dan> all good
+[2026-04-01T00:56:00Z] <alice> cool, let's sync again tomorrow same time
+[2026-04-01T00:58:00Z] <bob> looking at the auth PR now
+[2026-04-01T01:00:00Z] <bob> alice why did you switch from bcrypt to argon2?
+[2026-04-01T01:02:00Z] <alice> argon2 won the password hashing competition, it's the new standard
+[2026-04-01T01:04:00Z] <alice> also more resistant to GPU attacks
+[2026-04-01T01:06:00Z] <River> Good choice. Argon2id specifically is recommended - it combines Argon2i and Argon2d.
+[2026-04-01T01:08:00Z] <bob> oh you're using argon2id, nice
+[2026-04-01T01:10:00Z] <bob> line 47 - this error handling looks wrong
+[2026-04-01T01:12:00Z] <alice> which part?
+[2026-04-01T01:14:00Z] <bob> you're catching all errors and returning 401
+[2026-04-01T01:16:00Z] <bob> but some of these could be 500s
+[2026-04-01T01:18:00Z] <alice> hmm good catch, let me look
+[2026-04-01T01:20:00Z] <River> Bob's right. Database errors should be 500, auth failures 401, validation errors 400.
+[2026-04-01T01:22:00Z] <alice> yeah you're both right, i was being lazy
+[2026-04-01T01:24:00Z] <alice> i'll split those out
+[2026-04-01T01:26:00Z] <bob> also line 89 - why the sleep(100ms)?
+[2026-04-01T01:28:00Z] <alice> timing attack prevention
+[2026-04-01T01:30:00Z] <alice> without it you can tell if a user exists by response time
+[2026-04-01T01:32:00Z] <bob> oh smart
+[2026-04-01T01:34:00Z] <River> That's a good security practice. You might also want to make the sleep time slightly random to prevent statistical analysis.
+[2026-04-01T01:36:00Z] <alice> ooh good idea, i'll add jitter
+[2026-04-01T01:38:00Z] <bob> rest of it looks good to me
+[2026-04-01T01:40:00Z] <bob> approved with those changes
+[2026-04-01T01:42:00Z] <alice> thanks! pushing fixes now
+[2026-04-01T01:44:00Z] <carol> i'll take a look too for a second pair of eyes
+[2026-04-01T01:46:00Z] <alice> appreciated
+[2026-04-01T01:48:00Z] <carol> the test coverage is impressive, 94%
+[2026-04-01T01:50:00Z] <alice> yeah i went a bit overboard
+[2026-04-01T01:52:00Z] <River> 94% is great. Make sure the remaining 6% isn't critical paths.
+[2026-04-01T01:54:00Z] <alice> it's mostly error branches that are hard to trigger
+[2026-04-01T01:56:00Z] <carol> lgtm from me too
+[2026-04-01T01:58:00Z] <bob> carol you free to pair on the FK issue?
+[2026-04-01T02:00:00Z] <carol> yep, hopping on a call now
+[2026-04-01T02:02:00Z] <bob> cool, sharing screen
+[2026-04-01T02:04:00Z] <bob> so here's the problem - users has team_id, teams has owner_id
+[2026-04-01T02:06:00Z] <carol> ah circular reference
+[2026-04-01T02:08:00Z] <River> One approach: create both tables without the FKs, then add them in a separate migration.
+[2026-04-01T02:10:00Z] <bob> wouldn't that leave a window where data could be inconsistent?
+[2026-04-01T02:12:00Z] <River> Yes, but it's during migration only. You can wrap it in a transaction.
+[2026-04-01T02:14:00Z] <carol> or we could make one of them nullable initially
+[2026-04-01T02:16:00Z] <bob> which one makes more sense?
+[2026-04-01T02:18:00Z] <carol> probably team_id on users
+[2026-04-01T02:20:00Z] <carol> a user can exist without a team, but a team needs an owner
+[2026-04-01T02:22:00Z] <bob> that's true, we do have solo users
+[2026-04-01T02:24:00Z] <River> That's the cleaner approach. Users without teams is a valid state. Teams without owners isn't.
+[2026-04-01T02:26:00Z] <bob> ok let me try that
+[2026-04-01T02:28:00Z] <bob> CREATE TABLE users ... team_id INT NULL
+[2026-04-01T02:30:00Z] <bob> then CREATE TABLE teams ... owner_id INT NOT NULL REFERENCES users
+[2026-04-01T02:32:00Z] <bob> then ALTER TABLE users ADD CONSTRAINT ... REFERENCES teams
+[2026-04-01T02:34:00Z] <carol> that should work
+[2026-04-01T02:36:00Z] <bob> running migration... success!
+[2026-04-01T02:38:00Z] <bob> finally
+[2026-04-01T02:40:00Z] <carol> nice!
+[2026-04-01T02:42:00Z] <River> Don't forget to add an index on team_id if you'll be querying users by team.
+[2026-04-01T02:44:00Z] <bob> good call, adding that now
+[2026-04-01T02:46:00Z] <dan> congrats on fixing it, that was bugging you all morning
+[2026-04-01T02:48:00Z] <bob> thanks, couldn't have done it without carol
+[2026-04-01T02:50:00Z] <carol> happy to help
+[2026-04-01T02:52:00Z] <dan> ugh push notifications aren't working on android
+[2026-04-01T02:54:00Z] <dan> ios is fine though
+[2026-04-01T02:56:00Z] <River> What error are you seeing?
+[2026-04-01T02:58:00Z] <dan> MismatchSenderId
+[2026-04-01T03:00:00Z] <alice> that usually means wrong FCM credentials
+[2026-04-01T03:02:00Z] <dan> but i'm using the same project as before
+[2026-04-01T03:04:00Z] <River> Did you recently regenerate the server key? The sender ID might have changed.
+[2026-04-01T03:06:00Z] <dan> ...let me check
+[2026-04-01T03:08:00Z] <dan> oh
+[2026-04-01T03:10:00Z] <dan> i did update the key last week
+[2026-04-01T03:12:00Z] <dan> but i only updated the server, not the android app
+[2026-04-01T03:14:00Z] <alice> there's your problem
+[2026-04-01T03:16:00Z] <dan> updating google-services.json now
+[2026-04-01T03:18:00Z] <River> Make sure to increment the version code too or the Play Store might reject the update.
+[2026-04-01T03:20:00Z] <dan> good thinking
+[2026-04-01T03:22:00Z] <dan> rebuilding...
+[2026-04-01T03:24:00Z] <dan> testing...
+[2026-04-01T03:26:00Z] <dan> IT WORKS
+[2026-04-01T03:28:00Z] <bob> nice
+[2026-04-01T03:30:00Z] <carol> celebration time
+[2026-04-01T03:32:00Z] <dan> i spent 2 hours on that lol
+[2026-04-01T03:34:00Z] <River> Credentials mismatches are always tricky. Consider adding a startup check that validates the FCM config.
+[2026-04-01T03:36:00Z] <dan> that's a good idea, i'll add a health check endpoint
+[2026-04-01T03:38:00Z] <alice> hey quick question about code style
+[2026-04-01T03:40:00Z] <alice> should we be using Result<T, E> or Option<T> for functions that might not find something?
+[2026-04-01T03:42:00Z] <bob> depends on whether not-finding is an error or expected
+[2026-04-01T03:44:00Z] <carol> yeah like find_user_by_id should return Option
+[2026-04-01T03:46:00Z] <carol> but get_user_or_fail should return Result
+[2026-04-01T03:48:00Z] <River> Good distinction. Option means 'might not exist and that's okay'. Result means 'should exist, something went wrong if not'.
+[2026-04-01T03:50:00Z] <dan> what about when it could be either?
+[2026-04-01T03:52:00Z] <River> Then provide both: find_user (Option) and get_user (Result). Let the caller choose.
+[2026-04-01T03:54:00Z] <alice> that makes sense
+[2026-04-01T03:56:00Z] <bob> we should document this in our style guide
+[2026-04-01T03:58:00Z] <alice> i'll add it
+[2026-04-01T04:00:00Z] <alice> wrapping up for the day
+[2026-04-01T04:02:00Z] <alice> auth PR is merged, style guide updated
+[2026-04-01T04:04:00Z] <bob> migration is done and deployed to staging
+[2026-04-01T04:06:00Z] <carol> dashboard animations are polished, PR incoming
+[2026-04-01T04:08:00Z] <dan> push notifications working on both platforms
+[2026-04-01T04:10:00Z] <River> Great progress today everyone. Anything to flag for tomorrow?
+[2026-04-01T04:12:00Z] <bob> we should probably do a staging test of the full flow
+[2026-04-01T04:14:00Z] <alice> good idea, i'll set that up first thing
+[2026-04-01T04:16:00Z] <carol> i can help with that
+[2026-04-01T04:18:00Z] <dan> me too
+[2026-04-01T04:20:00Z] <alice> cool, see everyone tomorrow
+[2026-04-01T04:22:00Z] <bob> night!
+[2026-04-01T04:24:00Z] <carol> bye!
+[2026-04-01T04:26:00Z] <dan> later
+[2026-04-01T04:28:00Z] <alice> morning round 2
+[2026-04-01T04:30:00Z] <bob> coffee acquired
+[2026-04-01T04:32:00Z] <carol> same
+[2026-04-01T04:34:00Z] <dan> let's do that staging test
+[2026-04-01T04:36:00Z] <River> I can help coordinate the test. What's the flow we're validating?
+[2026-04-01T04:38:00Z] <alice> full user journey: signup -> team create -> invite -> collaborate
+[2026-04-01T04:40:00Z] <bob> i'll create a test account
+[2026-04-01T04:42:00Z] <carol> i'll be the invited user
+[2026-04-01T04:44:00Z] <dan> i'll monitor the notifications
+[2026-04-01T04:46:00Z] <alice> perfect, starting now
+[2026-04-01T04:48:00Z] <bob> signup worked
+[2026-04-01T04:50:00Z] <bob> creating team...
+[2026-04-01T04:52:00Z] <bob> team created
+[2026-04-01T04:54:00Z] <bob> sending invite to carol's test email
+[2026-04-01T04:56:00Z] <dan> email sent, i see it in the logs
+[2026-04-01T04:58:00Z] <carol> got the email
+[2026-04-01T05:00:00Z] <carol> clicking accept...
+[2026-04-01T05:02:00Z] <carol> i'm in the team!
+[2026-04-01T05:04:00Z] <dan> push notification sent to bob
+[2026-04-01T05:06:00Z] <bob> got it!
+[2026-04-01T05:08:00Z] <alice> perfect, the flow works end to end
+[2026-04-01T05:10:00Z] <River> Excellent. All systems nominal. Should we test any edge cases?
+[2026-04-01T05:12:00Z] <bob> what if the invite expires?
+[2026-04-01T05:14:00Z] <alice> good one, let me create an expired invite
+[2026-04-01T05:16:00Z] <alice> sent one with -1 day expiry
+[2026-04-01T05:18:00Z] <carol> clicking it...
+[2026-04-01T05:20:00Z] <carol> got a nice error message: 'This invite has expired'
+[2026-04-01T05:22:00Z] <alice> with a link to request a new one?
+[2026-04-01T05:24:00Z] <carol> yep!
+[2026-04-01T05:26:00Z] <alice> great, that was dan's addition
+[2026-04-01T05:28:00Z] <dan> ux matters
+[2026-04-01T05:30:00Z] <River> Good attention to the error path. What about duplicate invites?
+[2026-04-01T05:32:00Z] <bob> oh let me try that
+[2026-04-01T05:34:00Z] <bob> inviting carol again...
+[2026-04-01T05:36:00Z] <bob> 'User is already a team member'
+[2026-04-01T05:38:00Z] <bob> nice, it handles that
+[2026-04-01T05:40:00Z] <alice> ok i think we're good for production
+[2026-04-01T05:42:00Z] <carol> agreed
+[2026-04-01T05:44:00Z] <dan> ship it
+[2026-04-01T05:46:00Z] <alice> deploying to prod now
+[2026-04-01T05:48:00Z] <alice> ...deployed
+[2026-04-01T05:50:00Z] <River> Monitoring dashboards look healthy. Congrats on the release!
+[2026-04-01T05:52:00Z] <bob> time for celebratory lunch
+[2026-04-01T05:54:00Z] <carol> thai place?
+[2026-04-01T05:56:00Z] <dan> always
+[2026-04-01T05:58:00Z] <alice> ok what's next on the roadmap?
+[2026-04-01T06:00:00Z] <bob> i think we're doing the API versioning
+[2026-04-01T06:02:00Z] <carol> oh that's going to be fun
+[2026-04-01T06:04:00Z] <dan> /s?
+[2026-04-01T06:06:00Z] <carol> definitely /s
+[2026-04-01T06:08:00Z] <River> API versioning can be tricky. What approach are you considering? URL path, header, or query param?
+[2026-04-01T06:10:00Z] <alice> i was thinking URL path, like /v1/users, /v2/users
+[2026-04-01T06:12:00Z] <bob> that's the most common
+[2026-04-01T06:14:00Z] <River> URL path is explicit and easy to understand. The downside is it can lead to a lot of route duplication.
+[2026-04-01T06:16:00Z] <carol> what's the alternative?
+[2026-04-01T06:18:00Z] <River> Accept header versioning: Accept: application/vnd.api+json;version=2. Cleaner URLs but less discoverable.
+[2026-04-01T06:20:00Z] <dan> i've seen that cause issues with caching
+[2026-04-01T06:22:00Z] <River> True, you need to set Vary: Accept properly.
+[2026-04-01T06:24:00Z] <alice> let's stick with URL path, it's simpler
+[2026-04-01T06:26:00Z] <bob> agreed
+[2026-04-01T06:28:00Z] <carol> how do we handle deprecated endpoints?
+[2026-04-01T06:30:00Z] <River> Add a Deprecation header with the sunset date, and include a Link header pointing to the new endpoint.
+[2026-04-01T06:32:00Z] <alice> and log when deprecated endpoints are called?
+[2026-04-01T06:34:00Z] <River> Yes, that helps you know when it's safe to remove them.
+[2026-04-01T06:36:00Z] <dan> should we have a minimum support period?
+[2026-04-01T06:38:00Z] <alice> 6 months?
+[2026-04-01T06:40:00Z] <bob> that seems reasonable
+[2026-04-01T06:42:00Z] <carol> gives people time to migrate
+[2026-04-01T06:44:00Z] <River> 6 months is industry standard. Make sure to communicate it clearly in your API docs.
+[2026-04-01T06:46:00Z] <alice> i'll write up an RFC for this
+[2026-04-01T06:48:00Z] <bob> thanks alice
+[2026-04-01T06:50:00Z] <dan> got a bug report from a user
+[2026-04-01T06:52:00Z] <dan> they say file uploads are failing intermittently
+[2026-04-01T06:54:00Z] <alice> intermittently? that's the worst kind
+[2026-04-01T06:56:00Z] <River> What's the error they're seeing?
+[2026-04-01T06:58:00Z] <dan> just 'upload failed', our generic error
+[2026-04-01T07:00:00Z] <dan> logs show... timeout
+[2026-04-01T07:02:00Z] <bob> what's our timeout set to?
+[2026-04-01T07:04:00Z] <dan> 30 seconds
+[2026-04-01T07:06:00Z] <carol> and what size files are they uploading?
+[2026-04-01T07:08:00Z] <dan> looking... some are 500MB+
+[2026-04-01T07:10:00Z] <River> That's likely the issue. 500MB on a slow connection could easily exceed 30 seconds.
+[2026-04-01T07:12:00Z] <alice> we should switch to chunked uploads
+[2026-04-01T07:14:00Z] <bob> or at least increase the timeout for large files
+[2026-04-01T07:16:00Z] <River> Chunked uploads are better long-term. They also allow resumable uploads.
+[2026-04-01T07:18:00Z] <carol> plus progress indicators
+[2026-04-01T07:20:00Z] <dan> users have been asking for progress bars
+[2026-04-01T07:22:00Z] <alice> ok this is going on the roadmap
+[2026-04-01T07:24:00Z] <alice> dan can you reply to the user with a workaround for now?
+[2026-04-01T07:26:00Z] <dan> yeah, i'll suggest smaller files or better connection
+[2026-04-01T07:28:00Z] <River> You could also suggest they try during off-peak hours as a temporary measure.
+

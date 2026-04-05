@@ -1,0 +1,232 @@
+---
+adapter: discord
+channel_id: "chan_development"
+channel_name: "development"
+guild_id: "guild_test"
+guild_name: "Test Server"
+---
+[ ] 2026-04-01 00:00:00 msg1000 <alice:6221> morning everyone, standup time
+[ ] 2026-04-01 00:02:00 msg1001 <bob:5885> here
+[ ] 2026-04-01 00:04:00 msg1002 <carol:1670> present
+[ ] 2026-04-01 00:06:00 msg1003 <dan:7668> yo
+[>] 2026-04-01 00:08:00 msg1004 <River:999> Good morning! Ready when you are.
+[ ] 2026-04-01 00:10:00 msg1005 <alice:6221> i'll go first - finished the auth refactor yesterday, PR is up
+[ ] 2026-04-01 00:12:00 msg1006 <alice:6221> today working on the test coverage for it
+[ ] 2026-04-01 00:14:00 msg1007 <bob:5885> nice, i'll review that after standup
+[ ] 2026-04-01 00:16:00 msg1008 <bob:5885> i'm still on the database migration, hit some issues with foreign keys
+[>] 2026-04-01 00:18:00 msg1009 <River:999> What kind of foreign key issues? Circular dependencies?
+[ ] 2026-04-01 00:20:00 msg1010 <bob:5885> yeah exactly, users -> teams -> users
+[>] 2026-04-01 00:22:00 msg1011 <River:999> Classic. You might need to defer the constraint or do a two-phase migration.
+[ ] 2026-04-01 00:24:00 msg1012 <carol:1670> i had that same issue last month, happy to pair on it
+[ ] 2026-04-01 00:26:00 msg1013 <bob:5885> that would be great, maybe after lunch?
+[ ] 2026-04-01 00:28:00 msg1014 <carol:1670> works for me
+[ ] 2026-04-01 00:30:00 msg1015 <carol:1670> my update: frontend dashboard is mostly done, just polishing animations
+[ ] 2026-04-01 00:32:00 msg1016 <dan:7668> the animations look sick btw, saw the preview
+[ ] 2026-04-01 00:34:00 msg1017 <carol:1670> thanks! trying to keep it subtle but satisfying
+[ ] 2026-04-01 00:36:00 msg1018 <dan:7668> my turn - working on the notification system
+[ ] 2026-04-01 00:38:00 msg1019 <dan:7668> got email working, now doing push notifications
+[>] 2026-04-01 00:40:00 msg1020 <River:999> Are you using FCM for push?
+[ ] 2026-04-01 00:42:00 msg1021 <dan:7668> yeah, and APNs for iOS
+[>] 2026-04-01 00:44:00 msg1022 <River:999> Make sure to handle the token refresh edge cases. They expire.
+[ ] 2026-04-01 00:46:00 msg1023 <dan:7668> good point, i'll add that to my list
+[ ] 2026-04-01 00:48:00 msg1024 <alice:6221> any blockers anyone?
+[ ] 2026-04-01 00:50:00 msg1025 <bob:5885> just the FK thing but carol's helping
+[ ] 2026-04-01 00:52:00 msg1026 <carol:1670> none here
+[ ] 2026-04-01 00:54:00 msg1027 <dan:7668> all good
+[ ] 2026-04-01 00:56:00 msg1028 <alice:6221> cool, let's sync again tomorrow same time
+[ ] 2026-04-01 00:58:00 msg1029 <bob:5885> looking at the auth PR now
+[ ] 2026-04-01 01:00:00 msg1030 <bob:5885> alice why did you switch from bcrypt to argon2?
+[ ] 2026-04-01 01:02:00 msg1031 <alice:6221> argon2 won the password hashing competition, it's the new standard
+[ ] 2026-04-01 01:04:00 msg1032 <alice:6221> also more resistant to GPU attacks
+[>] 2026-04-01 01:06:00 msg1033 <River:999> Good choice. Argon2id specifically is recommended - it combines Argon2i and Argon2d.
+[ ] 2026-04-01 01:08:00 msg1034 <bob:5885> oh you're using argon2id, nice
+[ ] 2026-04-01 01:10:00 msg1035 <bob:5885> line 47 - this error handling looks wrong
+[ ] 2026-04-01 01:12:00 msg1036 <alice:6221> which part?
+[ ] 2026-04-01 01:14:00 msg1037 <bob:5885> you're catching all errors and returning 401
+[ ] 2026-04-01 01:16:00 msg1038 <bob:5885> but some of these could be 500s
+[ ] 2026-04-01 01:18:00 msg1039 <alice:6221> hmm good catch, let me look
+[>] 2026-04-01 01:20:00 msg1040 <River:999> Bob's right. Database errors should be 500, auth failures 401, validation errors 400.
+[ ] 2026-04-01 01:22:00 msg1041 <alice:6221> yeah you're both right, i was being lazy
+[ ] 2026-04-01 01:24:00 msg1042 <alice:6221> i'll split those out
+[ ] 2026-04-01 01:26:00 msg1043 <bob:5885> also line 89 - why the sleep(100ms)?
+[ ] 2026-04-01 01:28:00 msg1044 <alice:6221> timing attack prevention
+[ ] 2026-04-01 01:30:00 msg1045 <alice:6221> without it you can tell if a user exists by response time
+[ ] 2026-04-01 01:32:00 msg1046 <bob:5885> oh smart
+[>] 2026-04-01 01:34:00 msg1047 <River:999> That's a good security practice. You might also want to make the sleep time slightly random to prevent statistical analysis.
+[ ] 2026-04-01 01:36:00 msg1048 <alice:6221> ooh good idea, i'll add jitter
+[ ] 2026-04-01 01:38:00 msg1049 <bob:5885> rest of it looks good to me
+[ ] 2026-04-01 01:40:00 msg1050 <bob:5885> approved with those changes
+[ ] 2026-04-01 01:42:00 msg1051 <alice:6221> thanks! pushing fixes now
+[ ] 2026-04-01 01:44:00 msg1052 <carol:1670> i'll take a look too for a second pair of eyes
+[ ] 2026-04-01 01:46:00 msg1053 <alice:6221> appreciated
+[ ] 2026-04-01 01:48:00 msg1054 <carol:1670> the test coverage is impressive, 94%
+[ ] 2026-04-01 01:50:00 msg1055 <alice:6221> yeah i went a bit overboard
+[>] 2026-04-01 01:52:00 msg1056 <River:999> 94% is great. Make sure the remaining 6% isn't critical paths.
+[ ] 2026-04-01 01:54:00 msg1057 <alice:6221> it's mostly error branches that are hard to trigger
+[ ] 2026-04-01 01:56:00 msg1058 <carol:1670> lgtm from me too
+[ ] 2026-04-01 01:58:00 msg1059 <bob:5885> carol you free to pair on the FK issue?
+[ ] 2026-04-01 02:00:00 msg1060 <carol:1670> yep, hopping on a call now
+[ ] 2026-04-01 02:02:00 msg1061 <bob:5885> cool, sharing screen
+[ ] 2026-04-01 02:04:00 msg1062 <bob:5885> so here's the problem - users has team_id, teams has owner_id
+[ ] 2026-04-01 02:06:00 msg1063 <carol:1670> ah circular reference
+[>] 2026-04-01 02:08:00 msg1064 <River:999> One approach: create both tables without the FKs, then add them in a separate migration.
+[ ] 2026-04-01 02:10:00 msg1065 <bob:5885> wouldn't that leave a window where data could be inconsistent?
+[>] 2026-04-01 02:12:00 msg1066 <River:999> Yes, but it's during migration only. You can wrap it in a transaction.
+[ ] 2026-04-01 02:14:00 msg1067 <carol:1670> or we could make one of them nullable initially
+[ ] 2026-04-01 02:16:00 msg1068 <bob:5885> which one makes more sense?
+[ ] 2026-04-01 02:18:00 msg1069 <carol:1670> probably team_id on users
+[ ] 2026-04-01 02:20:00 msg1070 <carol:1670> a user can exist without a team, but a team needs an owner
+[ ] 2026-04-01 02:22:00 msg1071 <bob:5885> that's true, we do have solo users
+[>] 2026-04-01 02:24:00 msg1072 <River:999> That's the cleaner approach. Users without teams is a valid state. Teams without owners isn't.
+[ ] 2026-04-01 02:26:00 msg1073 <bob:5885> ok let me try that
+[ ] 2026-04-01 02:28:00 msg1074 <bob:5885> CREATE TABLE users ... team_id INT NULL
+[ ] 2026-04-01 02:30:00 msg1075 <bob:5885> then CREATE TABLE teams ... owner_id INT NOT NULL REFERENCES users
+[ ] 2026-04-01 02:32:00 msg1076 <bob:5885> then ALTER TABLE users ADD CONSTRAINT ... REFERENCES teams
+[ ] 2026-04-01 02:34:00 msg1077 <carol:1670> that should work
+[ ] 2026-04-01 02:36:00 msg1078 <bob:5885> running migration... success!
+[ ] 2026-04-01 02:38:00 msg1079 <bob:5885> finally
+[ ] 2026-04-01 02:40:00 msg1080 <carol:1670> nice!
+[>] 2026-04-01 02:42:00 msg1081 <River:999> Don't forget to add an index on team_id if you'll be querying users by team.
+[ ] 2026-04-01 02:44:00 msg1082 <bob:5885> good call, adding that now
+[ ] 2026-04-01 02:46:00 msg1083 <dan:7668> congrats on fixing it, that was bugging you all morning
+[ ] 2026-04-01 02:48:00 msg1084 <bob:5885> thanks, couldn't have done it without carol
+[ ] 2026-04-01 02:50:00 msg1085 <carol:1670> happy to help
+[ ] 2026-04-01 02:52:00 msg1086 <dan:7668> ugh push notifications aren't working on android
+[ ] 2026-04-01 02:54:00 msg1087 <dan:7668> ios is fine though
+[>] 2026-04-01 02:56:00 msg1088 <River:999> What error are you seeing?
+[ ] 2026-04-01 02:58:00 msg1089 <dan:7668> MismatchSenderId
+[ ] 2026-04-01 03:00:00 msg1090 <alice:6221> that usually means wrong FCM credentials
+[ ] 2026-04-01 03:02:00 msg1091 <dan:7668> but i'm using the same project as before
+[>] 2026-04-01 03:04:00 msg1092 <River:999> Did you recently regenerate the server key? The sender ID might have changed.
+[ ] 2026-04-01 03:06:00 msg1093 <dan:7668> ...let me check
+[ ] 2026-04-01 03:08:00 msg1094 <dan:7668> oh
+[ ] 2026-04-01 03:10:00 msg1095 <dan:7668> i did update the key last week
+[ ] 2026-04-01 03:12:00 msg1096 <dan:7668> but i only updated the server, not the android app
+[ ] 2026-04-01 03:14:00 msg1097 <alice:6221> there's your problem
+[ ] 2026-04-01 03:16:00 msg1098 <dan:7668> updating google-services.json now
+[>] 2026-04-01 03:18:00 msg1099 <River:999> Make sure to increment the version code too or the Play Store might reject the update.
+[ ] 2026-04-01 03:20:00 msg1100 <dan:7668> good thinking
+[ ] 2026-04-01 03:22:00 msg1101 <dan:7668> rebuilding...
+[ ] 2026-04-01 03:24:00 msg1102 <dan:7668> testing...
+[ ] 2026-04-01 03:26:00 msg1103 <dan:7668> IT WORKS
+[ ] 2026-04-01 03:28:00 msg1104 <bob:5885> nice
+[ ] 2026-04-01 03:30:00 msg1105 <carol:1670> celebration time
+[ ] 2026-04-01 03:32:00 msg1106 <dan:7668> i spent 2 hours on that lol
+[>] 2026-04-01 03:34:00 msg1107 <River:999> Credentials mismatches are always tricky. Consider adding a startup check that validates the FCM config.
+[ ] 2026-04-01 03:36:00 msg1108 <dan:7668> that's a good idea, i'll add a health check endpoint
+[ ] 2026-04-01 03:38:00 msg1109 <alice:6221> hey quick question about code style
+[ ] 2026-04-01 03:40:00 msg1110 <alice:6221> should we be using Result<T, E> or Option<T> for functions that might not find something?
+[ ] 2026-04-01 03:42:00 msg1111 <bob:5885> depends on whether not-finding is an error or expected
+[ ] 2026-04-01 03:44:00 msg1112 <carol:1670> yeah like find_user_by_id should return Option
+[ ] 2026-04-01 03:46:00 msg1113 <carol:1670> but get_user_or_fail should return Result
+[>] 2026-04-01 03:48:00 msg1114 <River:999> Good distinction. Option means 'might not exist and that's okay'. Result means 'should exist, something went wrong if not'.
+[ ] 2026-04-01 03:50:00 msg1115 <dan:7668> what about when it could be either?
+[>] 2026-04-01 03:52:00 msg1116 <River:999> Then provide both: find_user (Option) and get_user (Result). Let the caller choose.
+[ ] 2026-04-01 03:54:00 msg1117 <alice:6221> that makes sense
+[ ] 2026-04-01 03:56:00 msg1118 <bob:5885> we should document this in our style guide
+[ ] 2026-04-01 03:58:00 msg1119 <alice:6221> i'll add it
+[ ] 2026-04-01 04:00:00 msg1120 <alice:6221> wrapping up for the day
+[ ] 2026-04-01 04:02:00 msg1121 <alice:6221> auth PR is merged, style guide updated
+[ ] 2026-04-01 04:04:00 msg1122 <bob:5885> migration is done and deployed to staging
+[ ] 2026-04-01 04:06:00 msg1123 <carol:1670> dashboard animations are polished, PR incoming
+[ ] 2026-04-01 04:08:00 msg1124 <dan:7668> push notifications working on both platforms
+[>] 2026-04-01 04:10:00 msg1125 <River:999> Great progress today everyone. Anything to flag for tomorrow?
+[ ] 2026-04-01 04:12:00 msg1126 <bob:5885> we should probably do a staging test of the full flow
+[ ] 2026-04-01 04:14:00 msg1127 <alice:6221> good idea, i'll set that up first thing
+[ ] 2026-04-01 04:16:00 msg1128 <carol:1670> i can help with that
+[ ] 2026-04-01 04:18:00 msg1129 <dan:7668> me too
+[ ] 2026-04-01 04:20:00 msg1130 <alice:6221> cool, see everyone tomorrow
+[ ] 2026-04-01 04:22:00 msg1131 <bob:5885> night!
+[ ] 2026-04-01 04:24:00 msg1132 <carol:1670> bye!
+[ ] 2026-04-01 04:26:00 msg1133 <dan:7668> later
+[ ] 2026-04-01 04:28:00 msg1134 <alice:6221> morning round 2
+[ ] 2026-04-01 04:30:00 msg1135 <bob:5885> coffee acquired
+[ ] 2026-04-01 04:32:00 msg1136 <carol:1670> same
+[ ] 2026-04-01 04:34:00 msg1137 <dan:7668> let's do that staging test
+[>] 2026-04-01 04:36:00 msg1138 <River:999> I can help coordinate the test. What's the flow we're validating?
+[ ] 2026-04-01 04:38:00 msg1139 <alice:6221> full user journey: signup -> team create -> invite -> collaborate
+[ ] 2026-04-01 04:40:00 msg1140 <bob:5885> i'll create a test account
+[ ] 2026-04-01 04:42:00 msg1141 <carol:1670> i'll be the invited user
+[ ] 2026-04-01 04:44:00 msg1142 <dan:7668> i'll monitor the notifications
+[ ] 2026-04-01 04:46:00 msg1143 <alice:6221> perfect, starting now
+[ ] 2026-04-01 04:48:00 msg1144 <bob:5885> signup worked
+[ ] 2026-04-01 04:50:00 msg1145 <bob:5885> creating team...
+[ ] 2026-04-01 04:52:00 msg1146 <bob:5885> team created
+[ ] 2026-04-01 04:54:00 msg1147 <bob:5885> sending invite to carol's test email
+[ ] 2026-04-01 04:56:00 msg1148 <dan:7668> email sent, i see it in the logs
+[ ] 2026-04-01 04:58:00 msg1149 <carol:1670> got the email
+[ ] 2026-04-01 05:00:00 msg1150 <carol:1670> clicking accept...
+[ ] 2026-04-01 05:02:00 msg1151 <carol:1670> i'm in the team!
+[ ] 2026-04-01 05:04:00 msg1152 <dan:7668> push notification sent to bob
+[ ] 2026-04-01 05:06:00 msg1153 <bob:5885> got it!
+[ ] 2026-04-01 05:08:00 msg1154 <alice:6221> perfect, the flow works end to end
+[>] 2026-04-01 05:10:00 msg1155 <River:999> Excellent. All systems nominal. Should we test any edge cases?
+[ ] 2026-04-01 05:12:00 msg1156 <bob:5885> what if the invite expires?
+[ ] 2026-04-01 05:14:00 msg1157 <alice:6221> good one, let me create an expired invite
+[ ] 2026-04-01 05:16:00 msg1158 <alice:6221> sent one with -1 day expiry
+[ ] 2026-04-01 05:18:00 msg1159 <carol:1670> clicking it...
+[ ] 2026-04-01 05:20:00 msg1160 <carol:1670> got a nice error message: 'This invite has expired'
+[ ] 2026-04-01 05:22:00 msg1161 <alice:6221> with a link to request a new one?
+[ ] 2026-04-01 05:24:00 msg1162 <carol:1670> yep!
+[ ] 2026-04-01 05:26:00 msg1163 <alice:6221> great, that was dan's addition
+[ ] 2026-04-01 05:28:00 msg1164 <dan:7668> ux matters
+[>] 2026-04-01 05:30:00 msg1165 <River:999> Good attention to the error path. What about duplicate invites?
+[ ] 2026-04-01 05:32:00 msg1166 <bob:5885> oh let me try that
+[ ] 2026-04-01 05:34:00 msg1167 <bob:5885> inviting carol again...
+[ ] 2026-04-01 05:36:00 msg1168 <bob:5885> 'User is already a team member'
+[ ] 2026-04-01 05:38:00 msg1169 <bob:5885> nice, it handles that
+[ ] 2026-04-01 05:40:00 msg1170 <alice:6221> ok i think we're good for production
+[ ] 2026-04-01 05:42:00 msg1171 <carol:1670> agreed
+[ ] 2026-04-01 05:44:00 msg1172 <dan:7668> ship it
+[ ] 2026-04-01 05:46:00 msg1173 <alice:6221> deploying to prod now
+[ ] 2026-04-01 05:48:00 msg1174 <alice:6221> ...deployed
+[>] 2026-04-01 05:50:00 msg1175 <River:999> Monitoring dashboards look healthy. Congrats on the release!
+[ ] 2026-04-01 05:52:00 msg1176 <bob:5885> time for celebratory lunch
+[ ] 2026-04-01 05:54:00 msg1177 <carol:1670> thai place?
+[ ] 2026-04-01 05:56:00 msg1178 <dan:7668> always
+[ ] 2026-04-01 05:58:00 msg1179 <alice:6221> ok what's next on the roadmap?
+[ ] 2026-04-01 06:00:00 msg1180 <bob:5885> i think we're doing the API versioning
+[ ] 2026-04-01 06:02:00 msg1181 <carol:1670> oh that's going to be fun
+[ ] 2026-04-01 06:04:00 msg1182 <dan:7668> /s?
+[ ] 2026-04-01 06:06:00 msg1183 <carol:1670> definitely /s
+[>] 2026-04-01 06:08:00 msg1184 <River:999> API versioning can be tricky. What approach are you considering? URL path, header, or query param?
+[ ] 2026-04-01 06:10:00 msg1185 <alice:6221> i was thinking URL path, like /v1/users, /v2/users
+[ ] 2026-04-01 06:12:00 msg1186 <bob:5885> that's the most common
+[>] 2026-04-01 06:14:00 msg1187 <River:999> URL path is explicit and easy to understand. The downside is it can lead to a lot of route duplication.
+[ ] 2026-04-01 06:16:00 msg1188 <carol:1670> what's the alternative?
+[>] 2026-04-01 06:18:00 msg1189 <River:999> Accept header versioning: Accept: application/vnd.api+json;version=2. Cleaner URLs but less discoverable.
+[ ] 2026-04-01 06:20:00 msg1190 <dan:7668> i've seen that cause issues with caching
+[>] 2026-04-01 06:22:00 msg1191 <River:999> True, you need to set Vary: Accept properly.
+[ ] 2026-04-01 06:24:00 msg1192 <alice:6221> let's stick with URL path, it's simpler
+[ ] 2026-04-01 06:26:00 msg1193 <bob:5885> agreed
+[ ] 2026-04-01 06:28:00 msg1194 <carol:1670> how do we handle deprecated endpoints?
+[>] 2026-04-01 06:30:00 msg1195 <River:999> Add a Deprecation header with the sunset date, and include a Link header pointing to the new endpoint.
+[ ] 2026-04-01 06:32:00 msg1196 <alice:6221> and log when deprecated endpoints are called?
+[>] 2026-04-01 06:34:00 msg1197 <River:999> Yes, that helps you know when it's safe to remove them.
+[ ] 2026-04-01 06:36:00 msg1198 <dan:7668> should we have a minimum support period?
+[ ] 2026-04-01 06:38:00 msg1199 <alice:6221> 6 months?
+[ ] 2026-04-01 06:40:00 msg1200 <bob:5885> that seems reasonable
+[ ] 2026-04-01 06:42:00 msg1201 <carol:1670> gives people time to migrate
+[>] 2026-04-01 06:44:00 msg1202 <River:999> 6 months is industry standard. Make sure to communicate it clearly in your API docs.
+[ ] 2026-04-01 06:46:00 msg1203 <alice:6221> i'll write up an RFC for this
+[ ] 2026-04-01 06:48:00 msg1204 <bob:5885> thanks alice
+[ ] 2026-04-01 06:50:00 msg1205 <dan:7668> got a bug report from a user
+[ ] 2026-04-01 06:52:00 msg1206 <dan:7668> they say file uploads are failing intermittently
+[ ] 2026-04-01 06:54:00 msg1207 <alice:6221> intermittently? that's the worst kind
+[>] 2026-04-01 06:56:00 msg1208 <River:999> What's the error they're seeing?
+[ ] 2026-04-01 06:58:00 msg1209 <dan:7668> just 'upload failed', our generic error
+[ ] 2026-04-01 07:00:00 msg1210 <dan:7668> logs show... timeout
+[ ] 2026-04-01 07:02:00 msg1211 <bob:5885> what's our timeout set to?
+[ ] 2026-04-01 07:04:00 msg1212 <dan:7668> 30 seconds
+[ ] 2026-04-01 07:06:00 msg1213 <carol:1670> and what size files are they uploading?
+[ ] 2026-04-01 07:08:00 msg1214 <dan:7668> looking... some are 500MB+
+[>] 2026-04-01 07:10:00 msg1215 <River:999> That's likely the issue. 500MB on a slow connection could easily exceed 30 seconds.
+[ ] 2026-04-01 07:12:00 msg1216 <alice:6221> we should switch to chunked uploads
+[ ] 2026-04-01 07:14:00 msg1217 <bob:5885> or at least increase the timeout for large files
+[>] 2026-04-01 07:16:00 msg1218 <River:999> Chunked uploads are better long-term. They also allow resumable uploads.
+[ ] 2026-04-01 07:18:00 msg1219 <carol:1670> plus progress indicators
+[ ] 2026-04-01 07:20:00 msg1220 <dan:7668> users have been asking for progress bars
+[ ] 2026-04-01 07:22:00 msg1221 <alice:6221> ok this is going on the roadmap
+[ ] 2026-04-01 07:24:00 msg1222 <alice:6221> dan can you reply to the user with a workaround for now?
+[ ] 2026-04-01 07:26:00 msg1223 <dan:7668> yeah, i'll suggest smaller files or better connection
+[>] 2026-04-01 07:28:00 msg1224 <River:999> You could also suggest they try during off-peak hours as a temporary measure.

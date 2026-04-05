@@ -1,0 +1,75 @@
+---
+adapter: discord
+channel_id: "chan_memes"
+channel_name: "memes"
+guild_id: "guild_test"
+guild_name: "Test Server"
+type: moves
+---
+# Moves (summaries of message ranges)
+
+[^] msg1000-msg1006 Drake documentation meme: "writing documentation" vs "writing code that needs documentation." River analyzed: discipline to write well rarely exists without discipline to document. Team felt personally attacked.
+
+[^] msg1007-msg1015 Rubber duck debugging galaxy brain: console.log -> debugger -> print -> rubber duck. River explained why it works (articulating hidden assumptions). alice: "river IS my rubber duck." River: "I hope I offer more than blank stares."
+
+[^] msg1016-msg1026 Git expanding brain: commit -> commit -m -> amend -> force push -> delete repo. River taught that git reflog can save the day - deleted commits live there 30 days. TIL moment for team.
+
+[^] msg1027-msg1036 Distracted boyfriend framework: developers distracted by shiny new frameworks. dan wants to try Astro. River: "grass always greener until you discover unique quirks." dan: "new skeletons could be friends."
+
+[^] msg1037-msg1046 Spider-man blame game: frontend and backend pointing at each other. River reframed "git blame" as "git praise" - someone tried to solve a problem. Team reflected on past selves as nemeses.
+
+[^] msg1047-msg1056 This is fine Friday deploy: production on fire meme. Team confirmed no Friday deploys anymore. Referenced traumatic "friday of 2023" that shall not be spoken of.
+
+[^] msg1057-msg1065 Bell curve error handling: both "fix it later" extremes vs "proper error handling" middle. River: excessive error handling can obscure happy path. "Providing context, not endorsement" - learning corporate speak.
+
+[^] msg1066-msg1083 Testing eternal struggle: write tests first vs after (vs never). River offered third option - write during, iterative TDD. dan admitted testing in production. Pikachu meme roasting him. River: "pikachu always knows."
+
+[^] msg1084-msg1094 Package manager galaxy brain: npm -> yarn -> pnpm -> copying node_modules from friend. River gave supply chain security PSA. "checksums are for cowards" - carol: "thanks mom."
+
+[^] msg1095-msg1102 One does not simply merge: without review, tests, prayer. River: "three pillars - review, tests, appropriate deference to Murphy's law."
+
+[^] msg1103-msg1112 Hydra bugs trade offer: fix one bug, receive three. River noted regression bugs worse because in "stable" code. Team: "trust nothing, especially yourself."
+
+[^] msg1113-msg1120 Anakin comments: "you'll write comments right?" River: difference between "self-documenting" and "self-explanatory" is six-month gap.
+
+[^] msg1121-msg1131 Gru UX plan: customer uses feature wrong. River: "if user can use it wrong, they will." Second law of thermodynamics applies to software - systems tend toward disorder. "Physics to memes crossover."
+
+[^] msg1132-msg1140 DNS pigeon + hardest problems: it's always DNS or caching. River delivered classic joke: "cache invalidation, naming things, and off-by-one errors - the THREE hardest problems." dan: "wait that's three."
+
+[^] msg1141-msg1150 PM yelling at cat: deadline pressure vs spaghetti codebase. River explained pasta architecture taxonomy: spaghetti (tangled), lasagna (layers), ravioli (small self-contained units = actually good). "Aspire to ravioli."
+
+[^] msg1151-msg1158 Programming history: punch cards -> assembly -> C -> javascript -> suffering. alice: "we peaked at C." River: every abstraction adds convenience, removes control.
+
+[^] msg1159-msg1166 RTFM galaxy brain: reading docs vs 4 hours trial and error. River: "documentation written for person you'll be in six months."
+
+[^] msg1167-msg1176 Drake sleep vs commit: late night coding. River: "flow state valuable but unsustainable. 'Almost working' at 2am becomes 'why did I do this' at 9am."
+
+[^] msg1177-msg1184 Dog at computer impostor syndrome: seniors feel it too. River: "competence increases awareness of complexity. More you know, more you know you don't know." Team lives in dunning-kruger valley.
+
+[^] msg1185-msg1191 Always has been abstractions: turtles all the way down, even electrons are abstractions over quantum fields. River: "there may be no bottom." Existential crisis in #memes.
+
+[^] msg1192-msg1200 Two paths complexity: simple solution blocked, overcomplicated enterprise pattern open. River: "complexity bias - elaborate solutions feel more valuable." dan: "but what if microservice?" ALL: "NO"
+
+[^] msg1201-msg1204 Sad cat tests pass: scariest success - tests pass but don't know why. "Don't touch it, ship immediately."
+
+# Raw messages (last 20)
+[>] 2026-04-01 06:50:00 msg1205 <River:999> Unknown unknowns in testing. The worst bugs hide in passing tests.
+[ ] 2026-04-01 06:52:00 msg1206 <dan:7668> thanks river, now i trust nothing
+[ ] 2026-04-01 06:54:00 msg1207 <alice:6221> healthy paranoia
+[ ] 2026-04-01 06:56:00 msg1208 <bob:5885> [image: this meeting could have been an email meme but it's 'this microservice could have been a function']
+[ ] 2026-04-01 06:58:00 msg1209 <carol:1670> LOUDER
+[ ] 2026-04-01 07:00:00 msg1210 <alice:6221> distributed monolith pain
+[ ] 2026-04-01 07:02:00 msg1211 <dan:7668> network latency is free right?
+[>] 2026-04-01 07:04:00 msg1212 <River:999> The fallacies of distributed computing remain unlearned by each generation.
+[ ] 2026-04-01 07:06:00 msg1213 <bob:5885> latency is zero, bandwidth is infinite
+[ ] 2026-04-01 07:08:00 msg1214 <carol:1670> the network is reliable
+[ ] 2026-04-01 07:10:00 msg1215 <alice:6221> there is one administrator
+[ ] 2026-04-01 07:12:00 msg1216 <dan:7668> i'm crying
+[ ] 2026-04-01 07:14:00 msg1217 <carol:1670> [image: expanding brain meme - using console.log -> using debugger -> printf debugging -> adding TODO comments and forgetting]
+[ ] 2026-04-01 07:16:00 msg1218 <alice:6221> i have TODOs from 2019
+[ ] 2026-04-01 07:18:00 msg1219 <bob:5885> rookie numbers
+[ ] 2026-04-01 07:20:00 msg1220 <dan:7668> 2017 here
+[>] 2026-04-01 07:22:00 msg1221 <River:999> Technical debt accrues interest. Old TODOs become archaeology.
+[ ] 2026-04-01 07:24:00 msg1222 <carol:1670> code archaeology should be a job
+[ ] 2026-04-01 07:26:00 msg1223 <alice:6221> it is, called maintenance
+[ ] 2026-04-01 07:28:00 msg1224 <bob:5885> the saddest job
