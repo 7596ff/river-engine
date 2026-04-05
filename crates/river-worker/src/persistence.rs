@@ -90,20 +90,14 @@ pub fn clear_context(path: &Path) -> std::io::Result<()> {
 
 /// Check if a message should be persisted to context.jsonl.
 ///
-/// Only persist:
-/// - Assistant messages (LLM outputs)
-/// - System messages that are context pressure warnings
+/// Only assistant messages (LLM outputs) are persisted. Everything else—system
+/// prompts, user messages, tool results, context warnings—is either ephemeral
+/// or reconstructed from workspace data on assembly.
+///
+/// Cross-session continuity is handled by the summary mechanism, not by
+/// persisting runtime signals like context warnings.
 pub fn should_persist(message: &OpenAIMessage) -> bool {
-    match message.role.as_str() {
-        "assistant" => true,
-        "system" => {
-            // Only persist context pressure warnings
-            message.content.as_ref()
-                .map(|c| c.contains("Context at"))
-                .unwrap_or(false)
-        }
-        _ => false,
-    }
+    message.role == "assistant"
 }
 
 #[cfg(test)]
@@ -114,12 +108,6 @@ mod tests {
     #[test]
     fn test_should_persist_assistant() {
         let msg = OpenAIMessage::assistant("I'll help you with that.");
-        assert!(should_persist(&msg));
-    }
-
-    #[test]
-    fn test_should_persist_system_warning() {
-        let msg = OpenAIMessage::system("Context at 80%. Consider wrapping up.");
         assert!(should_persist(&msg));
     }
 
@@ -136,9 +124,13 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_persist_regular_system() {
+    fn test_should_not_persist_system() {
+        // No system messages are persisted - not prompts, not warnings
         let msg = OpenAIMessage::system("You are a helpful assistant.");
         assert!(!should_persist(&msg));
+
+        let warning = OpenAIMessage::system("Context at 80%. Consider wrapping up.");
+        assert!(!should_persist(&warning));
     }
 
     #[test]

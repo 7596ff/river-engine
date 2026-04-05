@@ -579,36 +579,40 @@ workspace/conversations/{adapter}/{guild_id}-{guild_name}/{channel_id}-{channel_
 workspace/conversations/{adapter}/dm/{user_id}-{user_name}.txt
 ```
 
-### Hybrid Format
+### Format
 
-The conversation file has two sections: a **sorted section** (compacted history) and an **append-only tail** (recent events). This gives fast writes and fast reads.
+Append-only file with periodic compaction. New messages and read receipts are appended; compaction sorts by timestamp, applies read receipts, and dedupes by message ID.
 
 ```
-# === Compacted (sorted by timestamp, statuses baked in) ===
+[ ] 2026-03-21T14:25:00Z 1234567889 <alice:111> previous message
+[ ] 2026-03-21T14:30:00Z 1234567890 <alice:111> hey, can you help me?
+[>] 2026-03-21T14:30:15Z 1234567891 <river:999> Sure! What do you need?
+[r] 2026-03-21T14:30:30Z 1234567889
+[r] 2026-03-21T14:30:30Z 1234567890
+[ ] 2026-03-21T14:35:00Z 1234567893 <alice:111> any ideas?
+[>] 2026-03-21T14:36:15Z 1234567895 <river:999> Sorry, checking logs now.
+[!] 2026-03-21T14:36:20Z - <river:999> Failed: rate limited
+```
+
+After compaction:
+```
 [x] 2026-03-21T14:25:00Z 1234567889 <alice:111> previous message
 [x] 2026-03-21T14:30:00Z 1234567890 <alice:111> hey, can you help me?
 [>] 2026-03-21T14:30:15Z 1234567891 <river:999> Sure! What do you need?
-[x] 2026-03-21T14:30:30Z 1234567892 <alice:111> I'm trying to deploy...
-
-# === Tail (append-only since last compaction) ===
-[+] 2026-03-21T14:35:00Z 1234567893 <alice:111> any ideas?
-[r] 2026-03-21T14:35:30Z 1234567893
-[+] 2026-03-21T14:36:00Z 1234567894 <alice:111> hello?
+[ ] 2026-03-21T14:35:00Z 1234567893 <alice:111> any ideas?
 [>] 2026-03-21T14:36:15Z 1234567895 <river:999> Sorry, checking logs now.
 [!] 2026-03-21T14:36:20Z - <river:999> Failed: rate limited
 ```
 
 ### Line Types
 
-| Prefix | Section | Meaning |
-|--------|---------|---------|
-| `[x]` | Compacted | Incoming, read |
-| `[>]` | Compacted | Outgoing, sent |
-| `[ ]` | Compacted | Incoming, unread (rare after compaction) |
-| `[+]` | Tail | New message arrived |
-| `[r]` | Tail | Read receipt (references message_id) |
-| `[>]` | Tail | Outgoing, sent |
-| `[!]` | Tail | Failed to send |
+| Prefix | Meaning |
+|--------|---------|
+| `[ ]` | Incoming, unread |
+| `[x]` | Incoming, read |
+| `[>]` | Outgoing, sent |
+| `[!]` | Failed to send |
+| `[r]` | Read receipt (references message_id) |
 
 ### Line Format
 
@@ -621,40 +625,40 @@ Read receipts (`[r]`) only have timestamp and message_id — no author or conten
 
 ### Compaction
 
-Compaction merges the tail into the sorted section:
-1. Parse tail events
-2. Apply read receipts to messages (`[+]` → `[x]`)
+Compaction cleans up the file:
+1. Apply read receipts to messages (`[ ]` → `[x]`)
+2. Dedupe by message ID (first occurrence wins)
 3. Sort all messages by timestamp
-4. Rewrite file with clean sorted section, empty tail
+4. Remove read receipt lines
 
 **Triggers:**
 - Worker startup
-- Tail exceeds 100 lines
-- Explicit request (future: `compact_conversations` tool)
+- File exceeds 100 lines
+- Any read receipts present
 
 ### Types
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LineType {
-    // Compacted section
-    Unread,      // [ ]
-    Read,        // [x]
-    Outgoing,    // [>]
-
-    // Tail section
-    Arrived,     // [+]
-    ReadReceipt, // [r]
-    Failed,      // [!]
+pub enum MessageDirection {
+    Unread,   // [ ]
+    Read,     // [x]
+    Outgoing, // [>]
+    Failed,   // [!]
 }
 
-pub struct MessageLine {
-    pub line_type: LineType,
-    pub timestamp: String,       // ISO8601
-    pub message_id: String,      // platform message ID, or "-" for failed
-    pub author_name: Option<String>,  // None for read receipts
-    pub author_id: Option<String>,
-    pub content: Option<String>,
+pub struct Message {
+    pub direction: MessageDirection,
+    pub timestamp: String,
+    pub id: String,
+    pub author: Author,
+    pub content: String,
+    pub reactions: Vec<Reaction>,
+}
+
+pub enum Line {
+    Message(Message),
+    ReadReceipt { timestamp: String, message_id: String },
 }
 ```
 

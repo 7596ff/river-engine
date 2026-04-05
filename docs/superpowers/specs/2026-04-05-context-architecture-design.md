@@ -14,12 +14,14 @@ Store only what the LLM produces. Assemble context fresh from workspace data and
 
 Stores only:
 - Assistant messages (LLM outputs, including tool_calls)
-- System warnings that affect reasoning (context pressure warnings)
+
+Context pressure warnings are ephemeral runtime signals injected into the live
+context but not persisted. Cross-session continuity is handled by the summary
+mechanism (worker exits with summary, orchestrator passes it to next session).
 
 ```jsonl
 {"role":"assistant","content":"Looking at the bug report...","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_channel","arguments":"{...}"}}]}
 {"role":"assistant","content":"The timeout is set to 30 seconds."}
-{"role":"system","content":"Context at 80%. Consider wrapping up or using the summary tool."}
 {"role":"assistant","content":null,"tool_calls":[{"id":"call_2","type":"function","function":{"name":"speak","arguments":"{...}"}}]}
 ```
 
@@ -200,7 +202,7 @@ In-memory only (`pending_flashes` in worker state). Not persisted to workspace f
 | What | Where | Persisted |
 |------|-------|-----------|
 | LLM outputs | context.jsonl | Yes |
-| Context warnings | context.jsonl | Yes |
+| Context warnings | live context only | No |
 | Tool results | workspace/inbox/ | Yes |
 | Messages | workspace/conversations/ | Yes |
 | Moves | workspace/moves/ | Yes |

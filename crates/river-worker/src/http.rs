@@ -211,26 +211,39 @@ pub struct CommitSwitchResponse {
 async fn handle_commit_switch(
     State(state): State<SharedState>,
 ) -> Result<Json<CommitSwitchResponse>, StatusCode> {
-    let mut s = state.write().await;
+    // First pass: swap baton and get workspace path
+    let (new_baton, workspace) = {
+        let mut s = state.write().await;
 
-    if !s.switch_pending {
-        return Err(StatusCode::CONFLICT);
-    }
+        if !s.switch_pending {
+            return Err(StatusCode::CONFLICT);
+        }
 
-    // Swap baton
-    let new_baton = match s.baton {
-        Baton::Actor => Baton::Spectator,
-        Baton::Spectator => Baton::Actor,
+        // Swap baton
+        let new_baton = match s.baton {
+            Baton::Actor => Baton::Spectator,
+            Baton::Spectator => Baton::Actor,
+        };
+        s.baton = new_baton.clone();
+        s.switch_pending = false;
+
+        (new_baton, s.workspace.clone())
     };
-    s.baton = new_baton.clone();
-
-    // Clear pending flag
-    s.switch_pending = false;
 
     let baton_str = match new_baton {
         Baton::Actor => "actor",
         Baton::Spectator => "spectator",
     };
+
+    // Reload role file (outside lock since it's async I/O)
+    let role_path = workspace.join("roles").join(format!("{}.md", baton_str));
+    if let Ok(content) = tokio::fs::read_to_string(&role_path).await {
+        let mut s = state.write().await;
+        s.role_content = Some(content);
+        tracing::info!("Reloaded role file for {}", baton_str);
+    } else {
+        tracing::warn!("Failed to reload role file: {:?}", role_path);
+    }
 
     Ok(Json(CommitSwitchResponse {
         committed: true,

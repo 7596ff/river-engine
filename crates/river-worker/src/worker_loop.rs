@@ -96,19 +96,15 @@ pub async fn run_loop(
         // Check context pressure
         if token_count > context_limit * 95 / 100 {
             tracing::warn!("Context at 95%, forcing summary");
-            return force_summary(config, &mut llm_history, &mut llm).await;
+            return force_summary(config, &context_path, &mut llm_history, &mut llm).await;
         }
 
-        // Add context pressure warning to history if needed
+        // Add context pressure warning to history if needed (ephemeral, not persisted)
         if token_count > context_limit * 80 / 100 {
             let msg = OpenAIMessage::system(
                 "Context at 80%. Consider wrapping up or using the summary tool.",
             );
-            llm_history.push(msg.clone());
-            // Context warnings are persisted
-            if should_persist(&msg) {
-                append_to_context(&context_path, &msg).ok();
-            }
+            llm_history.push(msg);
         }
 
         // Check for pending notifications and add to history
@@ -363,6 +359,7 @@ async fn sleep_until_wake(state: &SharedState, minutes: Option<u64>) {
 /// Force a summary when context is exhausted.
 async fn force_summary(
     config: &WorkerConfig,
+    context_path: &Path,
     messages: &mut Vec<OpenAIMessage>,
     llm: &mut LlmClient,
 ) -> WorkerOutput {
@@ -381,6 +378,11 @@ async fn force_summary(
         },
         Err(e) => format!("Context exhausted, summary failed: {}", e),
     };
+
+    // Clear context - next session starts fresh with summary injected by orchestrator
+    if let Err(e) = clear_context(context_path) {
+        tracing::warn!("Failed to clear context: {}", e);
+    }
 
     WorkerOutput {
         dyad: config.dyad.clone(),
