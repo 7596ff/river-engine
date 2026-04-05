@@ -3,7 +3,7 @@
 use river_protocol::Channel;
 
 use crate::openai::OpenAIMessage;
-use crate::workspace::{ChatMessage, Embedding, Flash, Moment, Move};
+use crate::workspace::{ChatMessage, Embedding, Flash, InboxItem, Moment, Move};
 
 /// Format a moment as a system message.
 pub fn format_moment(m: &Moment, channel: &Channel) -> OpenAIMessage {
@@ -31,6 +31,22 @@ pub fn format_flash(f: &Flash) -> OpenAIMessage {
 /// Format an embedding as a system message.
 pub fn format_embedding(e: &Embedding) -> OpenAIMessage {
     OpenAIMessage::system(format!("[Reference: {}]\n{}", e.source, e.content))
+}
+
+/// Format an inbox item as a system message.
+pub fn format_inbox_item(item: &InboxItem) -> OpenAIMessage {
+    // Extract time portion from timestamp (e.g., "07:28" from "2026-04-01T07:28:00Z")
+    let time = item
+        .timestamp
+        .split('T')
+        .nth(1)
+        .map(|t| {
+            let parts: Vec<&str> = t.split(':').take(2).collect();
+            parts.join(":")
+        })
+        .unwrap_or_else(|| item.timestamp.clone());
+
+    OpenAIMessage::system(format!("[inbox] {} {}: {}", time, item.tool, item.summary))
 }
 
 /// Format chat messages as a user message.
@@ -241,5 +257,25 @@ mod tests {
         assert!(content.contains("<Alice> Hello!"));
         assert!(content.contains("<Bob> Hi Alice!"));
         assert!(content.contains("<Alice> How are you?"));
+    }
+
+    #[test]
+    fn test_format_inbox_item() {
+        let item = InboxItem {
+            id: "discord_chan123_2026-04-01T07-28-00Z_read_channel".into(),
+            timestamp: "2026-04-01T07:28:00Z".into(),
+            tool: "read_channel".into(),
+            channel_adapter: "discord".into(),
+            channel_id: "chan123".into(),
+            summary: "msg1150-msg1200".into(),
+        };
+
+        let msg = format_inbox_item(&item);
+
+        assert_eq!(msg.role, "system");
+        assert!(msg.content.as_ref().unwrap().contains("[inbox]"));
+        assert!(msg.content.as_ref().unwrap().contains("07:28"));
+        assert!(msg.content.as_ref().unwrap().contains("read_channel"));
+        assert!(msg.content.as_ref().unwrap().contains("msg1150-msg1200"));
     }
 }
