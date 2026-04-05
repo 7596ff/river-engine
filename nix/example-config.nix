@@ -58,11 +58,16 @@
         };
 
         "nomic-embed" = {
-          enable_embeddings = true;
           endpoint = "http://localhost:11434/v1/embeddings";
           name = "nomic-embed-text";
           api_key = "ollama";
+          dimensions = 768;
         };
+      };
+
+      # Embedding model
+      embed = {
+        model = "nomic-embed";
       };
 
       # Dyad configurations
