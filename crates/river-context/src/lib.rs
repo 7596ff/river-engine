@@ -19,6 +19,7 @@
 //!         moves: vec![],
 //!         messages: vec![],
 //!         embeddings: vec![],
+//!         inbox: vec![],
 //!     }],
 //!     flashes: vec![],
 //!     history: vec![],
