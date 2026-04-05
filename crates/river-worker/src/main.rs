@@ -6,11 +6,13 @@
 mod config;
 mod conversation;
 mod http;
+mod inbox;
 mod llm;
 mod persistence;
 mod state;
 mod tools;
 mod worker_loop;
+mod workspace_loader;
 
 use clap::Parser;
 use config::WorkerConfig;
