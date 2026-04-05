@@ -234,6 +234,9 @@ in
         wantedBy = [ "multi-user.target" ];
         after = [ "network.target" ];
 
+        # Add package bin to PATH so orchestrator can spawn workers/embed
+        path = [ cfg.package ];
+
         serviceConfig = {
           Type = "simple";
           User = cfg.user;
