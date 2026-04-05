@@ -1160,11 +1160,9 @@ async fn execute_read_history(
 
     // Check mutual exclusivity
     if before.is_some() && after.is_some() {
-        return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-            success: false,
-            error: Some("Cannot specify both 'before' and 'after'".into()),
-            ..Default::default()
-        }).unwrap());
+        return ToolResult::Error(ToolError::ParseError {
+            message: "Cannot specify both 'before' and 'after'".into(),
+        });
     }
 
     let s = state.read().await;
@@ -1182,20 +1180,16 @@ async fn execute_read_history(
         Some(river_protocol::ProcessEntry::Adapter { endpoint, features, .. }) => {
             // Check ReadHistory feature
             if !features.contains(&(river_adapter::FeatureId::ReadHistory as u16)) {
-                return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-                    success: false,
-                    error: Some("Adapter does not support ReadHistory".into()),
-                    ..Default::default()
-                }).unwrap());
+                return ToolResult::Error(ToolError::UnsupportedOperation {
+                    operation: format!("ReadHistory not supported by adapter '{}'", adapter),
+                });
             }
             endpoint.clone()
         }
         _ => {
-            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-                success: false,
-                error: Some(format!("Adapter '{}' not found", adapter)),
-                ..Default::default()
-            }).unwrap());
+            return ToolResult::Error(ToolError::AdapterNotFound {
+                adapter: adapter.clone(),
+            });
         }
     };
 
@@ -1220,12 +1214,10 @@ async fn execute_read_history(
         .await
     {
         Ok(r) => r,
-        Err(e) => {
-            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-                success: false,
-                error: Some(format!("Request failed: {}", e)),
-                ..Default::default()
-            }).unwrap());
+        Err(_) => {
+            return ToolResult::Error(ToolError::AdapterUnreachable {
+                adapter: adapter.clone(),
+            });
         }
     };
 
@@ -1233,11 +1225,9 @@ async fn execute_read_history(
     let resp: river_adapter::OutboundResponse = match response.json().await {
         Ok(r) => r,
         Err(e) => {
-            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-                success: false,
-                error: Some(format!("Invalid response: {}", e)),
-                ..Default::default()
-            }).unwrap());
+            return ToolResult::Error(ToolError::ParseError {
+                message: format!("Invalid response: {}", e),
+            });
         }
     };
 
@@ -1246,23 +1236,18 @@ async fn execute_read_history(
             river_adapter::ErrorCode::PlatformError,
             "Unknown error",
         ));
-        return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-            success: false,
-            error: Some(err.message),
-            retry_after_ms: err.retry_after_ms,
-            ..Default::default()
-        }).unwrap());
+        return ToolResult::Error(ToolError::SendFailed {
+            reason: format!("{} (retry_after: {:?}ms)", err.message, err.retry_after_ms),
+        });
     }
 
     // Extract messages
     let messages = match resp.data {
         Some(river_adapter::ResponseData::History { messages }) => messages,
         _ => {
-            return ToolResult::Success(serde_json::to_value(ReadHistoryResult {
-                success: false,
-                error: Some("Unexpected response format".into()),
-                ..Default::default()
-            }).unwrap());
+            return ToolResult::Error(ToolError::ParseError {
+                message: "Unexpected response format from adapter".into(),
+            });
         }
     };
 

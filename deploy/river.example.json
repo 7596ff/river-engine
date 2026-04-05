@@ -45,9 +45,7 @@
         "name": "Viola",
         "model": "claude-haiku"
       },
-      "initial": {
-        "actor": "left"
-      },
+      "initialActor": "left",
       "ground": {
         "name": "Cassie",
         "id": "123456789",

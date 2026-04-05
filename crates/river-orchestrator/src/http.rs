@@ -1,6 +1,6 @@
 //! HTTP server and endpoints.
 
-use crate::config::{Config, ModelConfig};
+use crate::config::{Config, ModelDefinition};
 use crate::model::{ModelSwitchError, ModelSwitchRequest, ModelSwitchResponse};
 use crate::registry::{push_registry, SharedRegistry};
 use river_protocol::Registry;
@@ -72,8 +72,8 @@ pub struct WorkerModelConfig {
     pub context_limit: usize,
 }
 
-impl From<&ModelConfig> for WorkerModelConfig {
-    fn from(m: &ModelConfig) -> Self {
+impl From<&ModelDefinition> for WorkerModelConfig {
+    fn from(m: &ModelDefinition) -> Self {
         Self {
             endpoint: m.endpoint.clone(),
             name: m.name.clone(),
@@ -235,8 +235,8 @@ async fn handle_worker_registration(
         )
     })?;
 
-    // Determine baton based on initial.actor
-    let baton = if req.worker.side == dyad_config.initial.actor {
+    // Determine baton based on initial_actor
+    let baton = if req.worker.side == dyad_config.initial_actor {
         Baton::Actor
     } else {
         Baton::Spectator
@@ -359,7 +359,7 @@ async fn handle_adapter_registration(
     let worker_endpoint = {
         let reg = state.registry.read().await;
         // Find the actor for this dyad
-        reg.get_worker_endpoint(&req.adapter.dyad, &dyad_config.initial.actor)
+        reg.get_worker_endpoint(&req.adapter.dyad, &dyad_config.initial_actor)
     };
 
     // Update supervisor with endpoint

@@ -501,5 +501,23 @@ pub fn get_tool_definitions() -> Vec<ToolDef> {
                 }),
             },
         },
+        ToolDef {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: "read_history".into(),
+                description: "Read channel message history from adapter".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "adapter": { "type": "string", "description": "Adapter name" },
+                        "channel": { "type": "string", "description": "Channel ID" },
+                        "limit": { "type": "integer", "description": "Max messages to fetch (default 100, max 100)" },
+                        "before": { "type": "string", "description": "Message ID to fetch messages before (mutually exclusive with after)" },
+                        "after": { "type": "string", "description": "Message ID to fetch messages after (mutually exclusive with before)" }
+                    },
+                    "required": ["adapter", "channel"]
+                }),
+            },
+        },
     ]
 }

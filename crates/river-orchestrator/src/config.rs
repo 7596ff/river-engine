@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// Root configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    pub models: HashMap<String, ModelConfig>,
+    pub models: HashMap<String, ModelDefinition>,
     pub embed: Option<EmbedConfig>,
     pub dyads: HashMap<String, DyadConfig>,
     #[serde(default = "default_port")]
@@ -22,7 +22,7 @@ fn default_port() -> u16 {
 
 /// Model configuration for LLMs or embedding models.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ModelConfig {
+pub struct ModelDefinition {
     pub endpoint: String,
     pub name: String,
     pub api_key: String,
@@ -44,12 +44,6 @@ pub struct SideConfig {
     pub model: String,
 }
 
-/// Initial state configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct InitialConfig {
-    pub actor: Side,
-}
-
 /// Dyad configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DyadConfig {
@@ -60,7 +54,8 @@ pub struct DyadConfig {
     pub gid: Option<u32>,
     pub left: SideConfig,
     pub right: SideConfig,
-    pub initial: InitialConfig,
+    #[serde(rename = "initialActor")]
+    pub initial_actor: Side,
     pub ground: Ground,
     pub adapters: Vec<AdapterConfig>,
 }

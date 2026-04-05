@@ -79,7 +79,7 @@
           right.name = "Viola";
           right.model = "claude-haiku";
 
-          initial.actor = "left";
+          initialActor = "left";
 
           # Human operator (ground truth)
           ground = {

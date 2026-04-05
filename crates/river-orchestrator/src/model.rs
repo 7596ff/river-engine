@@ -1,6 +1,6 @@
 //! Model config resolution and switching.
 
-use crate::config::ModelConfig;
+use crate::config::ModelDefinition;
 use river_adapter::Side;
 use serde::{Deserialize, Serialize};
 
@@ -27,9 +27,9 @@ pub struct ModelSwitchError {
     pub error: String,
 }
 
-/// Convert ModelConfig to ModelSwitchResponse.
-impl From<&ModelConfig> for ModelSwitchResponse {
-    fn from(model: &ModelConfig) -> Self {
+/// Convert ModelDefinition to ModelSwitchResponse.
+impl From<&ModelDefinition> for ModelSwitchResponse {
+    fn from(model: &ModelDefinition) -> Self {
         Self {
             endpoint: model.endpoint.clone(),
             name: model.name.clone(),

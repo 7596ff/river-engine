@@ -49,9 +49,7 @@ in
                 name = "Viola";
                 model = "claude-sonnet";
               };
-              initial = {
-                actor = "left";
-              };
+              initialActor = "left";
               ground = {
                 name = "Cassie";
                 id = "123456789";
