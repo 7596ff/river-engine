@@ -2,13 +2,16 @@
 
 use crate::config::WorkerConfig;
 use crate::llm::{get_tool_definitions, LlmClient, LlmContent};
-use crate::persistence::{append_to_context, clear_context, load_context, save_context};
+use crate::persistence::{append_to_context, clear_context, load_context, should_persist};
 use crate::state::SharedState;
 use crate::tools::{execute_tool, ToolResult};
+use crate::workspace_loader::load_channels;
 use river_adapter::Side;
-use river_context::OpenAIMessage;
+use river_context::{build_context, ContextRequest, OpenAIMessage};
+use river_protocol::Channel;
 use river_snowflake::{AgentBirth, SnowflakeGenerator};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// Worker output sent to orchestrator.
@@ -46,7 +49,7 @@ pub async fn run_loop(
     let birth = AgentBirth::now();
     let mut generator = SnowflakeGenerator::new(birth);
 
-    // Load existing context
+    // Path to LLM history (stream of consciousness)
     let context_path = {
         let s = state.read().await;
         let side_str = match s.side {
@@ -55,41 +58,18 @@ pub async fn run_loop(
         };
         s.workspace.join(side_str).join("context.jsonl")
     };
-    let mut messages = load_context(&context_path);
 
-    // If starting fresh, inject role and identity content
-    if messages.is_empty() {
+    // Load LLM history (the stream of consciousness - grows until reset)
+    let mut llm_history = load_context(&context_path);
+
+    // If starting fresh with an initial message, add it to history
+    // Note: initial messages are user messages and not persisted (they're re-assembled)
+    if llm_history.is_empty() {
         let s = state.read().await;
-
-        // Inject role content first (defines behavior)
-        if let Some(ref role) = s.role_content {
-            messages.push(OpenAIMessage::system(role.clone()));
-        }
-
-        // Inject identity content (defines self-perception)
-        if let Some(ref identity) = s.identity_content {
-            // Prepend name if available
-            let identity_with_name = if let Some(ref name) = s.name {
-                format!("Your name is {}.\n\n{}", name, identity)
-            } else {
-                identity.clone()
-            };
-            messages.push(OpenAIMessage::system(identity_with_name));
-        } else if let Some(ref name) = s.name {
-            // If no identity file but name is set, still tell the agent its name
-            messages.push(OpenAIMessage::system(format!("Your name is {}.", name)));
-        }
-
-        // Inject initial message if provided
         if let Some(ref initial) = s.initial_message {
-            messages.push(OpenAIMessage::user(initial.clone()));
-        }
-
-        drop(s);
-
-        // Persist the initial context
-        for msg in &messages {
-            append_to_context(&context_path, msg).ok();
+            let msg = OpenAIMessage::user(initial.clone());
+            llm_history.push(msg.clone());
+            // Not persisted - user messages are re-assembled from workspace
         }
     }
 
@@ -107,20 +87,6 @@ pub async fn run_loop(
 
     // Main loop
     loop {
-        // Check for pending flashes
-        let pending_flashes = {
-            let mut s = state.write().await;
-            std::mem::take(&mut s.pending_flashes)
-        };
-
-        // Inject flashes as system messages
-        for flash in pending_flashes {
-            messages.push(OpenAIMessage::system(format!(
-                "[Flash from {}] {}",
-                flash.from, flash.content
-            )));
-        }
-
         // Get current token estimate
         let token_count = {
             let s = state.read().await;
@@ -130,35 +96,52 @@ pub async fn run_loop(
         // Check context pressure
         if token_count > context_limit * 95 / 100 {
             tracing::warn!("Context at 95%, forcing summary");
-            return force_summary(config, &mut messages, &mut llm).await;
+            return force_summary(config, &mut llm_history, &mut llm).await;
         }
 
+        // Add context pressure warning to history if needed
         if token_count > context_limit * 80 / 100 {
-            messages.push(OpenAIMessage::system(
-                "Context at 80%. Consider wrapping up or summarizing.",
-            ));
+            let msg = OpenAIMessage::system(
+                "Context at 80%. Consider wrapping up or using the summary tool.",
+            );
+            llm_history.push(msg.clone());
+            // Context warnings are persisted
+            if should_persist(&msg) {
+                append_to_context(&context_path, &msg).ok();
+            }
         }
 
-        // Check for pending notifications
+        // Check for pending notifications and add to history
         let notifications = {
             let mut s = state.write().await;
             std::mem::take(&mut s.pending_notifications)
         };
 
-        // Add notification status if any
         if !notifications.is_empty() {
             let notif_summary: Vec<String> = notifications
                 .iter()
                 .map(|n| format!("{}:{} ({} new)", n.channel.adapter, n.channel.id, n.count))
                 .collect();
-            messages.push(OpenAIMessage::system(format!(
+            let msg = OpenAIMessage::system(format!(
                 "[New messages: {}]",
                 notif_summary.join(", ")
-            )));
+            ));
+            llm_history.push(msg.clone());
+            // Notifications are not persisted - they are ephemeral
         }
 
-        // Call LLM
-        let response = match llm.chat(&messages, Some(&tools)).await {
+        // Assemble full context: role + identity + workspace + history
+        let full_context = match assemble_full_context(&state, &llm_history, context_limit).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                tracing::error!("Failed to assemble context: {:?}", e);
+                // Fall back to just history if assembly fails
+                llm_history.clone()
+            }
+        };
+
+        // Call LLM with full assembled context
+        let response = match llm.chat(&full_context, Some(&tools)).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("LLM error: {}", e);
@@ -181,17 +164,22 @@ pub async fn run_loop(
 
         match response.content {
             LlmContent::Text(text) => {
-                // Model responded with text
-                messages.push(OpenAIMessage::assistant(&text));
-                append_to_context(&context_path, messages.last().unwrap()).ok();
+                // Model responded with text - persist assistant output
+                let msg = OpenAIMessage::assistant(&text);
+                llm_history.push(msg.clone());
+                if should_persist(&msg) {
+                    append_to_context(&context_path, &msg).ok();
+                }
 
-                // Add a prompt to use tools
-                messages.push(OpenAIMessage::system(
+                // Add a prompt to use tools (not persisted, just for this turn)
+                let prompt = OpenAIMessage::system(
                     "Use tools to take action. Use 'speak' to send messages, 'summary' to end session.",
-                ));
+                );
+                llm_history.push(prompt.clone());
+                // Not persisted - ephemeral prompt
             }
             LlmContent::ToolCalls(calls) => {
-                // Add assistant message with tool calls
+                // Add assistant message with tool calls - persist assistant output
                 let tool_calls_json: Vec<river_context::ToolCall> = calls
                     .iter()
                     .map(|c| river_context::ToolCall {
@@ -204,13 +192,16 @@ pub async fn run_loop(
                     })
                     .collect();
 
-                messages.push(OpenAIMessage {
+                let msg = OpenAIMessage {
                     role: "assistant".into(),
                     content: None,
                     tool_calls: Some(tool_calls_json),
                     tool_call_id: None,
-                });
-                append_to_context(&context_path, messages.last().unwrap()).ok();
+                };
+                llm_history.push(msg.clone());
+                if should_persist(&msg) {
+                    append_to_context(&context_path, &msg).ok();
+                }
 
                 // Execute tools
                 let mut should_sleep = None;
@@ -248,9 +239,10 @@ pub async fn run_loop(
                         }
                     };
 
-                    // Add tool result
-                    messages.push(OpenAIMessage::tool(&call.id, result_content));
-                    append_to_context(&context_path, messages.last().unwrap()).ok();
+                    // Add tool result to history (not persisted - tool results go to inbox)
+                    let msg = OpenAIMessage::tool(&call.id, result_content);
+                    llm_history.push(msg.clone());
+                    // Not persisted - tool results are ephemeral in live context
                 }
 
                 // Handle summary exit
@@ -269,18 +261,36 @@ pub async fn run_loop(
                     };
                 }
 
-                // Handle role switch
-                if let Some(baton) = new_baton {
-                    // Reload role file
+                // Handle role switch - update state so next assemble uses new role
+                if let Some(baton_str) = new_baton {
+                    // Parse baton string to enum
+                    let new_baton_enum = match baton_str.as_str() {
+                        "actor" => river_adapter::Baton::Actor,
+                        "spectator" => river_adapter::Baton::Spectator,
+                        _ => {
+                            tracing::warn!("Unknown baton: {}", baton_str);
+                            continue;
+                        }
+                    };
+
+                    // Reload role file into state
                     let role_path = {
                         let s = state.read().await;
-                        s.workspace.join("roles").join(format!("{}.md", baton))
+                        s.workspace.join("roles").join(format!("{}.md", baton_str))
                     };
                     if let Ok(role_content) = tokio::fs::read_to_string(&role_path).await {
-                        messages.push(OpenAIMessage::system(format!(
-                            "[Role switched to {}]\n\n{}",
-                            baton, role_content
-                        )));
+                        let mut s = state.write().await;
+                        s.role_content = Some(role_content.clone());
+                        s.baton = new_baton_enum;
+                        drop(s);
+
+                        // Add a note to history about the switch (not persisted)
+                        let msg = OpenAIMessage::system(format!(
+                            "[Role switched to {}]",
+                            baton_str
+                        ));
+                        llm_history.push(msg.clone());
+                        // Not persisted - role switch is ephemeral notification
                     }
                 }
 
@@ -295,12 +305,11 @@ pub async fn run_loop(
                     sleep_until_wake(&state, minutes).await;
                 }
 
-                // Handle channel switch - save reordered context
-                // TODO: Use build_context to properly reorder with new channel at end
+                // Channel switch - no special handling needed
+                // The next assemble_full_context() will re-render workspace data
+                // with the new channel ordering automatically
                 if channel_switched {
-                    if let Err(e) = save_context(&context_path, &messages) {
-                        tracing::warn!("Failed to save context after channel switch: {}", e);
-                    }
+                    tracing::debug!("Channel switched, workspace context will be re-rendered next turn");
                 }
             }
         }
@@ -379,4 +388,122 @@ async fn force_summary(
         status: ExitStatus::ContextExhausted,
         summary,
     }
+}
+
+/// Assemble context from workspace data using river-context.
+///
+/// This loads moves, moments, and messages from workspace files,
+/// then assembles them into a properly ordered context for the LLM.
+///
+/// # Arguments
+/// * `workspace` - Path to workspace directory
+/// * `channels` - Channels to include, ordered by recency (current first)
+/// * `flashes` - Pending flashes to inject
+/// * `history` - LLM conversation history (from context.jsonl)
+/// * `max_tokens` - Token budget
+#[allow(dead_code)]
+async fn assemble_context_from_workspace(
+    workspace: &Path,
+    channels: &[Channel],
+    flashes: Vec<river_context::Flash>,
+    history: Vec<OpenAIMessage>,
+    max_tokens: usize,
+) -> Result<Vec<OpenAIMessage>, river_context::ContextError> {
+    // Load channel data from workspace files
+    let channel_contexts = load_channels(workspace, channels).await;
+
+    // Build the context request
+    let request = ContextRequest {
+        channels: channel_contexts,
+        flashes,
+        history,
+        max_tokens,
+        now: chrono::Utc::now().to_rfc3339(),
+    };
+
+    // Assemble using river-context
+    let response = build_context(request)?;
+
+    Ok(response.messages)
+}
+
+/// Assemble full context for LLM call.
+///
+/// Structure:
+/// 1. Role content (defines behavior)
+/// 2. Identity content (defines self-perception)
+/// 3. Workspace context via build_context():
+///    - moments, moves from channels (reordered by current channel)
+///    - flashes (ephemeral)
+/// 4. LLM history from context.jsonl (stream of consciousness)
+/// 5. Current channel messages
+async fn assemble_full_context(
+    state: &SharedState,
+    llm_history: &[OpenAIMessage],
+    max_tokens: usize,
+) -> Result<Vec<OpenAIMessage>, river_context::ContextError> {
+    let (role_content, identity_content, name, workspace, channels, flashes) = {
+        let s = state.read().await;
+
+        // Build channel list with current first
+        let mut channels = vec![s.current_channel.clone()];
+        for key in &s.watch_list {
+            if let Some((adapter, id)) = key.split_once(':') {
+                if adapter != s.current_channel.adapter || id != s.current_channel.id {
+                    channels.push(Channel {
+                        adapter: adapter.to_string(),
+                        id: id.to_string(),
+                        name: None,
+                    });
+                }
+            }
+        }
+
+        (
+            s.role_content.clone(),
+            s.identity_content.clone(),
+            s.name.clone(),
+            s.workspace.clone(),
+            channels,
+            s.pending_flashes.clone(),
+        )
+    };
+
+    // Load channel data from workspace
+    let channel_contexts = load_channels(&workspace, &channels).await;
+
+    // Build context request
+    let request = ContextRequest {
+        channels: channel_contexts,
+        flashes,
+        history: llm_history.to_vec(),
+        max_tokens,
+        now: chrono::Utc::now().to_rfc3339(),
+    };
+
+    // Assemble workspace context + history
+    let mut response = build_context(request)?;
+
+    // Prepend role and identity
+    let mut full_context = Vec::new();
+
+    if let Some(role) = role_content {
+        full_context.push(OpenAIMessage::system(role));
+    }
+
+    if let Some(identity) = identity_content {
+        let identity_with_name = if let Some(ref n) = name {
+            format!("Your name is {}.\n\n{}", n, identity)
+        } else {
+            identity
+        };
+        full_context.push(OpenAIMessage::system(identity_with_name));
+    } else if let Some(n) = name {
+        full_context.push(OpenAIMessage::system(format!("Your name is {}.", n)));
+    }
+
+    // Add workspace context + history + messages
+    full_context.append(&mut response.messages);
+
+    Ok(full_context)
 }

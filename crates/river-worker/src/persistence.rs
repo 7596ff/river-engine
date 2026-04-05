@@ -88,10 +88,58 @@ pub fn clear_context(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Check if a message should be persisted to context.jsonl.
+///
+/// Only persist:
+/// - Assistant messages (LLM outputs)
+/// - System messages that are context pressure warnings
+pub fn should_persist(message: &OpenAIMessage) -> bool {
+    match message.role.as_str() {
+        "assistant" => true,
+        "system" => {
+            // Only persist context pressure warnings
+            message.content.as_ref()
+                .map(|c| c.contains("Context at"))
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_should_persist_assistant() {
+        let msg = OpenAIMessage::assistant("I'll help you with that.");
+        assert!(should_persist(&msg));
+    }
+
+    #[test]
+    fn test_should_persist_system_warning() {
+        let msg = OpenAIMessage::system("Context at 80%. Consider wrapping up.");
+        assert!(should_persist(&msg));
+    }
+
+    #[test]
+    fn test_should_not_persist_user() {
+        let msg = OpenAIMessage::user("Hello");
+        assert!(!should_persist(&msg));
+    }
+
+    #[test]
+    fn test_should_not_persist_tool_result() {
+        let msg = OpenAIMessage::tool("call_123", "result");
+        assert!(!should_persist(&msg));
+    }
+
+    #[test]
+    fn test_should_not_persist_regular_system() {
+        let msg = OpenAIMessage::system("You are a helpful assistant.");
+        assert!(!should_persist(&msg));
+    }
 
     #[test]
     fn test_roundtrip() {
