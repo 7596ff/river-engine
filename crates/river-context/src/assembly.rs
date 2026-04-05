@@ -3,7 +3,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::format::{
-    format_chat_messages, format_embedding, format_flash, format_moment, format_move,
+    format_chat_messages, format_embedding, format_flash, format_inbox_item, format_moment,
+    format_move,
 };
 use crate::id::extract_timestamp;
 use crate::openai::OpenAIMessage;
@@ -81,10 +82,11 @@ pub fn build_context(request: ContextRequest) -> Result<ContextResponse, Context
         collect_channel_embeddings(&mut timeline, last_ctx, &now_dt);
     }
 
-    // Process current channel (index 0): moments + moves + embeddings
+    // Process current channel (index 0): moments + moves + embeddings + inbox
     let current_ctx = &request.channels[0];
     collect_channel_summary(&mut timeline, current_ctx);
     collect_channel_embeddings(&mut timeline, current_ctx, &now_dt);
+    collect_channel_inbox(&mut timeline, current_ctx);
 
     // Sort timeline by timestamp
     timeline.sort_by_key(|item| item.timestamp);
@@ -147,10 +149,16 @@ fn collect_channel_embeddings(
     }
 }
 
+fn collect_channel_inbox(timeline: &mut Vec<TimelineItem>, ctx: &ChannelContext) {
+    for item in &ctx.inbox {
+        timeline.push(TimelineItem::new(&item.id, format_inbox_item(item)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{ChatMessage, Embedding, Moment, Move};
+    use crate::workspace::{ChatMessage, Embedding, InboxItem, Moment, Move};
     use river_protocol::{Author, Channel};
 
     /// Create a snowflake ID with a specific timestamp (microseconds).
@@ -454,6 +462,47 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("Valid embedding"));
+    }
+
+    #[test]
+    fn test_inbox_items_interspersed_by_timestamp() {
+        let request = ContextRequest {
+            channels: vec![ChannelContext {
+                channel: test_channel("main"),
+                moments: vec![
+                    test_moment(&make_id(1000), "Moment 1"),
+                    test_moment(&make_id(3000), "Moment 2"),
+                ],
+                moves: vec![],
+                messages: vec![],
+                embeddings: vec![],
+                inbox: vec![InboxItem {
+                    id: make_id(2000),
+                    timestamp: "2026-04-01T07:28:00Z".into(),
+                    tool: "read_channel".into(),
+                    channel_adapter: "discord".into(),
+                    channel_id: "main".into(),
+                    summary: "msg1150-msg1200".into(),
+                }],
+            }],
+            flashes: vec![],
+            history: vec![],
+            max_tokens: 10000,
+            now: "2026-04-01T12:00:00Z".into(),
+        };
+
+        let result = build_context(request).unwrap();
+
+        assert_eq!(result.messages.len(), 3);
+
+        // Inbox item should be between the two moments
+        let content_0 = result.messages[0].content.as_ref().unwrap();
+        let content_1 = result.messages[1].content.as_ref().unwrap();
+        let content_2 = result.messages[2].content.as_ref().unwrap();
+
+        assert!(content_0.contains("Moment 1")); // timestamp 1000
+        assert!(content_1.contains("[inbox]")); // timestamp 2000
+        assert!(content_2.contains("Moment 2")); // timestamp 3000
     }
 
     #[test]
