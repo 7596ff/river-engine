@@ -48,10 +48,6 @@ pub struct SideConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DyadConfig {
     pub workspace: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gid: Option<u32>,
     pub left: SideConfig,
     pub right: SideConfig,
     #[serde(rename = "initialActor")]

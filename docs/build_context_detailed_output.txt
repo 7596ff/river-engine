@@ -1,0 +1,395 @@
+DETAILED CHANNEL EXAMPLES - build_context OUTPUT
+Generated: 2026-04-01
+
+
+################################################################################
+# SCENARIO 1: Debugging session is current, design discussion is last
+################################################################################
+================================================================================
+INPUT SUMMARY
+================================================================================
+
+Channel 0 [CURRENT]: #dev
+  Messages: 60
+  Moves: 7
+  Moments: 1
+  Embeddings: 1
+Channel 1 [LAST]: #design
+  Messages: 50
+  Moves: 5
+  Moments: 1
+  Embeddings: 1
+Channel 2 [OTHER]: #random
+  Messages: 15
+  Moves: 3
+  Moments: 1
+  Embeddings: 0
+
+Flashes: 2
+History items: 2
+Max tokens: 50000
+
+================================================================================
+OUTPUT (2133 tokens estimated)
+================================================================================
+
+--- Message 1 [system/MOVE] ---
+[Move: random] Coffee run coordination - alice got 4 coffees (messages 531266229322835086540800000000-548975103633596256092160000000)
+
+--- Message 2 [system/MOVE] ---
+[Move: random] Sports chat - game highlights discussion (messages 553402322211286548480000000000-556722736144554267770880000000)
+
+--- Message 3 [system/MOVE] ---
+[Move: random] Lunch plans - thai place on 5th, group going (messages 564470368655512279449600000000-567790782588779998740480000000)
+
+--- Message 4 [system/MOMENT] ---
+[Moment: random] Casual team coordination: coffee run, sports chat, lunch plans (thai on 5th) (moves 548975103633596256092160000000-567790782588779998740480000000)
+
+--- Message 5 [system/MOVE] ---
+[Move: dev] Problem report: users randomly logged out every 10-15 min (messages 597674507988189472358400000000-600994921921457191649280000000)
+
+--- Message 6 [system/MOVE] ---
+[Move: dev] Initial hypothesis: TTL set to 15 min, latency causing race condition (messages 602101726565879764746240000000-607635749787992630231040000000)
+
+--- Message 7 [system/MOVE] ---
+[Move: dev] Investigation: refresh triggers at TTL-30s (insufficient buffer), no retry on failure (messages 608742554432415203328000000000-618703796232218361200640000000)
+
+--- Message 8 [system/EMBED] ---
+[Reference: notes/auth-patterns.md]
+Auth refresh should happen at TTL minus a safe buffer (2+ minutes) to account for network latency and processing time.
+
+--- Message 9 [system/MOVE] ---
+[Move: dev] Proposal: 3-part fix - larger refresh window, retry with backoff, soft logout state. Added logging with correlation IDs. (messages 619810600876640934297600000000-629771842676444092170240000000)
+
+--- Message 10 [system/FLASH] ---
+[Flash from spectator] Reminder: auth token patterns documented in notes/auth-patterns.md
+
+--- Message 11 [system/MOVE] ---
+[Move: dev] Code review: made retry count configurable, improved error messages (messages 630878647320866665267200000000-640839889120669823139840000000)
+
+--- Message 12 [system/MOVE] ---
+[Move: dev] Testing: unit tests added, load test with k6 prepared (messages 641946693765092396236800000000-651907935564895554109440000000)
+
+--- Message 13 [system/MOVE] ---
+[Move: dev] Resolution: load test passed (10k users), merged, deployed to staging (messages 653014740209318127206400000000-662975982009121285079040000000)
+
+--- Message 14 [system/MOMENT] ---
+[Moment: dev] Auth token refresh debugging session. Root cause: 15-min TTL with only 30s refresh buffer + no retry logic. Fix: 2-min buffer, exponential backoff retries, soft logout UI. Load tested at 10k concurrent users. Deployed to staging. Duration: ~90 minutes. (moves 598781312632612045455360000000-662975982009121285079040000000)
+
+--- Message 15 [system/MOVE] ---
+[Move: design] Problem: 40% drop-off at step 3 (required account connection) (messages 730491065318898243993600000000-740452307118701401866240000000)
+
+--- Message 16 [system/MOVE] ---
+[Move: design] Exploration: connection required for value, but timing is flexible (messages 741559111763123974963200000000-751520353562927132835840000000)
+
+--- Message 17 [system/EMBED] ---
+[Reference: embeddings/onboarding-research.md]
+Onboarding best practice: show value before asking for commitment. Users who see benefits first convert at 2-3x higher rates.
+
+--- Message 18 [system/MOVE] ---
+[Move: design] Options proposed: A) optional connection, B) preview with sample data, C) reorder flow. Team preferred C. (messages 752627158207349705932800000000-762588400007152863805440000000)
+
+--- Message 19 [system/FLASH] ---
+[Flash from spectator] Consider: similar drop-off issue was solved in mobile app redesign Q3
+
+--- Message 20 [system/MOVE] ---
+[Move: design] Refinement: two-path flow - connected users fast-track, skippers get demo + later prompt (messages 763695204651575436902400000000-773656446451378594775040000000)
+
+--- Message 21 [system/MOVE] ---
+[Move: design] Decision: reordered flow with skip option, animated GIF demo, secondary button styling. Wireframes EOD. (messages 774763251095801167872000000000-784724492895604325744640000000)
+
+--- Message 22 [system/MOMENT] ---
+[Moment: design] Onboarding redesign for step 3 drop-off (40%). Solution: reorder flow to show value before asking for account connection. Two paths: immediate connectors fast-track, skippers get GIF demo + deferred prompt. Wireframes in progress. (moves 740452307118701401866240000000-784724492895604325744640000000)
+
+--- Message 23 [system/HISTORY] ---
+You are River, a helpful engineering assistant.
+
+--- Message 24 [system/HISTORY] ---
+Your identity: collaborative, thorough, explains reasoning.
+
+--- Message 25 [user/CHAT] ---
+[Chat: dev]
+[2026-04-01T09:00:00Z] <alice> hey, auth is broken again
+[2026-04-01T09:01:00Z] <River> What's happening? Can you describe the symptoms?
+[2026-04-01T09:02:00Z] <alice> users getting logged out randomly, maybe every 10-15 min
+[2026-04-01T09:03:00Z] <alice> no pattern i can see
+[2026-04-01T09:04:00Z] <River> Let me check the token refresh logic. What's the current TTL setting?
+[2026-04-01T09:05:00Z] <bob> i set it to 15 min last week, was that wrong?
+[2026-04-01T09:06:00Z] <River> That might be it. If the refresh happens at exactly 15 min but there's any latency...
+[2026-04-01T09:07:00Z] <alice> oh no
+[2026-04-01T09:08:00Z] <bob> should we bump it up?
+[2026-04-01T09:09:00Z] <River> Let me look at the refresh code first. Where's that implemented?
+[2026-04-01T09:10:00Z] <alice> src/auth/refresh.rs
+[2026-04-01T09:11:00Z] <River> Found it. The refresh triggers at TTL - 30 seconds, but that's not enough buffer.
+[2026-04-01T09:12:00Z] <bob> what buffer do we need?
+[2026-04-01T09:13:00Z] <River> I'd recommend TTL - 2 minutes minimum. Network latency + processing time.
+[2026-04-01T09:14:00Z] <alice> makes sense
+[2026-04-01T09:15:00Z] <River> Also noticed the refresh endpoint doesn't retry on failure.
+[2026-04-01T09:16:00Z] <bob> that's bad
+[2026-04-01T09:17:00Z] <River> Yes. If the refresh fails once, the user gets logged out.
+[2026-04-01T09:18:00Z] <alice> we need retry logic
+[2026-04-01T09:19:00Z] <River> Agreed. I'll draft a fix. Give me a few minutes.
+[2026-04-01T09:20:00Z] <River> Here's what I'm thinking:
+1. Change refresh window to TTL - 2min
+2. Add 3 retries with exponential backoff
+3. Add a 'soft logout' state that shows a refresh prompt instead of hard logout
+[2026-04-01T09:21:00Z] <alice> i like the soft logout idea
+[2026-04-01T09:22:00Z] <bob> what's exponential backoff?
+[2026-04-01T09:23:00Z] <River> Retry after 1s, then 2s, then 4s. Prevents hammering the server.
+[2026-04-01T09:24:00Z] <bob> got it
+[2026-04-01T09:25:00Z] <alice> can we also log these failures? for debugging
+[2026-04-01T09:26:00Z] <River> Good call. I'll add structured logging with correlation IDs.
+[2026-04-01T09:27:00Z] <bob> what's a correlation id
+[2026-04-01T09:28:00Z] <River> A unique ID that follows a request through the system. Makes tracing easier.
+[2026-04-01T09:29:00Z] <alice> we should have added that ages ago
+[2026-04-01T09:30:00Z] <River> I've written the refresh changes. PR #847. Can someone review?
+[2026-04-01T09:31:00Z] <bob> looking now
+[2026-04-01T09:32:00Z] <alice> me too
+[2026-04-01T09:33:00Z] <bob> line 45 - shouldn't the retry count be configurable?
+[2026-04-01T09:34:00Z] <River> Good point. I'll add it to the config.
+[2026-04-01T09:35:00Z] <alice> also line 78, the error message is confusing
+[2026-04-01T09:36:00Z] <River> Which part?
+[2026-04-01T09:37:00Z] <alice> "token refresh failed" doesn't say why
+[2026-04-01T09:38:00Z] <River> True. I'll include the underlying error.
+[2026-04-01T09:39:00Z] <bob> otherwise lgtm
+[2026-04-01T09:40:00Z] <River> Updated. Also added unit tests for the retry logic.
+[2026-04-01T09:41:00Z] <alice> nice, running the test suite now
+[2026-04-01T09:42:00Z] <bob> should we do a load test too?
+[2026-04-01T09:43:00Z] <River> Yes, especially for the soft logout UI. What's our load testing setup?
+[2026-04-01T09:44:00Z] <alice> we use k6, scripts are in /tests/load
+[2026-04-01T09:45:00Z] <River> I'll add a scenario for auth refresh under load.
+[2026-04-01T09:46:00Z] <bob> tests passed locally btw
+[2026-04-01T09:47:00Z] <alice> same here
+[2026-04-01T09:48:00Z] <River> Great. Load test script is ready. Running now.
+[2026-04-01T09:49:00Z] <alice> fingers crossed
+[2026-04-01T09:50:00Z] <River> Load test passed. 10k concurrent users, no auth failures.
+[2026-04-01T09:51:00Z] <bob> nice!
+[2026-04-01T09:52:00Z] <alice> merging
+[2026-04-01T09:53:00Z] <River> One more thing - should we notify users about the fix?
+[2026-04-01T09:54:00Z] <alice> good idea, i'll write a changelog entry
+[2026-04-01T09:55:00Z] <bob> deployed to staging
+[2026-04-01T09:56:00Z] <River> I'll monitor the logs for the next hour.
+[2026-04-01T09:57:00Z] <alice> thanks river, this was a good session
+[2026-04-01T09:58:00Z] <bob> yeah really helpful
+[2026-04-01T09:59:00Z] <River> Happy to help. Let me know if anything else comes up.
+
+
+################################################################################
+# SCENARIO 2: Just switched to design channel
+################################################################################
+================================================================================
+INPUT SUMMARY
+================================================================================
+
+Channel 0 [CURRENT]: #design
+  Messages: 50
+  Moves: 5
+  Moments: 1
+  Embeddings: 1
+Channel 1 [LAST]: #dev
+  Messages: 60
+  Moves: 7
+  Moments: 1
+  Embeddings: 1
+Channel 2 [OTHER]: #random
+  Messages: 15
+  Moves: 3
+  Moments: 1
+  Embeddings: 0
+
+Flashes: 1
+History items: 2
+Max tokens: 50000
+
+================================================================================
+OUTPUT (2062 tokens estimated)
+================================================================================
+
+--- Message 1 [system/MOVE] ---
+[Move: random] Coffee run coordination - alice got 4 coffees (messages 531266229322835086540800000000-548975103633596256092160000000)
+
+--- Message 2 [system/MOVE] ---
+[Move: random] Sports chat - game highlights discussion (messages 553402322211286548480000000000-556722736144554267770880000000)
+
+--- Message 3 [system/MOVE] ---
+[Move: random] Lunch plans - thai place on 5th, group going (messages 564470368655512279449600000000-567790782588779998740480000000)
+
+--- Message 4 [system/MOMENT] ---
+[Moment: random] Casual team coordination: coffee run, sports chat, lunch plans (thai on 5th) (moves 548975103633596256092160000000-567790782588779998740480000000)
+
+--- Message 5 [system/MOVE] ---
+[Move: dev] Problem report: users randomly logged out every 10-15 min (messages 597674507988189472358400000000-600994921921457191649280000000)
+
+--- Message 6 [system/MOVE] ---
+[Move: dev] Initial hypothesis: TTL set to 15 min, latency causing race condition (messages 602101726565879764746240000000-607635749787992630231040000000)
+
+--- Message 7 [system/MOVE] ---
+[Move: dev] Investigation: refresh triggers at TTL-30s (insufficient buffer), no retry on failure (messages 608742554432415203328000000000-618703796232218361200640000000)
+
+--- Message 8 [system/EMBED] ---
+[Reference: notes/auth-patterns.md]
+Auth refresh should happen at TTL minus a safe buffer (2+ minutes) to account for network latency and processing time.
+
+--- Message 9 [system/MOVE] ---
+[Move: dev] Proposal: 3-part fix - larger refresh window, retry with backoff, soft logout state. Added logging with correlation IDs. (messages 619810600876640934297600000000-629771842676444092170240000000)
+
+--- Message 10 [system/MOVE] ---
+[Move: dev] Code review: made retry count configurable, improved error messages (messages 630878647320866665267200000000-640839889120669823139840000000)
+
+--- Message 11 [system/MOVE] ---
+[Move: dev] Testing: unit tests added, load test with k6 prepared (messages 641946693765092396236800000000-651907935564895554109440000000)
+
+--- Message 12 [system/MOVE] ---
+[Move: dev] Resolution: load test passed (10k users), merged, deployed to staging (messages 653014740209318127206400000000-662975982009121285079040000000)
+
+--- Message 13 [system/MOMENT] ---
+[Moment: dev] Auth token refresh debugging session. Root cause: 15-min TTL with only 30s refresh buffer + no retry logic. Fix: 2-min buffer, exponential backoff retries, soft logout UI. Load tested at 10k concurrent users. Deployed to staging. Duration: ~90 minutes. (moves 598781312632612045455360000000-662975982009121285079040000000)
+
+--- Message 14 [system/MOVE] ---
+[Move: design] Problem: 40% drop-off at step 3 (required account connection) (messages 730491065318898243993600000000-740452307118701401866240000000)
+
+--- Message 15 [system/MOVE] ---
+[Move: design] Exploration: connection required for value, but timing is flexible (messages 741559111763123974963200000000-751520353562927132835840000000)
+
+--- Message 16 [system/EMBED] ---
+[Reference: embeddings/onboarding-research.md]
+Onboarding best practice: show value before asking for commitment. Users who see benefits first convert at 2-3x higher rates.
+
+--- Message 17 [system/MOVE] ---
+[Move: design] Options proposed: A) optional connection, B) preview with sample data, C) reorder flow. Team preferred C. (messages 752627158207349705932800000000-762588400007152863805440000000)
+
+--- Message 18 [system/MOVE] ---
+[Move: design] Refinement: two-path flow - connected users fast-track, skippers get demo + later prompt (messages 763695204651575436902400000000-773656446451378594775040000000)
+
+--- Message 19 [system/FLASH] ---
+[Flash from spectator] Auth fix deployed - team may want status update
+
+--- Message 20 [system/MOVE] ---
+[Move: design] Decision: reordered flow with skip option, animated GIF demo, secondary button styling. Wireframes EOD. (messages 774763251095801167872000000000-784724492895604325744640000000)
+
+--- Message 21 [system/MOMENT] ---
+[Moment: design] Onboarding redesign for step 3 drop-off (40%). Solution: reorder flow to show value before asking for account connection. Two paths: immediate connectors fast-track, skippers get GIF demo + deferred prompt. Wireframes in progress. (moves 740452307118701401866240000000-784724492895604325744640000000)
+
+--- Message 22 [system/HISTORY] ---
+You are River, a helpful engineering assistant.
+
+--- Message 23 [assistant/HISTORY] ---
+I've finished helping with the auth token fix in #dev. The PR is merged and deployed to staging.
+
+--- Message 24 [user/CHAT] ---
+[Chat: design]
+[2026-04-01T11:00:00Z] <carol> need help with the onboarding redesign
+[2026-04-01T11:01:00Z] <River> Sure! What's the current state and what are you trying to improve?
+[2026-04-01T11:02:00Z] <carol> users dropping off at step 3 of 5
+[2026-04-01T11:03:00Z] <carol> that's the 'connect accounts' step
+[2026-04-01T11:04:00Z] <River> What's the current drop-off rate there?
+[2026-04-01T11:05:00Z] <carol> about 40%
+[2026-04-01T11:06:00Z] <River> That's significant. What does step 3 ask users to do exactly?
+[2026-04-01T11:07:00Z] <carol> connect their google/github/slack accounts
+[2026-04-01T11:08:00Z] <dan> we require at least one connection to proceed
+[2026-04-01T11:09:00Z] <River> Ah, that might be the issue. Requiring account connection creates friction.
+[2026-04-01T11:10:00Z] <carol> but we need those integrations for the product to work
+[2026-04-01T11:11:00Z] <River> Do you need them immediately, or can users connect later?
+[2026-04-01T11:12:00Z] <dan> technically later works, but then they miss the value
+[2026-04-01T11:13:00Z] <River> What if we showed the value first, then asked for the connection?
+[2026-04-01T11:14:00Z] <carol> like a preview?
+[2026-04-01T11:15:00Z] <River> Exactly. 'Here's what you'll get when you connect' with sample data.
+[2026-04-01T11:16:00Z] <dan> interesting
+[2026-04-01T11:17:00Z] <carol> but that's more dev work
+[2026-04-01T11:18:00Z] <River> True. Let me think about lighter options.
+[2026-04-01T11:19:00Z] <dan> we could just make it optional
+[2026-04-01T11:20:00Z] <River> Here are three options:
+
+A) Make connection optional, show value later
+B) Preview with sample data (more dev work)
+C) Reorder flow - show value in steps 1-2, ask for connection in step 4
+[2026-04-01T11:21:00Z] <carol> i like C
+[2026-04-01T11:22:00Z] <dan> C makes sense, what would steps 1-2 show?
+[2026-04-01T11:23:00Z] <River> Step 1: personalization (name, role, goals)
+Step 2: quick demo of core features with fake data
+Step 3: 'ready to make it real?' - connect accounts
+Step 4: workspace setup
+Step 5: invite team
+[2026-04-01T11:24:00Z] <carol> oh that's much better
+[2026-04-01T11:25:00Z] <dan> the fake data demo is basically option B though
+[2026-04-01T11:26:00Z] <River> Simpler version - just screenshots or a video, not interactive.
+[2026-04-01T11:27:00Z] <carol> we have marketing videos we could use
+[2026-04-01T11:28:00Z] <dan> true
+[2026-04-01T11:29:00Z] <River> Even simpler: animated GIFs showing the workflow. No video player needed.
+[2026-04-01T11:30:00Z] <carol> i can make those gifs today
+[2026-04-01T11:31:00Z] <River> Perfect. For the connection step, let's also add a 'skip for now' option.
+[2026-04-01T11:32:00Z] <dan> with a reminder later?
+[2026-04-01T11:33:00Z] <River> Yes. In-app prompt after they've used the product for 10 minutes.
+[2026-04-01T11:34:00Z] <carol> smart, they'll have seen the value by then
+[2026-04-01T11:35:00Z] <dan> what about the people who do connect immediately?
+[2026-04-01T11:36:00Z] <River> Fast path - skip the demo, go straight to workspace setup.
+[2026-04-01T11:37:00Z] <carol> two paths then
+[2026-04-01T11:38:00Z] <River> Right. Connected users: personalize → connect → setup → invite
+Skipped users: personalize → demo → skip → setup → invite → (later prompt)
+[2026-04-01T11:39:00Z] <dan> that's clean
+[2026-04-01T11:40:00Z] <carol> should i wireframe this?
+[2026-04-01T11:41:00Z] <River> Yes. Focus on the decision point at step 3 - make 'skip' visible but not dominant.
+[2026-04-01T11:42:00Z] <dan> maybe a secondary button style?
+[2026-04-01T11:43:00Z] <River> Exactly. Primary: 'Connect Google' etc. Secondary: 'Skip for now'
+[2026-04-01T11:44:00Z] <carol> with microcopy explaining what they'll miss?
+[2026-04-01T11:45:00Z] <River> Light touch. 'You can connect anytime from Settings' - not scary.
+[2026-04-01T11:46:00Z] <dan> no guilt tripping
+[2026-04-01T11:47:00Z] <River> Right. Trust that the product sells itself once they're in.
+[2026-04-01T11:48:00Z] <carol> ok i'll have wireframes by end of day
+[2026-04-01T11:49:00Z] <River> Great. Share in #design-reviews when ready.
+
+
+################################################################################
+# SCENARIO 3: Compressed context (only moments, no raw messages)
+################################################################################
+================================================================================
+INPUT SUMMARY
+================================================================================
+
+Channel 0 [CURRENT]: #dev
+  Messages: 0
+  Moves: 0
+  Moments: 1
+  Embeddings: 1
+Channel 1 [LAST]: #design
+  Messages: 0
+  Moves: 0
+  Moments: 1
+  Embeddings: 1
+Channel 2 [OTHER]: #random
+  Messages: 0
+  Moves: 0
+  Moments: 1
+  Embeddings: 0
+
+Flashes: 0
+History items: 2
+Max tokens: 50000
+
+================================================================================
+OUTPUT (334 tokens estimated)
+================================================================================
+
+--- Message 1 [system/MOMENT] ---
+[Moment: random] Casual team coordination: coffee run, sports chat, lunch plans (thai on 5th) (moves 548975103633596256092160000000-567790782588779998740480000000)
+
+--- Message 2 [system/EMBED] ---
+[Reference: notes/auth-patterns.md]
+Auth refresh should happen at TTL minus a safe buffer (2+ minutes) to account for network latency and processing time.
+
+--- Message 3 [system/MOMENT] ---
+[Moment: dev] Auth token refresh debugging session. Root cause: 15-min TTL with only 30s refresh buffer + no retry logic. Fix: 2-min buffer, exponential backoff retries, soft logout UI. Load tested at 10k concurrent users. Deployed to staging. Duration: ~90 minutes. (moves 598781312632612045455360000000-662975982009121285079040000000)
+
+--- Message 4 [system/EMBED] ---
+[Reference: embeddings/onboarding-research.md]
+Onboarding best practice: show value before asking for commitment. Users who see benefits first convert at 2-3x higher rates.
+
+--- Message 5 [system/MOMENT] ---
+[Moment: design] Onboarding redesign for step 3 drop-off (40%). Solution: reorder flow to show value before asking for account connection. Two paths: immediate connectors fast-track, skippers get GIF demo + deferred prompt. Wireframes in progress. (moves 740452307118701401866240000000-784724492895604325744640000000)
+
+--- Message 6 [system/HISTORY] ---
+You are River, a helpful engineering assistant.
+
+--- Message 7 [user/HISTORY] ---
+What did we work on today?
+

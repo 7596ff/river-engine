@@ -29,8 +29,6 @@
   "dyads": {
     "river": {
       "workspace": "/var/lib/river/workspaces/river",
-      "uid": 1000,
-      "gid": 1000,
       "left": {
         "name": "Iris",
         "model": "claude-sonnet"

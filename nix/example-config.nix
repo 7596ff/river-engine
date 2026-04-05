@@ -75,9 +75,6 @@
         river = {
           workspace = "/var/lib/river/workspaces/river";
 
-          uid = 1000;
-          gid = 1000;
-
           left.name = "Iris";
           left.model = "claude-sonnet";
 

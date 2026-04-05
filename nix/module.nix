@@ -93,6 +93,24 @@ in
       description = "Group under which river-engine runs.";
     };
 
+    createUser = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to create the river user and group automatically.";
+    };
+
+    uid = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = 400;
+      description = "UID for the river service user. Set to null for auto-assignment.";
+    };
+
+    gid = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = 400;
+      description = "GID for the river service group. Set to null for auto-assignment.";
+    };
+
     dataDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/river";
@@ -194,16 +212,19 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # Create user and group
-    users.users.${cfg.user} = {
+    # Create user and group (if createUser is true)
+    users.users.${cfg.user} = lib.mkIf cfg.createUser {
       isSystemUser = true;
       group = cfg.group;
       home = cfg.dataDir;
       createHome = true;
       description = "River Engine service user";
+      uid = lib.mkIf (cfg.uid != null) cfg.uid;
     };
 
-    users.groups.${cfg.group} = { };
+    users.groups.${cfg.group} = lib.mkIf cfg.createUser (
+      lib.optionalAttrs (cfg.gid != null) { gid = cfg.gid; }
+    );
 
     # Systemd services (orchestrator, workers, adapters)
     systemd.services = {
