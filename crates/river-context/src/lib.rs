@@ -45,7 +45,7 @@ pub use openai::{FunctionCall, OpenAIMessage, ToolCall};
 pub use request::{ChannelContext, ContextRequest};
 pub use response::{ContextError, ContextResponse};
 pub use tokens::{estimate_message_tokens, estimate_tokens, estimate_total_tokens};
-pub use workspace::{ChatMessage, Embedding, Flash, Moment, Move};
+pub use workspace::{ChatMessage, Embedding, Flash, InboxItem, Moment, Move};
 
 // Re-export types from river-protocol
 pub use river_protocol::{Author, Channel};

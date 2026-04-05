@@ -51,3 +51,43 @@ pub struct Embedding {
     /// ISO8601 expiration time.
     pub expires_at: String,
 }
+
+/// An inbox item recording a tool result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InboxItem {
+    /// Unique ID (filename stem).
+    pub id: String,
+    /// ISO8601 timestamp.
+    pub timestamp: String,
+    /// Tool name (read_channel, create_move, etc).
+    pub tool: String,
+    /// Channel adapter.
+    pub channel_adapter: String,
+    /// Channel ID.
+    pub channel_id: String,
+    /// Human-readable summary (e.g., "msg1150-msg1200").
+    pub summary: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inbox_item_serialization() {
+        let item = InboxItem {
+            id: "discord_chan123_2026-04-01T07-28-00Z_read_channel".into(),
+            timestamp: "2026-04-01T07:28:00Z".into(),
+            tool: "read_channel".into(),
+            channel_adapter: "discord".into(),
+            channel_id: "chan123".into(),
+            summary: "msg1150-msg1200".into(),
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        let parsed: InboxItem = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.tool, "read_channel");
+        assert_eq!(parsed.summary, "msg1150-msg1200");
+    }
+}
