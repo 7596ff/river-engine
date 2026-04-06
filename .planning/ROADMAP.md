@@ -32,7 +32,12 @@
 3. Context assembly errors return Result, no panics on missing workspace files
 4. All three crates compile and pass existing tests with error handling
 
-**Plans:** TBD
+**Plans:** 3 plans in 1 wave
+
+Plans:
+- [ ] 01-01-PLAN.md — Discord emoji parsing error handling (DiscordAdapterError, parse_emoji Result)
+- [ ] 01-02-PLAN.md — Protocol message parsing error handling (ConversationError, parse_message_line Result)
+- [ ] 01-03-PLAN.md — Context timestamp parsing error handling (ContextError extensions, parse_now/extract_timestamp Result)
 
 ---
 
@@ -94,7 +99,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Error Handling Foundation | 0/3 | Not started | - |
+| 1. Error Handling Foundation | 0/3 | Planning complete | - |
 | 2. Workspace Infrastructure | 0/2 | Not started | - |
 | 3. Sync Protocol Documentation | 0/2 | Not started | - |
 | 4. E2E Testing with TUI | 0/3 | Not started | - |
