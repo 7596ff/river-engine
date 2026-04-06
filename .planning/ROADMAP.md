@@ -9,7 +9,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Error Handling Foundation** - Replace panics with Result types across three crates
+- [x] **Phase 1: Error Handling Foundation** - Replace panics with Result types across three crates
 - [ ] **Phase 2: Workspace Infrastructure** - Git worktrees at dyad startup, worker registration
 - [ ] **Phase 3: Sync Protocol Documentation** - Workspace instructions for agent commit/pull/resolve
 - [ ] **Phase 4: E2E Testing with TUI** - Dyad boot, worktree read/write, role switching
@@ -55,7 +55,11 @@ Plans:
 3. Workers receive worktree path and can use it in context assembly
 4. No shared filesystem access between workers (all I/O isolated to own worktree)
 
-**Plans:** TBD
+**Plans:** 2 plans in 1 wave
+
+Plans:
+- [ ] 02-01-PLAN.md — Worktree creation infrastructure (identity file migration, worktree helpers, spawn_dyad integration)
+- [ ] 02-02-PLAN.md — Registration protocol extension (worktree_path field, orchestrator handler update)
 
 ---
 
@@ -99,8 +103,8 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Error Handling Foundation | 0/3 | Planning complete | - |
-| 2. Workspace Infrastructure | 0/2 | Not started | - |
+| 1. Error Handling Foundation | 3/3 | Complete | 2026-04-06 |
+| 2. Workspace Infrastructure | 0/2 | Planning complete | - |
 | 3. Sync Protocol Documentation | 0/2 | Not started | - |
 | 4. E2E Testing with TUI | 0/3 | Not started | - |
 
