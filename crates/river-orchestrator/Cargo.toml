@@ -25,3 +25,5 @@ thiserror = "1"
 
 [dev-dependencies]
 tempfile = "3.10"
+reqwest = { workspace = true }
+river-context = { path = "../river-context" }
