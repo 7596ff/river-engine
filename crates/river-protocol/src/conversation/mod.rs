@@ -77,6 +77,8 @@ impl Conversation {
                 if let Some(ref mut msg) = current_message {
                     if let Some(reaction) = parse_reaction_line(line) {
                         msg.reactions.push(reaction);
+                    } else {
+                        tracing::warn!("Skipping invalid reaction line: {}", line);
                     }
                 }
             } else if line.starts_with("[r] ") {

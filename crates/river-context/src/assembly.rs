@@ -48,8 +48,10 @@ fn is_expired(expires_at: &str, now: &DateTime<Utc>) -> bool {
 }
 
 /// Parse the current time string into a DateTime.
-fn parse_now(now: &str) -> DateTime<Utc> {
-    now.parse::<DateTime<Utc>>().unwrap_or_else(|_| Utc::now())
+/// Returns error if parsing fails - invalid timestamps should not be silently accepted.
+fn parse_now(now: &str) -> Result<DateTime<Utc>, ContextError> {
+    now.parse::<DateTime<Utc>>()
+        .map_err(|e| ContextError::TimeParseError(format!("{}: {}", now, e)))
 }
 
 /// Build context from request.
@@ -58,7 +60,7 @@ pub fn build_context(request: ContextRequest) -> Result<ContextResponse, Context
         return Err(ContextError::EmptyChannels);
     }
 
-    let now_dt = parse_now(&request.now);
+    let now_dt = parse_now(&request.now)?;
 
     // Collect all timeline items with timestamps
     let mut timeline: Vec<TimelineItem> = Vec::new();
