@@ -73,10 +73,10 @@ pub fn format_reaction(r: &Reaction) -> String {
 
 /// Parse a message line.
 /// Format: `[marker] timestamp id <author_name:author_id> content`
-pub fn parse_message_line(line: &str) -> Option<Message> {
+pub fn parse_message_line(line: &str) -> Result<Message, String> {
     let line = line.trim();
     if line.is_empty() {
-        return None;
+        return Err("empty line".to_string());
     }
 
     let (direction, rest) = if line.starts_with("[!] ") {
@@ -88,26 +88,27 @@ pub fn parse_message_line(line: &str) -> Option<Message> {
     } else if line.starts_with("[ ] ") {
         (MessageDirection::Unread, &line[4..])
     } else {
-        return None;
+        return Err("missing direction marker ([ ], [x], [>], or [!])".to_string());
     };
 
     // Split: date time id <author> content
     let mut parts = rest.splitn(4, ' ');
-    let date = parts.next()?;
-    let time = parts.next()?;
+    let date = parts.next().ok_or("missing date")?;
+    let time = parts.next().ok_or("missing time")?;
     let timestamp = format!("{} {}", date, time);
-    let id = parts.next()?.to_string();
-    let remainder = parts.next()?;
+    let id = parts.next().ok_or("missing message ID")?.to_string();
+    let remainder = parts.next().ok_or("missing author and content")?;
 
     if !remainder.starts_with('<') {
-        return None;
+        return Err("missing author opening bracket '<'".to_string());
     }
 
-    let author_end = remainder.find('>')?;
+    let author_end = remainder.find('>').ok_or("missing author closing bracket '>'")?;
     let author_part = &remainder[1..author_end];
     let content_start = author_end + 2;
 
-    let (author_name, author_id) = author_part.rsplit_once(':')?;
+    let (author_name, author_id) = author_part.rsplit_once(':')
+        .ok_or("invalid author format (expected 'name:id')")?;
 
     let content = if content_start < remainder.len() {
         remainder[content_start..].to_string()
@@ -115,7 +116,7 @@ pub fn parse_message_line(line: &str) -> Option<Message> {
         String::new()
     };
 
-    Some(Message {
+    Ok(Message {
         direction,
         timestamp,
         id,

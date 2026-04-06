@@ -65,7 +65,9 @@ impl Conversation {
         let mut lines = Vec::new();
         let mut current_message: Option<Message> = None;
 
-        for line in body.lines() {
+        for (idx, line) in body.lines().enumerate() {
+            let line_number = idx + 1;
+
             if line.trim().is_empty() {
                 continue;
             }
@@ -90,7 +92,9 @@ impl Conversation {
                 if let Some(msg) = current_message.take() {
                     lines.push(Line::Message(msg));
                 }
-                current_message = parse_message_line(line);
+                current_message = Some(parse_message_line(line).map_err(|reason| {
+                    ConversationError::InvalidMessageLine { line_number, reason }
+                })?);
             }
         }
 
@@ -537,7 +541,8 @@ channel_name: general
         let input = "---\nadapter: discord\n[ ] msg";
         let result = Conversation::from_str(input);
         assert!(result.is_err());
-        assert!(result.unwrap_err().0.contains("Unclosed frontmatter"));
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConversationError::FrontmatterDelimiterMismatch));
     }
 
     #[test]
