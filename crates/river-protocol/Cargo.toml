@@ -12,3 +12,4 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 chrono = { workspace = true }
 utoipa = { workspace = true }
+thiserror = { workspace = true }

@@ -20,17 +20,21 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// Parse error for conversation files.
-#[derive(Debug)]
-pub struct ParseError(pub String);
+/// Conversation parsing and handling errors.
+#[derive(Debug, thiserror::Error)]
+pub enum ConversationError {
+    #[error("Invalid message format on line {line_number}: {reason}")]
+    InvalidMessageLine { line_number: usize, reason: String },
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    #[error("Invalid reaction format: {0}")]
+    InvalidReactionFormat(String),
+
+    #[error("YAML frontmatter error: {0}")]
+    YamlError(#[from] serde_yaml::Error),
+
+    #[error("Frontmatter delimiter mismatch")]
+    FrontmatterDelimiterMismatch,
 }
-
-impl std::error::Error for ParseError {}
 
 /// A conversation file with optional metadata and lines.
 #[derive(Clone, Debug, Default)]
@@ -43,7 +47,7 @@ impl Conversation {
     /// Load conversation from file.
     pub fn load(path: &Path) -> Result<Self, io::Error> {
         let content = fs::read_to_string(path)?;
-        Self::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.0))
+        Self::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
     }
 
     /// Save conversation to file.
@@ -55,7 +59,7 @@ impl Conversation {
     }
 
     /// Parse conversation from string.
-    pub fn from_str(s: &str) -> Result<Self, ParseError> {
+    pub fn from_str(s: &str) -> Result<Self, ConversationError> {
         let (meta, body) = Self::split_frontmatter(s)?;
 
         let mut lines = Vec::new();
@@ -183,7 +187,7 @@ impl Conversation {
         self.lines = messages.into_iter().map(Line::Message).collect();
     }
 
-    fn split_frontmatter(s: &str) -> Result<(Option<ConversationMeta>, &str), ParseError> {
+    fn split_frontmatter(s: &str) -> Result<(Option<ConversationMeta>, &str), ConversationError> {
         let trimmed = s.trim_start();
 
         if !trimmed.starts_with(FRONTMATTER_DELIMITER) {
@@ -202,14 +206,11 @@ impl Conversation {
                 ""
             };
 
-            let meta: ConversationMeta = serde_yaml::from_str(yaml_content)
-                .map_err(|e| ParseError(format!("Invalid frontmatter YAML: {}", e)))?;
+            let meta: ConversationMeta = serde_yaml::from_str(yaml_content)?;
 
             Ok((Some(meta), body))
         } else {
-            Err(ParseError(
-                "Unclosed frontmatter (missing closing ---)".to_string(),
-            ))
+            Err(ConversationError::FrontmatterDelimiterMismatch)
         }
     }
 }
