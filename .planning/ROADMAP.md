@@ -99,7 +99,12 @@ Plans:
 3. Role switching works: actor writes, spectator reads, roles reverse
 4. Messages flow through protocol: actor thinks/acts, spectator observes, baton switches
 
-**Plans:** TBD
+**Plans:** 3 plans in 2 waves
+
+Plans:
+- [ ] 04-01-PLAN.md — Integration test infrastructure (test helpers, mock LLM server, test dependencies)
+- [ ] 04-02-PLAN.md — TUI enhancements (baton state display, bidirectional backchannel)
+- [ ] 04-03-PLAN.md — E2E test suite (dyad boot test, worktree I/O test, baton swap test)
 
 ---
 
@@ -109,8 +114,8 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Error Handling Foundation | 3/3 | Complete | 2026-04-06 |
 | 2. Workspace Infrastructure | 2/2 | Complete | 2026-04-06 |
-| 3. Sync Protocol Documentation | 0/2 | Planning complete | - |
-| 4. E2E Testing with TUI | 0/3 | Not started | - |
+| 3. Sync Protocol Documentation | 2/2 | Complete | 2026-04-06 |
+| 4. E2E Testing with TUI | 0/3 | Planning complete | - |
 
 ---
 
