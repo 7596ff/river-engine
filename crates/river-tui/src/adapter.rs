@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use river_adapter::FeatureId;
 use river_context::OpenAIMessage;
 use river_protocol::conversation::Line as BackchannelLine;
+use river_protocol::Baton;
 use river_snowflake::{AgentBirth, SnowflakeGenerator, SnowflakeType};
 
 /// Display message types.
@@ -54,6 +55,10 @@ pub struct AdapterState {
 
     // Snowflake generation
     pub generator: SnowflakeGenerator,
+
+    // Baton state tracking (D-09)
+    pub baton_left: Baton,
+    pub baton_right: Baton,
 }
 
 impl AdapterState {
@@ -71,6 +76,8 @@ impl AdapterState {
             backchannel_lines: Vec::new(),
             input: String::new(),
             generator: SnowflakeGenerator::new(birth),
+            baton_left: Baton::Actor,
+            baton_right: Baton::Spectator,
         }
     }
 
@@ -123,6 +130,15 @@ impl AdapterState {
     pub fn add_backchannel_line(&mut self, line: BackchannelLine) {
         self.backchannel_lines.push(line);
         self.conversation_scroll = 0;
+    }
+
+    /// Update baton state when workers notify of role switch
+    pub fn update_baton(&mut self, side: &str, new_baton: Baton) {
+        match side {
+            "left" => self.baton_left = new_baton,
+            "right" => self.baton_right = new_baton,
+            _ => {}  // Ignore unknown sides
+        }
     }
 }
 

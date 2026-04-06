@@ -247,7 +247,16 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
         "waiting..."
     };
 
-    let header = Paragraph::new(Line::from(vec![
+    // Determine which side is actor, which is spectator (D-09)
+    use river_protocol::Baton;
+    let (actor_side, spectator_side) = match (state.baton_left, state.baton_right) {
+        (Baton::Actor, Baton::Spectator) => ("left", "right"),
+        (Baton::Spectator, Baton::Actor) => ("right", "left"),
+        _ => ("left", "right"),  // Fallback if both same (shouldn't happen)
+    };
+
+    // Line 1: Title bar with status
+    let title_line = Line::from(vec![
         Span::styled(
             " River Mock Adapter ",
             Style::default()
@@ -272,8 +281,24 @@ fn draw_header(f: &mut Frame, area: Rect, state: &crate::adapter::AdapterState) 
             format!("L:{} R:{}", state.left_lines_read, state.right_lines_read),
             Style::default().fg(Color::DarkGray),
         ),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    ]);
+
+    // Line 2: Baton state (D-09)
+    let baton_line = Line::from(vec![
+        Span::styled("Actor: ", Style::default().fg(Color::White)),
+        Span::styled(
+            actor_side,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  Spectator: "),
+        Span::styled(
+            spectator_side,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let header = Paragraph::new(vec![title_line, baton_line])
+        .block(Block::default().borders(Borders::ALL));
 
     f.render_widget(header, area);
 }
