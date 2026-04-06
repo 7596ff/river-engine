@@ -25,12 +25,12 @@ Two perspectives that can disagree. The gap between them is the point — it cre
 - ✓ Health checks and process respawn with backoff — existing
 - ✓ Snowflake ID generation for messages — existing
 - ✓ Vector embedding service with SQLite storage — existing
+- ✓ Error paths return Result types instead of panicking — Phase 1 complete
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Error paths return Result types instead of panicking
 - [ ] Orchestrator creates git worktrees at dyad startup (infrastructure)
 - [ ] Workspace instructions tell agents when/how to sync via bash tool
 - [ ] Agents follow sync protocol using existing bash tool (no new Rust code)
@@ -76,7 +76,7 @@ Current code assumes shared filesystem for workspace. The goal is git worktrees 
 |----------|-----------|---------|
 | Git worktrees for workspace isolation | Eliminates filesystem race conditions, git handles merge semantics | — Pending |
 | Instructions not code for git sync | Agents have bash tool; behavioral protocol simpler than Rust code | — Pending |
-| Fix panics before testing | Crashes on unexpected input make debugging harder | — Pending |
+| Fix panics before testing | Crashes on unexpected input make debugging harder | ✓ Phase 1 |
 | TUI testing before Discord | Fewer moving parts, faster iteration | — Pending |
 
 ## Evolution
@@ -97,4 +97,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-06 after initialization*
+*Last updated: 2026-04-06 after Phase 1 completion*
