@@ -1,6 +1,6 @@
 //! Discord gateway client using twilight.
 
-use crate::DiscordConfig;
+use crate::{DiscordAdapterError, DiscordConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use river_adapter::{
@@ -294,7 +294,12 @@ impl DiscordClient {
                     }
                 };
 
-                let request_emoji = parse_emoji(&emoji);
+                let request_emoji = match parse_emoji(&emoji) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return error_response(ErrorCode::InvalidPayload, &e.to_string())
+                    }
+                };
 
                 match self
                     .http
@@ -333,7 +338,12 @@ impl DiscordClient {
                     }
                 };
 
-                let request_emoji = parse_emoji(&emoji);
+                let request_emoji = match parse_emoji(&emoji) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return error_response(ErrorCode::InvalidPayload, &e.to_string())
+                    }
+                };
 
                 match self
                     .http
@@ -644,23 +654,35 @@ fn format_emoji(emoji: &EmojiReactionType) -> String {
 }
 
 /// Parse emoji string for API request.
-fn parse_emoji(emoji: &str) -> twilight_http::request::channel::reaction::RequestReactionType<'_> {
+fn parse_emoji(emoji: &str) -> Result<twilight_http::request::channel::reaction::RequestReactionType<'_>, DiscordAdapterError> {
     // Check if it's a custom emoji format: <:name:id> or <a:name:id>
     if emoji.starts_with('<') && emoji.ends_with('>') {
         let inner = &emoji[1..emoji.len() - 1];
         let parts: Vec<&str> = inner.split(':').collect();
-        if parts.len() >= 3 {
-            if let Ok(id) = parts[2].parse::<u64>() {
-                return twilight_http::request::channel::reaction::RequestReactionType::Custom {
+
+        if parts.len() < 3 {
+            return Err(DiscordAdapterError::InvalidEmojiFormat(
+                format!("Custom emoji must have format <:name:id>, got: {}", emoji)
+            ));
+        }
+
+        match parts[2].parse::<u64>() {
+            Ok(id) => {
+                return Ok(twilight_http::request::channel::reaction::RequestReactionType::Custom {
                     id: Id::new(id),
                     name: Some(parts[1]),
-                };
+                });
+            }
+            Err(_) => {
+                return Err(DiscordAdapterError::InvalidEmojiId(
+                    format!("Invalid emoji ID: {} (not a number)", parts[2])
+                ));
             }
         }
     }
 
     // Default to unicode emoji
-    twilight_http::request::channel::reaction::RequestReactionType::Unicode { name: emoji }
+    Ok(twilight_http::request::channel::reaction::RequestReactionType::Unicode { name: emoji })
 }
 
 /// Create an error response.
@@ -709,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_parse_unicode_emoji() {
-        let emoji = parse_emoji("\u{1F44D}"); // thumbs up
+        let emoji = parse_emoji("\u{1F44D}").expect("Should parse unicode emoji"); // thumbs up
         match emoji {
             twilight_http::request::channel::reaction::RequestReactionType::Unicode { name } => {
                 assert_eq!(name, "\u{1F44D}");
@@ -720,7 +742,7 @@ mod tests {
 
     #[test]
     fn test_parse_custom_emoji() {
-        let emoji = parse_emoji("<:rust:123456789>");
+        let emoji = parse_emoji("<:rust:123456789>").expect("Should parse custom emoji");
         match emoji {
             twilight_http::request::channel::reaction::RequestReactionType::Custom { id, name } => {
                 assert_eq!(id, Id::new(123456789));
@@ -732,13 +754,39 @@ mod tests {
 
     #[test]
     fn test_parse_animated_custom_emoji() {
-        let emoji = parse_emoji("<a:dance:987654321>");
+        let emoji = parse_emoji("<a:dance:987654321>").expect("Should parse animated custom emoji");
         match emoji {
             twilight_http::request::channel::reaction::RequestReactionType::Custom { id, name } => {
                 assert_eq!(id, Id::new(987654321));
                 assert_eq!(name, Some("dance"));
             }
             _ => panic!("Expected custom emoji"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_emoji_format() {
+        let result = parse_emoji("<:incomplete>");
+        assert!(result.is_err());
+        match result {
+            Err(crate::DiscordAdapterError::InvalidEmojiFormat(msg)) => {
+                assert!(msg.contains("Custom emoji must have format <:name:id>"));
+                assert!(msg.contains("<:incomplete>"));
+            }
+            _ => panic!("Expected InvalidEmojiFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_emoji_id() {
+        let result = parse_emoji("<:name:notanumber>");
+        assert!(result.is_err());
+        match result {
+            Err(crate::DiscordAdapterError::InvalidEmojiId(msg)) => {
+                assert!(msg.contains("Invalid emoji ID"));
+                assert!(msg.contains("notanumber"));
+            }
+            _ => panic!("Expected InvalidEmojiId error"),
         }
     }
 
