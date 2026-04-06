@@ -31,7 +31,10 @@ pub struct WorkerRegistrationResponse {
     pub partner_endpoint: Option<String>,
     pub model: ModelConfig,
     pub ground: Ground,
+    /// Root workspace directory (legacy, kept for backward compatibility).
     pub workspace: String,
+    /// Path to worker's isolated git worktree (workspace/left or workspace/right).
+    pub worktree_path: String,
     pub initial_message: Option<String>,
     pub start_sleeping: bool,
 }
