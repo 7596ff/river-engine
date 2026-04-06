@@ -35,9 +35,9 @@
 **Plans:** 3 plans in 1 wave
 
 Plans:
-- [ ] 01-01-PLAN.md — Discord emoji parsing error handling (DiscordAdapterError, parse_emoji Result)
-- [ ] 01-02-PLAN.md — Protocol message parsing error handling (ConversationError, parse_message_line Result)
-- [ ] 01-03-PLAN.md — Context timestamp parsing error handling (ContextError extensions, parse_now/extract_timestamp Result)
+- [x] 01-01-PLAN.md — Discord emoji parsing error handling (DiscordAdapterError, parse_emoji Result)
+- [x] 01-02-PLAN.md — Protocol message parsing error handling (ConversationError, parse_message_line Result)
+- [x] 01-03-PLAN.md — Context timestamp parsing error handling (ContextError extensions, parse_now/extract_timestamp Result)
 
 ---
 
