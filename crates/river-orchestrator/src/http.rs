@@ -59,7 +59,10 @@ pub struct WorkerRegistrationResponse {
     pub partner_endpoint: Option<String>,
     pub model: WorkerModelConfig,
     pub ground: Ground,
+    /// Root workspace directory (legacy, kept for backward compatibility).
     pub workspace: String,
+    /// Path to worker's isolated git worktree (workspace/left or workspace/right).
+    pub worktree_path: String,
     pub initial_message: Option<String>,
     pub start_sleeping: bool,
 }
@@ -296,6 +299,12 @@ async fn handle_worker_registration(
     // Get worker name from dyad config
     let worker_name = dyad_config.name_for_side(&req.worker.side).cloned();
 
+    // Construct worktree path based on worker side
+    let worktree_path = match req.worker.side {
+        Side::Left => dyad_config.workspace.join("left"),
+        Side::Right => dyad_config.workspace.join("right"),
+    };
+
     let response = WorkerRegistrationResponse {
         accepted: true,
         name: worker_name,
@@ -304,6 +313,7 @@ async fn handle_worker_registration(
         model: WorkerModelConfig::from(model_config),
         ground: dyad_config.ground.clone(),
         workspace: dyad_config.workspace.to_string_lossy().to_string(),
+        worktree_path: worktree_path.to_string_lossy().to_string(),
         initial_message,
         start_sleeping,
     };
