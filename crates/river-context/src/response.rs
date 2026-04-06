@@ -14,7 +14,7 @@ pub struct ContextResponse {
 }
 
 /// Errors that can occur during context assembly.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum ContextError {
     /// Assembled context exceeds max_tokens.
     #[error("context over budget: {estimated} tokens (limit {limit})")]
@@ -23,4 +23,12 @@ pub enum ContextError {
     /// No channels provided.
     #[error("no channels provided")]
     EmptyChannels,
+
+    /// Failed to parse timestamp from Snowflake ID.
+    #[error("Failed to parse timestamp from ID: {0}")]
+    InvalidTimestamp(String),
+
+    /// Failed to parse current time string.
+    #[error("Failed to parse current time: {0}")]
+    TimeParseError(String),
 }
