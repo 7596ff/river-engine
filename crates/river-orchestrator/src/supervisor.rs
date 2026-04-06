@@ -403,6 +403,20 @@ pub async fn spawn_dyad(
     dyad_name: &str,
     dyad_config: &DyadConfig,
 ) -> Result<(), SupervisorError> {
+    // Create worktrees for left and right workers before spawning
+    let workspace_path = &dyad_config.workspace;
+
+    tracing::info!("Creating worktrees for dyad {} at {:?}", dyad_name, workspace_path);
+
+    // Create left worktree on 'left' branch
+    ensure_worktree_exists(workspace_path, "left", "left").await?;
+
+    // Create right worktree on 'right' branch
+    ensure_worktree_exists(workspace_path, "right", "right").await?;
+
+    tracing::info!("Worktrees ready for dyad {}", dyad_name);
+
+    // Lock supervisor and spawn workers/adapters
     let mut sup = supervisor.write().await;
 
     // Spawn left worker
