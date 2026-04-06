@@ -307,6 +307,7 @@ mod tests {
                 "channel": "ch123"
             },
             "workspace": "/path/to/workspace",
+            "worktree_path": "/path/to/workspace/left",
             "initial_message": "Hello!",
             "start_sleeping": false
         }"#;
@@ -315,6 +316,7 @@ mod tests {
         assert_eq!(response.baton, Baton::Actor);
         assert_eq!(response.partner_endpoint, Some("http://localhost:3002".to_string()));
         assert_eq!(response.workspace, "/path/to/workspace");
+        assert_eq!(response.worktree_path, "/path/to/workspace/left");
     }
 
     #[test]
