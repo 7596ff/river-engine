@@ -447,7 +447,7 @@ git commit -m "resolve: item, merged actor notes with spectator curation"
 
 **If this table is empty:** All claims in this research were verified or cited — no user confirmation needed. **[Status: A1-A5 are ASSUMED based on Phase 2 context and CLAUDE.md project constraints]**
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Conflict escalation format to Ground**
    - What we know: D-13 says escalate if conflict exceeds agent confidence; D-14 gives agent discretion on what counts
