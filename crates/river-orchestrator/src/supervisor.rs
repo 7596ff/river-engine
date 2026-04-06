@@ -3,6 +3,7 @@
 use crate::config::{AdapterConfig, DyadConfig};
 use river_adapter::Side;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -267,12 +268,14 @@ impl Supervisor {
 #[derive(Debug)]
 pub enum SupervisorError {
     SpawnFailed(std::io::Error),
+    WorktreeCreationFailed(String),
 }
 
 impl std::fmt::Display for SupervisorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SupervisorError::SpawnFailed(e) => write!(f, "Failed to spawn process: {}", e),
+            SupervisorError::WorktreeCreationFailed(e) => write!(f, "Failed to create git worktree: {}", e),
         }
     }
 }
@@ -322,6 +325,75 @@ pub async fn run_health_checks(
     }
 
     dead_processes
+}
+
+/// Check if a directory is a valid git worktree.
+/// Returns true if .git exists and is a file containing "gitdir:" (linked worktree).
+fn is_valid_worktree(path: &Path) -> bool {
+    let git_path = path.join(".git");
+    if !git_path.exists() {
+        return false;
+    }
+
+    // For linked worktrees, .git is a file containing "gitdir: ..."
+    if git_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&git_path) {
+            return content.contains("gitdir:");
+        }
+    }
+
+    false
+}
+
+/// Ensure a git worktree exists at the specified location.
+/// If the worktree already exists and is valid, reuses it.
+/// If the directory exists but is not a valid worktree, cleans and recreates it.
+async fn ensure_worktree_exists(
+    repo_path: &Path,
+    worktree_name: &str,
+    branch_name: &str,
+) -> Result<(), SupervisorError> {
+    let repo_str = repo_path.to_string_lossy();
+    let worktree_path = repo_path.join(worktree_name);
+    let worktree_str = worktree_path.to_string_lossy();
+
+    // Check if worktree already exists and is valid
+    if worktree_path.exists() && is_valid_worktree(&worktree_path) {
+        tracing::info!("Reusing existing worktree {} at {:?}", worktree_name, worktree_path);
+        return Ok(());
+    }
+
+    // If directory exists but is not a valid worktree, clean it
+    if worktree_path.exists() {
+        tracing::warn!("Invalid worktree at {:?}, cleaning", worktree_path);
+        tokio::fs::remove_dir_all(&worktree_path)
+            .await
+            .map_err(|e| SupervisorError::WorktreeCreationFailed(format!("Failed to remove invalid worktree directory: {}", e)))?;
+    }
+
+    // Create branch if it doesn't exist (ignore error if branch already exists)
+    Command::new("git")
+        .args(&["-C", &repo_str, "branch", branch_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok(); // Ignore error - branch may already exist
+
+    // Create worktree
+    let output = Command::new("git")
+        .args(&["-C", &repo_str, "worktree", "add", &worktree_str, branch_name])
+        .output()
+        .await
+        .map_err(|e| SupervisorError::WorktreeCreationFailed(format!("Failed to execute git worktree command: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(SupervisorError::WorktreeCreationFailed(stderr.into()));
+    }
+
+    tracing::info!("Created worktree {} at {:?} on branch {}", worktree_name, worktree_path, branch_name);
+    Ok(())
 }
 
 /// Spawn all processes for a dyad.
@@ -426,5 +498,186 @@ mod tests {
         let display = format!("{}", err);
         assert!(display.contains("Failed to spawn process"));
         assert!(display.contains("binary not found"));
+    }
+
+    // ========== NEW TDD TESTS FOR WORKTREE FUNCTIONALITY ==========
+
+    #[test]
+    fn test_is_valid_worktree_returns_true_for_valid_worktree() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        // Create a temporary directory with a .git file containing "gitdir:"
+        let temp = TempDir::new().unwrap();
+        let worktree_path = temp.path();
+        let git_file = worktree_path.join(".git");
+        fs::write(&git_file, "gitdir: /some/repo/.git/worktrees/test").unwrap();
+
+        assert!(is_valid_worktree(worktree_path));
+    }
+
+    #[test]
+    fn test_is_valid_worktree_returns_false_when_directory_not_exists() {
+        use std::path::PathBuf;
+
+        let nonexistent = PathBuf::from("/nonexistent/path");
+        assert!(!is_valid_worktree(&nonexistent));
+    }
+
+    #[test]
+    fn test_is_valid_worktree_returns_false_when_git_is_directory() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        // Create a temporary directory with .git as a directory (main repo, not linked worktree)
+        let temp = TempDir::new().unwrap();
+        let worktree_path = temp.path();
+        fs::create_dir(worktree_path.join(".git")).unwrap();
+
+        assert!(!is_valid_worktree(worktree_path));
+    }
+
+    #[tokio::test]
+    async fn test_ensure_worktree_exists_creates_worktree_when_not_exists() {
+        use tempfile::TempDir;
+        use tokio::process::Command;
+
+        // Create a temporary git repository
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Initialize git repo with a commit
+        Command::new("git")
+            .args(&["init"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["commit", "--allow-empty", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        // Create worktree
+        let result = ensure_worktree_exists(repo_path, "test-worktree", "test-branch").await;
+        assert!(result.is_ok());
+
+        // Verify worktree exists and is valid
+        let worktree_path = repo_path.join("test-worktree");
+        assert!(worktree_path.exists());
+        assert!(is_valid_worktree(&worktree_path));
+    }
+
+    #[tokio::test]
+    async fn test_ensure_worktree_exists_reuses_valid_existing_worktree() {
+        use tempfile::TempDir;
+        use tokio::process::Command;
+
+        // Create a temporary git repository with a worktree
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(&["init"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["commit", "--allow-empty", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        // Create worktree first time
+        ensure_worktree_exists(repo_path, "test-worktree", "test-branch").await.unwrap();
+
+        // Call again - should reuse
+        let result = ensure_worktree_exists(repo_path, "test-worktree", "test-branch").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_worktree_exists_cleans_invalid_directory() {
+        use tempfile::TempDir;
+        use tokio::process::Command;
+        use std::fs;
+
+        // Create a temporary git repository
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(&["init"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        Command::new("git")
+            .args(&["commit", "--allow-empty", "-m", "Initial commit"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .unwrap();
+
+        // Create a directory that is NOT a valid worktree
+        let worktree_path = repo_path.join("test-worktree");
+        fs::create_dir(&worktree_path).unwrap();
+        fs::write(worktree_path.join("somefile.txt"), "content").unwrap();
+
+        // This should clean the directory and create a valid worktree
+        let result = ensure_worktree_exists(repo_path, "test-worktree", "test-branch").await;
+        assert!(result.is_ok());
+        assert!(is_valid_worktree(&worktree_path));
     }
 }
