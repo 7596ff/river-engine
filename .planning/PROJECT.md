@@ -28,13 +28,12 @@ Two perspectives that can disagree. The gap between them is the point — it cre
 - ✓ Error paths return Result types instead of panicking — Phase 1 complete
 - ✓ Orchestrator creates git worktrees at dyad startup — Phase 2 complete
 - ✓ Workers receive worktree paths via registration protocol — Phase 2 complete
+- ✓ Workspace instructions tell agents when/how to sync via bash tool — Phase 3 complete
+- ✓ Agents follow sync protocol using existing bash tool (no new Rust code) — Phase 3 complete
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
-
-- [ ] Workspace instructions tell agents when/how to sync via bash tool
-- [ ] Agents follow sync protocol using existing bash tool (no new Rust code)
 - [ ] Dyad boots and runs end-to-end with TUI mock adapter
 
 ### Out of Scope
@@ -76,7 +75,7 @@ Current code assumes shared filesystem for workspace. The goal is git worktrees 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Git worktrees for workspace isolation | Eliminates filesystem race conditions, git handles merge semantics | ✓ Phase 2 |
-| Instructions not code for git sync | Agents have bash tool; behavioral protocol simpler than Rust code | — Pending |
+| Instructions not code for git sync | Agents have bash tool; behavioral protocol simpler than Rust code | ✓ Phase 3 |
 | Fix panics before testing | Crashes on unexpected input make debugging harder | ✓ Phase 1 |
 | TUI testing before Discord | Fewer moving parts, faster iteration | — Pending |
 
@@ -98,4 +97,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-06 after Phase 2 completion*
+*Last updated: 2026-04-06 after Phase 3 completion*
