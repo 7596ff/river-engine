@@ -1,6 +1,7 @@
 //! River TUI - Terminal UI for debugging River Engine.
 
 mod adapter;
+mod backchannel;
 mod http;
 mod tui;
 
@@ -130,6 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Clone workspace before passing to tailers (we need it for TUI too)
     let workspace_for_tui = args.workspace.clone();
 
+    // Shared endpoints for backchannel watcher (D-10)
+    let left_endpoint: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    let right_endpoint: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+
     // Start context tailers for both sides if workspace provided
     if let Some(workspace) = args.workspace {
         // Tail left side
@@ -154,6 +159,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let bc_tx = ui_tx.clone();
         tokio::spawn(async move {
             tail_backchannel(bc_workspace, bc_state, bc_tx).await;
+        });
+
+        // Start bidirectional backchannel watcher (D-10)
+        let backchannel_path = workspace.join("conversations").join("backchannel.txt");
+        let left_endpoint_clone = Arc::clone(&left_endpoint);
+        let right_endpoint_clone = Arc::clone(&right_endpoint);
+        tokio::spawn(async move {
+            backchannel::watch_backchannel(
+                backchannel_path,
+                left_endpoint_clone,
+                right_endpoint_clone,
+            ).await;
         });
     }
 
