@@ -4,7 +4,10 @@
 //! and executes outbound requests.
 
 mod discord;
+mod error;
 mod http;
+
+pub use error::DiscordAdapterError;
 
 use clap::Parser;
 use discord::DiscordClient;
