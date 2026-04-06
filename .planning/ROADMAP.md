@@ -80,8 +80,8 @@ Plans:
 **Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 03-01-PLAN.md — Create workspace/shared/sync.md with complete git sync protocol documentation
-- [ ] 03-02-PLAN.md — Update workspace/README.md to mention sync protocol and link to sync.md
+- [x] 03-01-PLAN.md — Create workspace/shared/sync.md with complete git sync protocol documentation
+- [x] 03-02-PLAN.md — Update workspace/README.md to mention sync protocol and link to sync.md
 
 ---
 
