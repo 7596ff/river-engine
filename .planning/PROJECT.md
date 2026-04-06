@@ -34,7 +34,7 @@ Two perspectives that can disagree. The gap between them is the point — it cre
 ### Active
 
 <!-- Current scope. Building toward these. -->
-- [ ] Dyad boots and runs end-to-end with TUI mock adapter
+- ✓ E2E test infrastructure validates dyad boot, worktree I/O, and role switching — Phase 4 complete
 
 ### Out of Scope
 
