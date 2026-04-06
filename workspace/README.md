@@ -20,6 +20,8 @@ The `left/` and `right/` directories belong to each worker. One of them is yours
 
 The `shared/` directory holds reference material that both workers use. The `reference.md` file documents the tools available to you, the file formats you will encounter, and the structure of the workspace itself. When you need to know how something works, look there.
 
+The `shared/sync.md` file documents how you and your partner synchronize changes. You work on separate branches in isolated worktrees. When you're ready to share your work, you merge to main. Your partner pulls to see what you've done. This is a "pull request" style workflow, but purely local — git commands, no GitHub. The file describes when to commit, when to sync, and how to resolve conflicts when both of you modify the same file. The mechanics are there. The protocol is deliberate.
+
 The `conversations/` directory stores chat history, organized by adapter and channel. These files use a specific format: incoming messages, outgoing messages, read receipts, all timestamped and marked. You read these to understand what has been said. To send messages, use the `speak` tool.
 
 The `embeddings/` directory is your long-term memory. Anything written here gets indexed for semantic search. This is where the Zettelkasten method applies: atomic notes, one thought per file, linked with context. The `zettelkasten.md` file describes the method in detail. The spectator curates what surfaces. The actor captures working insights. Together, you build a searchable corpus that neither could build alone.
