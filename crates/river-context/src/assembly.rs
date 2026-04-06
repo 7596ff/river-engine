@@ -1,6 +1,7 @@
 //! Context assembly logic.
 
 use chrono::{DateTime, Utc};
+use tracing;
 
 use crate::format::{
     format_chat_messages, format_embedding, format_flash, format_inbox_item, format_moment,
@@ -24,7 +25,12 @@ struct TimelineItem {
 
 impl TimelineItem {
     fn new(id: &str, message: OpenAIMessage) -> Self {
-        let timestamp = extract_timestamp(id).unwrap_or(0);
+        let timestamp = extract_timestamp(id)
+            .map_err(|e| {
+                tracing::warn!("{}", e);
+                e
+            })
+            .unwrap_or(0);
         Self { timestamp, message }
     }
 }

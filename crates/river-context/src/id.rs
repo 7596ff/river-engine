@@ -1,5 +1,7 @@
 //! Snowflake ID utilities for timestamp extraction.
 
+use crate::response::ContextError;
+
 /// Extract timestamp (microseconds since epoch) from a snowflake ID.
 ///
 /// Snowflake IDs are 128-bit integers where the high 64 bits contain
@@ -9,22 +11,24 @@
 /// * `id` - String representation of a snowflake ID
 ///
 /// # Returns
-/// * `Some(timestamp)` - Timestamp in microseconds if parsing succeeds
-/// * `None` - If the ID cannot be parsed as a u128
+/// * `Ok(timestamp)` - Timestamp in microseconds if parsing succeeds
+/// * `Err(ContextError::InvalidTimestamp)` - If the ID cannot be parsed as a u128
 ///
 /// # Example
 /// ```
 /// use river_context::extract_timestamp;
 ///
 /// let id = "340282366920938463463374607431768211456"; // Example snowflake
-/// if let Some(ts) = extract_timestamp(id) {
-///     println!("Timestamp: {} microseconds", ts);
+/// match extract_timestamp(id) {
+///     Ok(ts) => println!("Timestamp: {} microseconds", ts),
+///     Err(e) => eprintln!("Error: {}", e),
 /// }
 /// ```
-pub fn extract_timestamp(id: &str) -> Option<u64> {
-    let snowflake = id.parse::<u128>().ok()?;
+pub fn extract_timestamp(id: &str) -> Result<u64, ContextError> {
+    let snowflake = id.parse::<u128>()
+        .map_err(|e| ContextError::InvalidTimestamp(format!("Failed to parse ID '{}': {}", id, e)))?;
     let high = (snowflake >> 64) as u64; // Timestamp in microseconds
-    Some(high)
+    Ok(high)
 }
 
 #[cfg(test)]
@@ -57,9 +61,9 @@ mod tests {
 
     #[test]
     fn test_extract_timestamp_invalid() {
-        assert!(extract_timestamp("not_a_number").is_none());
-        assert!(extract_timestamp("").is_none());
-        assert!(extract_timestamp("-123").is_none());
+        assert!(extract_timestamp("not_a_number").is_err());
+        assert!(extract_timestamp("").is_err());
+        assert!(extract_timestamp("-123").is_err());
     }
 
     #[test]
