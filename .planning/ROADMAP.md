@@ -10,7 +10,7 @@
 ## Phases
 
 - [x] **Phase 1: Error Handling Foundation** - Replace panics with Result types across three crates
-- [ ] **Phase 2: Workspace Infrastructure** - Git worktrees at dyad startup, worker registration
+- [x] **Phase 2: Workspace Infrastructure** - Git worktrees at dyad startup, worker registration
 - [ ] **Phase 3: Sync Protocol Documentation** - Workspace instructions for agent commit/pull/resolve
 - [ ] **Phase 4: E2E Testing with TUI** - Dyad boot, worktree read/write, role switching
 
@@ -77,7 +77,11 @@ Plans:
 3. Workspace docs describe merge conflict resolution (agent tooling, manual review steps)
 4. Instructions are executable by agents using existing bash tool (no new commands required)
 
-**Plans:** TBD
+**Plans:** 2 plans in 1 wave
+
+Plans:
+- [ ] 03-01-PLAN.md — Create workspace/shared/sync.md with complete git sync protocol documentation
+- [ ] 03-02-PLAN.md — Update workspace/README.md to mention sync protocol and link to sync.md
 
 ---
 
@@ -104,8 +108,8 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Error Handling Foundation | 3/3 | Complete | 2026-04-06 |
-| 2. Workspace Infrastructure | 0/2 | Planning complete | - |
-| 3. Sync Protocol Documentation | 0/2 | Not started | - |
+| 2. Workspace Infrastructure | 2/2 | Complete | 2026-04-06 |
+| 3. Sync Protocol Documentation | 0/2 | Planning complete | - |
 | 4. E2E Testing with TUI | 0/3 | Not started | - |
 
 ---
