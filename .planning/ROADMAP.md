@@ -58,8 +58,8 @@ Plans:
 **Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 02-01-PLAN.md — Worktree creation infrastructure (identity file migration, worktree helpers, spawn_dyad integration)
-- [ ] 02-02-PLAN.md — Registration protocol extension (worktree_path field, orchestrator handler update)
+- [x] 02-01-PLAN.md — Worktree creation infrastructure (identity file migration, worktree helpers, spawn_dyad integration)
+- [x] 02-02-PLAN.md — Registration protocol extension (worktree_path field, orchestrator handler update)
 
 ---
 
