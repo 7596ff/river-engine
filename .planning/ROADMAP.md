@@ -102,8 +102,8 @@ Plans:
 **Plans:** 3 plans in 2 waves
 
 Plans:
-- [ ] 04-01-PLAN.md — Integration test infrastructure (test helpers, mock LLM server, test dependencies)
-- [ ] 04-02-PLAN.md — TUI enhancements (baton state display, bidirectional backchannel)
+- [x] 04-01-PLAN.md — Integration test infrastructure (test helpers, mock LLM server, test dependencies)
+- [x] 04-02-PLAN.md — TUI enhancements (baton state display, bidirectional backchannel)
 - [ ] 04-03-PLAN.md — E2E test suite (dyad boot test, worktree I/O test, baton swap test)
 
 ---

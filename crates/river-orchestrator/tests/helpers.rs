@@ -7,6 +7,18 @@ use tokio::process::{Child, Command};
 use std::process::Stdio;
 use tempfile::TempDir;
 
+/// Get path to a workspace binary in target/debug.
+fn binary_path(name: &str) -> PathBuf {
+    // Tests run from workspace root, so target/debug is relative to current dir
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.pop(); // crates/river-orchestrator
+    path.pop(); // crates
+    path.push("target");
+    path.push("debug");
+    path.push(name);
+    path
+}
+
 /// Test orchestrator handle.
 pub struct TestOrchestrator {
     pub child: Child,
@@ -19,9 +31,9 @@ pub async fn spawn_orchestrator(workspace_dir: &Path, port: u16) -> Result<TestO
     // Create minimal river.json config in workspace_dir pointing to workspace path
     let config_path = workspace_dir.join("river.json");
     let config_json = serde_json::json!({
-        "workspace": workspace_dir.join("workspace").to_string_lossy(),
         "port": port,
-        "dyads": []
+        "models": {},
+        "dyads": {}
     });
     std::fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
 
@@ -48,7 +60,7 @@ pub async fn spawn_orchestrator(workspace_dir: &Path, port: u16) -> Result<TestO
         .await?;
 
     // Spawn orchestrator with port 0 (OS-assigned, per D-20)
-    let mut cmd = Command::new("river-orchestrator");
+    let mut cmd = Command::new(binary_path("river-orchestrator"));
     cmd.arg("--config")
         .arg(&config_path)
         .arg("--port")
@@ -57,12 +69,49 @@ pub async fn spawn_orchestrator(workspace_dir: &Path, port: u16) -> Result<TestO
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
 
-    // Return with placeholder endpoint (tests must call wait_for_health to get real port)
+    // Read stdout to discover actual bound port
+    let mut stdout = child.stdout.take().expect("Failed to capture stdout");
+    let mut endpoint = String::new();
+
+    // Read line by line until we find "Orchestrator listening on"
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut reader = BufReader::new(&mut stdout);
+    let mut line = String::new();
+
+    let start = Instant::now();
+    loop {
+        line.clear();
+        match tokio::time::timeout(Duration::from_millis(100), reader.read_line(&mut line)).await {
+            Ok(Ok(0)) => break, // EOF
+            Ok(Ok(_)) => {
+                if line.contains("Orchestrator listening on") {
+                    // Extract URL from "Orchestrator listening on http://0.0.0.0:12345"
+                    if let Some(url_start) = line.find("http://") {
+                        let url = line[url_start..].trim();
+                        // Replace 0.0.0.0 with 127.0.0.1 for client connections
+                        endpoint = url.replace("0.0.0.0", "127.0.0.1");
+                        break;
+                    }
+                }
+            }
+            Ok(Err(e)) => return Err(format!("Failed to read orchestrator output: {}", e).into()),
+            Err(_) => {
+                if start.elapsed() > Duration::from_secs(5) {
+                    return Err("Timeout waiting for orchestrator to print port".into());
+                }
+            }
+        }
+    }
+
+    if endpoint.is_empty() {
+        return Err("Failed to discover orchestrator endpoint".into());
+    }
+
     Ok(TestOrchestrator {
         child,
-        endpoint: format!("http://127.0.0.1:{}", port),
+        endpoint,
         workspace_dir: workspace_dir.to_path_buf(),
     })
 }
@@ -81,7 +130,7 @@ pub async fn spawn_worker(
     dyad: &str,
     side: &str,
 ) -> Result<TestWorker, Box<dyn std::error::Error>> {
-    let mut cmd = Command::new("river-worker");
+    let mut cmd = Command::new(binary_path("river-worker"));
     cmd.arg("--orchestrator")
         .arg(orchestrator_endpoint)
         .arg("--dyad")
@@ -115,7 +164,7 @@ pub async fn spawn_tui_adapter(
     orchestrator_endpoint: &str,
     dyad: &str,
 ) -> Result<TestAdapter, Box<dyn std::error::Error>> {
-    let mut cmd = Command::new("river-tui");
+    let mut cmd = Command::new(binary_path("river-tui"));
     cmd.arg("--orchestrator")
         .arg(orchestrator_endpoint)
         .arg("--dyad")

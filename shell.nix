@@ -7,7 +7,7 @@ pkgs.mkShell {
     pkgs.rustc
     pkgs.gcc
     pkgs.sqlite
-    pkgs.claude-code
+    pkgs.nodejs_24
   ];
 
   RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";

@@ -82,7 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bind HTTP server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("Orchestrator listening on http://{}", addr);
+    let actual_addr = listener.local_addr()?;
+    tracing::info!("Orchestrator listening on http://{}", actual_addr);
+    // Print to stdout for test harness discovery (when port 0 is used)
+    println!("Orchestrator listening on http://{}", actual_addr);
 
     // Spawn the HTTP server
     let app = router(state.clone());
