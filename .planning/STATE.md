@@ -81,6 +81,10 @@ Coverage:   100% (all 11 v1 requirements assigned to phases)
 - Sync protocol: Not documented (behavioral instructions needed)
 - Testing: No e2e validation with TUI yet
 
+### Roadmap Evolution
+
+- Phase 5 added: E2E Test Feature Implementation
+
 ### Key Decisions Logged
 
 1. **Git worktrees for workspace isolation** — Eliminates filesystem race conditions; git handles merge semantics
