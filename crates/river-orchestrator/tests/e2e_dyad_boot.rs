@@ -23,8 +23,8 @@ async fn test_dyad_boots_complete() {
     let mock_llm = mock_llm::start_mock_llm(0).await.expect("Failed to start mock LLM");
     println!("Mock LLM running at {}", mock_llm.endpoint);
 
-    // SPAWN: Start orchestrator with dynamic port
-    let mut orchestrator = spawn_orchestrator(workspace_path, 0)
+    // SPAWN: Start orchestrator with dynamic port and mock LLM endpoint
+    let mut orchestrator = spawn_orchestrator(workspace_path, 0, &mock_llm.endpoint)
         .await
         .expect("Failed to spawn orchestrator");
 
@@ -116,7 +116,7 @@ async fn test_workers_write_to_worktrees() {
     let workspace_path = temp_dir.path();
 
     let mock_llm = mock_llm::start_mock_llm(0).await.expect("Failed to start mock LLM");
-    let mut orchestrator = spawn_orchestrator(workspace_path, 0).await.expect("Failed to spawn orchestrator");
+    let mut orchestrator = spawn_orchestrator(workspace_path, 0, &mock_llm.endpoint).await.expect("Failed to spawn orchestrator");
 
     timeout(Duration::from_secs(5), wait_for_health(&orchestrator.endpoint, 5))
         .await
@@ -237,7 +237,7 @@ async fn test_baton_swap_verification() {
     let workspace_path = temp_dir.path();
 
     let mock_llm = mock_llm::start_mock_llm(0).await.expect("Failed to start mock LLM");
-    let mut orchestrator = spawn_orchestrator(workspace_path, 0).await.expect("Failed to spawn orchestrator");
+    let mut orchestrator = spawn_orchestrator(workspace_path, 0, &mock_llm.endpoint).await.expect("Failed to spawn orchestrator");
 
     timeout(Duration::from_secs(5), wait_for_health(&orchestrator.endpoint, 5))
         .await.unwrap().unwrap();
@@ -283,9 +283,9 @@ async fn test_baton_swap_verification() {
 
     println!("✓ Initial baton state: left={}, right={}", left_initial_baton, right_initial_baton);
 
-    // VERIFY: Initial state per protocol (left=Actor, right=Spectator)
-    assert_eq!(left_initial_baton, "Actor", "Left worker should start as Actor");
-    assert_eq!(right_initial_baton, "Spectator", "Right worker should start as Spectator");
+    // VERIFY: Initial state per protocol (left=actor, right=spectator)
+    assert_eq!(left_initial_baton, "actor", "Left worker should start as actor");
+    assert_eq!(right_initial_baton, "spectator", "Right worker should start as spectator");
 
     // TRIGGER: Explicit baton swap via orchestrator API (addressing Issue 7)
     // Call POST /switch_baton with dyad parameter to trigger role swap
@@ -319,8 +319,8 @@ async fn test_baton_swap_verification() {
     println!("✓ After swap baton state: left={}, right={}", left_after_baton, right_after_baton);
 
     // VERIFY: Baton swapped (per 04-VALIDATION.md Assertion Point 4)
-    assert_eq!(left_after_baton, "Spectator", "Left worker should become Spectator after swap");
-    assert_eq!(right_after_baton, "Actor", "Right worker should become Actor after swap");
+    assert_eq!(left_after_baton, "spectator", "Left worker should become spectator after swap");
+    assert_eq!(right_after_baton, "actor", "Right worker should become actor after swap");
 
     println!("✓ TEST-03: Baton swapped successfully");
 
@@ -332,11 +332,14 @@ async fn test_baton_swap_verification() {
 }
 
 // Helper function to extract baton from registry JSON
+// Registry format: {"processes": [{"type": "worker", "dyad": "...", "side": "...", "baton": "..."}]}
 fn extract_baton_from_registry(registry: &Value, dyad: &str, side: &str) -> Option<String> {
-    registry.as_array()?
+    registry["processes"].as_array()?
         .iter()
         .find(|entry| {
-            entry["dyad"].as_str() == Some(dyad) && entry["side"].as_str() == Some(side)
+            entry["type"].as_str() == Some("worker") &&
+            entry["dyad"].as_str() == Some(dyad) &&
+            entry["side"].as_str() == Some(side)
         })
         .and_then(|entry| entry["baton"].as_str())
         .map(|s| s.to_string())

@@ -26,14 +26,35 @@ pub struct TestOrchestrator {
     pub workspace_dir: PathBuf,
 }
 
-/// Spawn orchestrator with minimal config in temp workspace.
-pub async fn spawn_orchestrator(workspace_dir: &Path, port: u16) -> Result<TestOrchestrator, Box<dyn std::error::Error>> {
-    // Create minimal river.json config in workspace_dir pointing to workspace path
+/// Spawn orchestrator with config for test dyad.
+pub async fn spawn_orchestrator(workspace_dir: &Path, port: u16, llm_endpoint: &str) -> Result<TestOrchestrator, Box<dyn std::error::Error>> {
+    // Create river.json config with test-dyad configured
     let config_path = workspace_dir.join("river.json");
+    let workspace_path = workspace_dir.join("workspace");
     let config_json = serde_json::json!({
         "port": port,
-        "models": {},
-        "dyads": {}
+        "models": {
+            "test-model": {
+                "endpoint": llm_endpoint,
+                "name": "test-model",
+                "api_key": "test-key",
+                "context_limit": 4096
+            }
+        },
+        "dyads": {
+            "test-dyad": {
+                "workspace": workspace_path.to_string_lossy(),
+                "left": { "model": "test-model" },
+                "right": { "model": "test-model" },
+                "initialActor": "left",
+                "ground": {
+                    "id": "test-user",
+                    "adapter": "tui",
+                    "channel": "test-channel"
+                },
+                "adapters": []
+            }
+        }
     });
     std::fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)?;
 
