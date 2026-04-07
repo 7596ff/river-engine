@@ -13,7 +13,8 @@
 - [x] **Phase 2: Workspace Infrastructure** - Git worktrees at dyad startup, worker registration
 - [x] **Phase 3: Sync Protocol Documentation** - Workspace instructions for agent commit/pull/resolve
 - [x] **Phase 4: E2E Testing with TUI** - Dyad boot, worktree read/write, role switching
-- [ ] **Phase 5: E2E Test Feature Implementation** - Complete message flow and multi-turn conversation tests
+- [x] **Phase 5: E2E Test Feature Implementation** - Complete message flow and multi-turn conversation tests
+- [ ] **Phase 6: E2E Test Fixes** - Fix TUI adapter /notify endpoint and orchestrator endpoint name
 
 ---
 
@@ -130,6 +131,28 @@ Plans:
 
 ---
 
+### Phase 6: E2E Test Fixes
+
+**Goal:** Fix E2E test failures by adding TUI adapter /notify endpoint and correcting orchestrator endpoint names in tests.
+
+**Depends on:** Phase 5
+
+**Requirements:** (Bug fix phase - enables test execution)
+
+**Success Criteria** (what must be TRUE):
+1. TUI adapter can receive external message injection via /notify endpoint
+2. Tests call correct /switch_roles endpoint (not /switch_baton)
+3. test_complete_message_flow and test_multi_turn_conversation no longer timeout
+4. test_baton_swap_verification no longer gets 404 on endpoint call
+
+**Plans:** 2 plans in 1 wave
+
+Plans:
+- [ ] 06-01-PLAN.md — Add /notify endpoint to TUI adapter HTTP router
+- [ ] 06-02-PLAN.md — Update endpoint name in E2E tests from /switch_baton to /switch_roles
+
+---
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -138,17 +161,8 @@ Plans:
 | 2. Workspace Infrastructure | 2/2 | Complete | 2026-04-06 |
 | 3. Sync Protocol Documentation | 2/2 | Complete | 2026-04-06 |
 | 4. E2E Testing with TUI | 3/3 | Complete | 2026-04-06 |
-| 5. E2E Test Feature Implementation | 0/1 | Planning complete | - |
-
-### Phase 6: E2E Test Fixes - Fix TUI adapter /notify endpoint and orchestrator endpoint name
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 5
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd-plan-phase 6 to break down)
+| 5. E2E Test Feature Implementation | 1/1 | Complete | 2026-04-07 |
+| 6. E2E Test Fixes | 0/2 | Planning complete | - |
 
 ---
 
