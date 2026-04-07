@@ -126,7 +126,7 @@ Plans:
 **Plans:** 1 plan in 1 wave
 
 Plans:
-- [ ] 05-01-PLAN.md — Complete message flow test and multi-turn conversation test
+- [x] 05-01-PLAN.md — Complete message flow test and multi-turn conversation test
 
 ---
 
