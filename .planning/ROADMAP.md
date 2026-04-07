@@ -11,8 +11,9 @@
 
 - [x] **Phase 1: Error Handling Foundation** - Replace panics with Result types across three crates
 - [x] **Phase 2: Workspace Infrastructure** - Git worktrees at dyad startup, worker registration
-- [ ] **Phase 3: Sync Protocol Documentation** - Workspace instructions for agent commit/pull/resolve
-- [ ] **Phase 4: E2E Testing with TUI** - Dyad boot, worktree read/write, role switching
+- [x] **Phase 3: Sync Protocol Documentation** - Workspace instructions for agent commit/pull/resolve
+- [x] **Phase 4: E2E Testing with TUI** - Dyad boot, worktree read/write, role switching
+- [ ] **Phase 5: E2E Test Feature Implementation** - Complete message flow and multi-turn conversation tests
 
 ---
 
@@ -108,6 +109,27 @@ Plans:
 
 ---
 
+### Phase 5: E2E Test Feature Implementation
+
+**Goal:** Extend E2E test suite with complete message flow verification and multi-turn conversation tests to validate actor/spectator loop behavior.
+
+**Depends on:** Phase 4
+
+**Requirements:** TEST-03 (extended validation)
+
+**Success Criteria** (what must be TRUE):
+1. Complete message flow verified: user message triggers actor response, spectator observation, baton swap
+2. Multi-turn conversation cycles through 3+ baton swaps with state accumulation
+3. Context files show role-aware responses (actor action-oriented, spectator observational)
+4. Tests reuse Phase 4 infrastructure (helpers.rs, mock_llm.rs, existing patterns)
+
+**Plans:** 1 plan in 1 wave
+
+Plans:
+- [ ] 05-01-PLAN.md — Complete message flow test and multi-turn conversation test
+
+---
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -115,17 +137,8 @@ Plans:
 | 1. Error Handling Foundation | 3/3 | Complete | 2026-04-06 |
 | 2. Workspace Infrastructure | 2/2 | Complete | 2026-04-06 |
 | 3. Sync Protocol Documentation | 2/2 | Complete | 2026-04-06 |
-| 4. E2E Testing with TUI | 0/3 | Planning complete | - |
-
-### Phase 5: E2E Test Feature Implementation
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 4
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd-plan-phase 5 to break down)
+| 4. E2E Testing with TUI | 3/3 | Complete | 2026-04-06 |
+| 5. E2E Test Feature Implementation | 0/1 | Planning complete | - |
 
 ---
 
@@ -136,3 +149,4 @@ Requirement mapping:
 - INFRA-01, INFRA-02 → Phase 2
 - INST-01, INST-02, INST-03 → Phase 3
 - TEST-01, TEST-02, TEST-03 → Phase 4
+- TEST-03 extended → Phase 5
