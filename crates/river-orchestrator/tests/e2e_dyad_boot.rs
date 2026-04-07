@@ -291,7 +291,7 @@ async fn test_baton_swap_verification() {
     // Call POST /switch_roles with dyad parameter to trigger role swap
     let swap_response = client
         .post(format!("{}/switch_roles", orchestrator.endpoint))
-        .json(&serde_json::json!({ "dyad": "test-dyad" }))
+        .json(&serde_json::json!({ "dyad": "test-dyad", "side": "left" }))
         .send()
         .await
         .expect("Failed to trigger baton swap");
@@ -424,7 +424,7 @@ async fn test_complete_message_flow() {
     // TRIGGER: Baton swap to make spectator active
     let swap_response = client
         .post(format!("{}/switch_roles", orchestrator.endpoint))
-        .json(&serde_json::json!({ "dyad": "test-dyad" }))
+        .json(&serde_json::json!({ "dyad": "test-dyad", "side": "left" }))
         .send()
         .await
         .expect("Failed to trigger baton swap");
@@ -568,7 +568,7 @@ async fn test_multi_turn_conversation() {
 
         // TRIGGER: Baton swap
         client.post(format!("{}/switch_roles", orchestrator.endpoint))
-            .json(&serde_json::json!({"dyad": "test-dyad"}))
+            .json(&serde_json::json!({"dyad": "test-dyad", "side": "left"}))
             .send()
             .await
             .expect("Failed to trigger baton swap");
