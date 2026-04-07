@@ -140,6 +140,16 @@ Plans:
 | 4. E2E Testing with TUI | 3/3 | Complete | 2026-04-06 |
 | 5. E2E Test Feature Implementation | 0/1 | Planning complete | - |
 
+### Phase 6: E2E Test Fixes - Fix TUI adapter /notify endpoint and orchestrator endpoint name
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 5
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 6 to break down)
+
 ---
 
 **Coverage:** 11/11 v1 requirements mapped (100%)
