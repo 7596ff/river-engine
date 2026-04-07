@@ -148,8 +148,8 @@ Plans:
 **Plans:** 2 plans in 1 wave
 
 Plans:
-- [ ] 06-01-PLAN.md — Add /notify endpoint to TUI adapter HTTP router
-- [ ] 06-02-PLAN.md — Update endpoint name in E2E tests from /switch_baton to /switch_roles
+- [x] 06-01-PLAN.md — Add /notify endpoint to TUI adapter HTTP router
+- [x] 06-02-PLAN.md — Update endpoint name in E2E tests from /switch_baton to /switch_roles
 
 ---
 
