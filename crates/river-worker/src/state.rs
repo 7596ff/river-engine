@@ -66,7 +66,7 @@ impl WorkerState {
             baton: registration.baton,
             partner_endpoint: registration.partner_endpoint,
             ground: registration.ground.clone(),
-            workspace: PathBuf::from(&registration.workspace),
+            workspace: PathBuf::from(&registration.worktree_path),
             current_channel: Channel {
                 adapter: registration.ground.adapter.clone(),
                 id: registration.ground.channel.clone(),

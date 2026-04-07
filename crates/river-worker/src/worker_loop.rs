@@ -50,13 +50,10 @@ pub async fn run_loop(
     let mut generator = SnowflakeGenerator::new(birth);
 
     // Path to LLM history (stream of consciousness)
+    // Note: workspace is already the side-specific worktree (e.g., workspace/left/)
     let context_path = {
         let s = state.read().await;
-        let side_str = match s.side {
-            Side::Left => "left",
-            Side::Right => "right",
-        };
-        s.workspace.join(side_str).join("context.jsonl")
+        s.workspace.join("context.jsonl")
     };
 
     // Load LLM history (the stream of consciousness - grows until reset)
