@@ -288,9 +288,9 @@ async fn test_baton_swap_verification() {
     assert_eq!(right_initial_baton, "spectator", "Right worker should start as spectator");
 
     // TRIGGER: Explicit baton swap via orchestrator API (addressing Issue 7)
-    // Call POST /switch_baton with dyad parameter to trigger role swap
+    // Call POST /switch_roles with dyad parameter to trigger role swap
     let swap_response = client
-        .post(format!("{}/switch_baton", orchestrator.endpoint))
+        .post(format!("{}/switch_roles", orchestrator.endpoint))
         .json(&serde_json::json!({ "dyad": "test-dyad" }))
         .send()
         .await
@@ -423,7 +423,7 @@ async fn test_complete_message_flow() {
 
     // TRIGGER: Baton swap to make spectator active
     let swap_response = client
-        .post(format!("{}/switch_baton", orchestrator.endpoint))
+        .post(format!("{}/switch_roles", orchestrator.endpoint))
         .json(&serde_json::json!({ "dyad": "test-dyad" }))
         .send()
         .await
@@ -567,7 +567,7 @@ async fn test_multi_turn_conversation() {
         println!("✓ Actor wrote context entry");
 
         // TRIGGER: Baton swap
-        client.post(format!("{}/switch_baton", orchestrator.endpoint))
+        client.post(format!("{}/switch_roles", orchestrator.endpoint))
             .json(&serde_json::json!({"dyad": "test-dyad"}))
             .send()
             .await

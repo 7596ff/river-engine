@@ -9,8 +9,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use river_adapter::{ErrorCode, OutboundRequest, OutboundResponse, ResponseData, ResponseError};
+use river_adapter::{ErrorCode, InboundEvent, OutboundRequest, OutboundResponse, ResponseData, ResponseError};
 use serde::Serialize;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Combined state for handlers.
@@ -18,13 +19,19 @@ use tokio::sync::mpsc;
 pub struct HttpState {
     pub state: SharedState,
     pub ui_tx: mpsc::Sender<UiEvent>,
+    pub http_client: reqwest::Client,
 }
 
 /// Create the HTTP router.
 pub fn router(state: SharedState, ui_tx: mpsc::Sender<UiEvent>) -> Router {
-    let http_state = HttpState { state, ui_tx };
+    let http_state = HttpState {
+        state,
+        ui_tx,
+        http_client: reqwest::Client::new(),
+    };
     Router::new()
         .route("/execute", post(execute))
+        .route("/notify", post(notify))
         .route("/health", get(health))
         .with_state(http_state)
 }
@@ -144,6 +151,46 @@ async fn execute(
     let _ = state.ui_tx.send(UiEvent::Refresh).await;
 
     (StatusCode::OK, Json(response))
+}
+
+/// POST /notify - Receive external message injection and forward to worker.
+async fn notify(
+    State(http_state): State<HttpState>,
+    Json(event): Json<InboundEvent>,
+) -> Result<(), (StatusCode, String)> {
+    // Lock state to read worker_endpoint
+    let state = http_state.state.read().await;
+
+    let worker_endpoint = state
+        .worker_endpoint
+        .as_ref()
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "No worker registered".to_string(),
+            )
+        })?;
+
+    // Forward to worker /notify endpoint (matching Discord pattern)
+    let result = http_state
+        .http_client
+        .post(format!("{}/notify", worker_endpoint))
+        .json(&event)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Worker returned {}", resp.status()),
+        )),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to forward to worker: {}", e),
+        )),
+    }
 }
 
 /// Health response.
