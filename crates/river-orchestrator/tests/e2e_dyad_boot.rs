@@ -331,6 +331,151 @@ async fn test_baton_swap_verification() {
     let _ = tui_adapter.child.kill().await;
 }
 
+#[tokio::test]
+async fn test_complete_message_flow() {
+    use river_adapter::{InboundEvent, EventMetadata};
+    use river_protocol::Author;
+
+    // SETUP: Boot complete dyad (reuse pattern from previous tests)
+    let temp_dir = setup_test_workspace().await.expect("Failed to create test workspace");
+    let workspace_path = temp_dir.path();
+
+    let mock_llm = mock_llm::start_mock_llm(0).await.expect("Failed to start mock LLM");
+    let mut orchestrator = spawn_orchestrator(workspace_path, 0, &mock_llm.endpoint).await.expect("Failed to spawn orchestrator");
+
+    timeout(Duration::from_secs(5), wait_for_health(&orchestrator.endpoint, 5))
+        .await.unwrap().unwrap();
+
+    let mut left_worker = spawn_worker(&orchestrator.endpoint, "test-dyad", "left").await.unwrap();
+    let left_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "left", 5))
+        .await.unwrap().unwrap();
+    left_worker.endpoint = left_endpoint.clone();
+
+    let mut right_worker = spawn_worker(&orchestrator.endpoint, "test-dyad", "right").await.unwrap();
+    let right_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "right", 5))
+        .await.unwrap().unwrap();
+    right_worker.endpoint = right_endpoint.clone();
+
+    let mut tui_adapter = spawn_tui_adapter(&orchestrator.endpoint, "test-dyad").await.unwrap();
+    let tui_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "tui", 5))
+        .await.unwrap().unwrap();
+    tui_adapter.endpoint = tui_endpoint.clone();
+
+    for endpoint in &[&orchestrator.endpoint, &left_endpoint, &right_endpoint, &tui_endpoint] {
+        timeout(Duration::from_secs(3), wait_for_health(endpoint, 2))
+            .await.unwrap().unwrap();
+    }
+
+    println!("✓ Dyad booted successfully");
+
+    // Define context paths for verification
+    let left_context_path = workspace_path
+        .join("workspace")
+        .join("left")
+        .join("context.jsonl");
+    let right_context_path = workspace_path
+        .join("workspace")
+        .join("right")
+        .join("context.jsonl");
+
+    // INJECT: Send user message to TUI adapter
+    let client = reqwest::Client::new();
+    let user_event = InboundEvent {
+        adapter: "tui".to_string(),
+        metadata: EventMetadata::MessageCreate {
+            channel: "test-channel".to_string(),
+            message_id: "flow-msg-001".to_string(),
+            author: Author {
+                id: "user-1".to_string(),
+                name: "Test User".to_string(),
+                bot: false,
+            },
+            content: "What do you observe about the world?".to_string(),
+            timestamp: "2026-04-07T10:00:00Z".to_string(),
+            reply_to: None,
+            attachments: vec![],
+        },
+    };
+
+    let inject_response = client
+        .post(format!("{}/notify", tui_endpoint))
+        .json(&user_event)
+        .send()
+        .await
+        .expect("Failed to inject user message");
+    assert_eq!(inject_response.status(), 200, "TUI /notify returned non-200 status");
+
+    println!("✓ User message injected: flow-msg-001");
+
+    // VERIFY: Actor (left worker) processes message with action-oriented response
+    let actor_entry = timeout(
+        Duration::from_secs(5),
+        wait_for_context_entry(&left_context_path, |msg: &river_context::OpenAIMessage| {
+            msg.role == "assistant" && msg.content.as_ref().map_or(false, |c| c.contains("I'll"))
+        }, 5)
+    )
+    .await
+    .expect("Timeout waiting for actor response")
+    .expect("Failed to read actor response");
+
+    println!("✓ Actor response contains action text: {:?}",
+        actor_entry.content.as_ref().map(|c| &c[..50.min(c.len())]));
+
+    // TRIGGER: Baton swap to make spectator active
+    let swap_response = client
+        .post(format!("{}/switch_baton", orchestrator.endpoint))
+        .json(&serde_json::json!({ "dyad": "test-dyad" }))
+        .send()
+        .await
+        .expect("Failed to trigger baton swap");
+
+    assert!(swap_response.status().is_success(), "Baton swap API call failed: {}", swap_response.status());
+    println!("✓ Baton swap triggered");
+
+    // Wait for swap to propagate
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // VERIFY: Spectator (right worker) processes with observational response
+    let spectator_entry = timeout(
+        Duration::from_secs(5),
+        wait_for_context_entry(&right_context_path, |msg: &river_context::OpenAIMessage| {
+            msg.role == "assistant" && msg.content.as_ref().map_or(false, |c| c.contains("notice"))
+        }, 5)
+    )
+    .await
+    .expect("Timeout waiting for spectator response")
+    .expect("Failed to read spectator response");
+
+    println!("✓ Spectator response contains observational text: {:?}",
+        spectator_entry.content.as_ref().map(|c| &c[..50.min(c.len())]));
+
+    // VERIFY: Baton states swapped (left=spectator, right=actor)
+    let registry_resp = client
+        .get(format!("{}/registry", orchestrator.endpoint))
+        .send()
+        .await
+        .expect("Failed to read registry");
+
+    let registry_json: Value = registry_resp.json().await.expect("Failed to parse registry JSON");
+
+    let left_baton = extract_baton_from_registry(&registry_json, "test-dyad", "left")
+        .expect("Failed to find left worker in registry");
+    let right_baton = extract_baton_from_registry(&registry_json, "test-dyad", "right")
+        .expect("Failed to find right worker in registry");
+
+    assert_eq!(left_baton, "spectator", "Left worker should be spectator after swap");
+    assert_eq!(right_baton, "actor", "Right worker should be actor after swap");
+
+    println!("✓ Baton states verified: left=spectator, right=actor");
+    println!("✓ TEST: Complete message flow verified");
+
+    // CLEANUP
+    let _ = orchestrator.child.kill().await;
+    let _ = left_worker.child.kill().await;
+    let _ = right_worker.child.kill().await;
+    let _ = tui_adapter.child.kill().await;
+}
+
 // Helper function to extract baton from registry JSON
 // Registry format: {"processes": [{"type": "worker", "dyad": "...", "side": "...", "baton": "..."}]}
 fn extract_baton_from_registry(registry: &Value, dyad: &str, side: &str) -> Option<String> {
