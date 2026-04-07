@@ -476,6 +476,161 @@ async fn test_complete_message_flow() {
     let _ = tui_adapter.child.kill().await;
 }
 
+#[tokio::test]
+async fn test_multi_turn_conversation() {
+    use river_adapter::{InboundEvent, EventMetadata};
+    use river_protocol::Author;
+
+    // SETUP: Boot complete dyad (reuse pattern from previous tests)
+    let temp_dir = setup_test_workspace().await.expect("Failed to create test workspace");
+    let workspace_path = temp_dir.path();
+
+    let mock_llm = mock_llm::start_mock_llm(0).await.expect("Failed to start mock LLM");
+    let mut orchestrator = spawn_orchestrator(workspace_path, 0, &mock_llm.endpoint).await.expect("Failed to spawn orchestrator");
+
+    timeout(Duration::from_secs(5), wait_for_health(&orchestrator.endpoint, 5))
+        .await.unwrap().unwrap();
+
+    let mut left_worker = spawn_worker(&orchestrator.endpoint, "test-dyad", "left").await.unwrap();
+    let left_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "left", 5))
+        .await.unwrap().unwrap();
+    left_worker.endpoint = left_endpoint.clone();
+
+    let mut right_worker = spawn_worker(&orchestrator.endpoint, "test-dyad", "right").await.unwrap();
+    let right_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "right", 5))
+        .await.unwrap().unwrap();
+    right_worker.endpoint = right_endpoint.clone();
+
+    let mut tui_adapter = spawn_tui_adapter(&orchestrator.endpoint, "test-dyad").await.unwrap();
+    let tui_endpoint = timeout(Duration::from_secs(5), wait_for_registration(&orchestrator.endpoint, "test-dyad", "tui", 5))
+        .await.unwrap().unwrap();
+    tui_adapter.endpoint = tui_endpoint.clone();
+
+    for endpoint in &[&orchestrator.endpoint, &left_endpoint, &right_endpoint, &tui_endpoint] {
+        timeout(Duration::from_secs(3), wait_for_health(endpoint, 2))
+            .await.unwrap().unwrap();
+    }
+
+    println!("✓ Dyad booted successfully");
+
+    // Define context paths
+    let left_context_path = workspace_path
+        .join("workspace")
+        .join("left")
+        .join("context.jsonl");
+    let right_context_path = workspace_path
+        .join("workspace")
+        .join("right")
+        .join("context.jsonl");
+
+    let client = reqwest::Client::new();
+
+    // TURN LOOP: Execute 3 turns
+    for turn in 1..=3 {
+        println!("--- Turn {} ---", turn);
+
+        // INJECT: Send user message for this turn
+        let user_event = InboundEvent {
+            adapter: "tui".to_string(),
+            metadata: EventMetadata::MessageCreate {
+                channel: "test-channel".to_string(),
+                message_id: format!("turn-{}-msg", turn),
+                author: Author {
+                    id: "user-1".to_string(),
+                    name: "Test User".to_string(),
+                    bot: false,
+                },
+                content: format!("Turn {} question: what's happening?", turn),
+                timestamp: format!("2026-04-07T10:0{}:00Z", turn),
+                reply_to: None,
+                attachments: vec![],
+            },
+        };
+
+        client.post(format!("{}/notify", tui_endpoint))
+            .json(&user_event)
+            .send()
+            .await
+            .expect("Failed to inject message");
+
+        println!("✓ Injected message: turn-{}-msg", turn);
+
+        // WAIT: Actor writes to context
+        let actor_context = if turn % 2 == 1 { &left_context_path } else { &right_context_path };
+        timeout(Duration::from_secs(5), wait_for_context_entry(actor_context, |msg: &river_context::OpenAIMessage| {
+            msg.role == "assistant" && msg.content.as_ref().map_or(false, |c| c.contains("Call"))
+        }, 5))
+        .await
+        .expect("Timeout waiting for actor to respond")
+        .expect("Failed to read actor context");
+
+        println!("✓ Actor wrote context entry");
+
+        // TRIGGER: Baton swap
+        client.post(format!("{}/switch_baton", orchestrator.endpoint))
+            .json(&serde_json::json!({"dyad": "test-dyad"}))
+            .send()
+            .await
+            .expect("Failed to trigger baton swap");
+
+        println!("✓ Baton swapped");
+
+        // WAIT: Brief pause for swap to propagate
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // VERIFY: Baton state matches expected for this turn
+        let registry_resp = client.get(format!("{}/registry", orchestrator.endpoint))
+            .send()
+            .await
+            .expect("Failed to read registry");
+        let registry: Value = registry_resp.json().await.expect("Failed to parse registry JSON");
+
+        let left_baton = extract_baton_from_registry(&registry, "test-dyad", "left")
+            .expect("Failed to find left worker in registry");
+        let expected_left = if turn % 2 == 0 { "actor" } else { "spectator" };
+
+        assert_eq!(left_baton, expected_left, "Turn {}: left baton mismatch", turn);
+        println!("✓ Turn {} baton verified: left={}", turn, expected_left);
+    }
+
+    // VERIFY: After 3 turns, left=spectator, right=actor
+    let registry_resp = client.get(format!("{}/registry", orchestrator.endpoint))
+        .send()
+        .await
+        .expect("Failed to read final registry");
+    let registry: Value = registry_resp.json().await.expect("Failed to parse final registry JSON");
+
+    let left_baton = extract_baton_from_registry(&registry, "test-dyad", "left")
+        .expect("Failed to find left worker in final registry");
+    let right_baton = extract_baton_from_registry(&registry, "test-dyad", "right")
+        .expect("Failed to find right worker in final registry");
+
+    assert_eq!(left_baton, "spectator", "After 3 swaps, left should be spectator");
+    assert_eq!(right_baton, "actor", "After 3 swaps, right should be actor");
+
+    println!("✓ Final baton state correct: left=spectator, right=actor");
+
+    // VERIFY: State accumulation - both context files have multiple entries
+    let left_content = std::fs::read_to_string(&left_context_path)
+        .expect("Failed to read left context file");
+    let left_entries: Vec<_> = left_content.lines().filter(|l| !l.is_empty()).collect();
+    assert!(left_entries.len() >= 3, "Left context should have entries from multiple turns (got {})", left_entries.len());
+
+    let right_content = std::fs::read_to_string(&right_context_path)
+        .expect("Failed to read right context file");
+    let right_entries: Vec<_> = right_content.lines().filter(|l| !l.is_empty()).collect();
+    assert!(right_entries.len() >= 3, "Right context should have entries from multiple turns (got {})", right_entries.len());
+
+    println!("✓ State accumulated: left={} entries, right={} entries", left_entries.len(), right_entries.len());
+    println!("✓ TEST: Multi-turn conversation verified");
+
+    // CLEANUP
+    let _ = orchestrator.child.kill().await;
+    let _ = left_worker.child.kill().await;
+    let _ = right_worker.child.kill().await;
+    let _ = tui_adapter.child.kill().await;
+}
+
 // Helper function to extract baton from registry JSON
 // Registry format: {"processes": [{"type": "worker", "dyad": "...", "side": "...", "baton": "..."}]}
 fn extract_baton_from_registry(registry: &Value, dyad: &str, side: &str) -> Option<String> {
