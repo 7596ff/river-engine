@@ -164,6 +164,16 @@ Plans:
 | 5. E2E Test Feature Implementation | 1/1 | Complete | 2026-04-07 |
 | 6. E2E Test Fixes | 0/2 | Planning complete | - |
 
+### Phase 7: Workspace Path Redesign - Comprehensive redesign of workspace/worktree path handling to prevent confusion between root workspace and side-specific worktree paths
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 6
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 7 to break down)
+
 ---
 
 **Coverage:** 11/11 v1 requirements mapped (100%)

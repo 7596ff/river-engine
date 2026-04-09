@@ -85,6 +85,7 @@ Coverage:   100% (all 11 v1 requirements assigned to phases)
 
 - Phase 5 added: E2E Test Feature Implementation
 - Phase 6 added: E2E Test Fixes - Fix TUI adapter /notify endpoint and orchestrator endpoint name
+- Phase 7 added: Workspace Path Redesign - Comprehensive redesign of workspace/worktree path handling
 
 ### Key Decisions Logged
 
