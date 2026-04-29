@@ -78,23 +78,25 @@ New methods on `Database`:
 
 ## Move Generation
 
-On each `TurnComplete` event, the spectator:
+On each `TurnComplete` event, the spectator runtime:
 
-1. Receives `{ channel, turn_number, tool_calls }` (ignores `transcript_summary`)
-2. Queries the messages table for all messages with that `turn_number` and `session_id`
+1. Receives `{ channel, turn_number }` from the event
+2. Queries the messages table for all messages with that `turn_number` and `session_id` (lock-query-drop)
 3. Formats the messages into a readable transcript (role, content, tool calls/results)
-4. Loads the move prompt from `workspace/spectator/prompts/move.md` (loaded once at startup, cached)
+4. Loads `workspace/spectator/on-turn-complete.md`, substitutes `{transcript}` and `{turn_number}`
 5. Calls the model client with:
-   - System prompt: spectator identity (AGENTS.md + IDENTITY.md + RULES.md, concatenated as today)
-   - User prompt: the move prompt template with the formatted transcript substituted
-6. Writes the LLM response as the `summary` field in a new moves row via `insert_move()`
+   - System prompt: `workspace/spectator/identity.md`
+   - User prompt: the substituted `on-turn-complete.md`
+6. Writes the LLM response as the `summary` field in a new moves row via `insert_move()` (lock-query-drop)
 7. Emits `MovesUpdated { channel }` on the event bus
+
+If `on-turn-complete.md` does not exist, this handler is skipped silently.
 
 **Fallback**: if the model call fails (timeout, connection error, malformed response), write a fallback summary constructed from the message roles and tool names (e.g., "User message → assistant response with tools: read, write") so the moves table always gets an entry. Log a warning. The turn is never lost.
 
-**Ordering guarantee**: the agent must persist all messages for the turn to the database *before* emitting `TurnComplete` on the event bus. This eliminates the race condition where the spectator queries for messages that haven't been written yet. This requires a change to `agent/task.rs`: move `persist_messages()` (or equivalent) before the `bus.publish(TurnComplete)` call.
+**Ordering guarantee**: the agent must persist all messages for the turn to the database *before* emitting `TurnComplete` on the event bus. This requires a change to `agent/task.rs`: move message persistence before the `bus.publish(TurnComplete)` call.
 
-If the messages query returns empty despite this guarantee (bug or DB error), skip this turn and log an error. The move will be missing but subsequent moments can still compress the surrounding turns.
+If the messages query returns empty despite this guarantee (bug or DB error), skip this turn and log an error.
 
 ---
 
@@ -104,11 +106,13 @@ When `count_moves(channel)` exceeds 50, the spectator considers creating a momen
 
 ### Process
 
-1. Read all moves for the channel from the DB via `get_moves(channel, limit)`
-2. Load the moment prompt from `workspace/spectator/prompts/moment.md` (loaded once at startup, cached)
+1. Read all moves for the channel from the DB via `get_moves(channel, limit)` (lock-query-drop)
+2. Load `workspace/spectator/on-compress.md`, substitutes `{moves}` (formatted move list) and `{channel}`
 3. Call the model with:
-   - System prompt: spectator identity
-   - User prompt: the moment prompt template with the full list of moves
+   - System prompt: `workspace/spectator/identity.md`
+   - User prompt: the substituted `on-compress.md`
+
+If `on-compress.md` does not exist, this handler is skipped silently (moves accumulate but no moments are created).
 4. The prompt instructs the model to respond in this format:
 
 ```
@@ -147,37 +151,58 @@ Moments live in `embeddings/moments/` so they are available for vector indexing 
 
 ---
 
-## Prompt Files
+## Prompt-Driven Spectator
 
-Two new prompt files, loaded once at spectator startup:
+The spectator is a prompt-driven runtime, not a hardcoded pipeline. Its behavior is defined entirely by files in `workspace/spectator/`. The Rust code is a thin event dispatcher: receive event, load the right prompt, assemble context, call LLM, handle the structured output.
 
-- `workspace/spectator/prompts/move.md` — move generation prompt
-- `workspace/spectator/prompts/moment.md` — moment generation prompt
+### Spectator directory
 
-If a prompt file does not exist, fall back to a hardcoded default and log a warning.
+```
+workspace/spectator/
+  identity.md           — system prompt for all spectator LLM calls
+  on-turn-complete.md   — produces a move (runs on every TurnComplete)
+  on-compress.md        — produces a moment (runs when moves exceed 50)
+  on-pressure.md        — produces a warning (runs on ContextPressure)
+```
 
-The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to `workspace/spectator/prompts/`.
+`identity.md` is the spectator's system prompt, used in every LLM call. The event-specific files are user prompts. Each event-specific prompt defines what the spectator thinks about; the runtime defines what it does with the output:
+
+| Prompt file | Trigger | Input assembled by runtime | Output type | Runtime action |
+|---|---|---|---|---|
+| `on-turn-complete.md` | `TurnComplete` event | Messages for this turn (from DB) | Free text (1-2 sentences) | Insert as move in DB |
+| `on-compress.md` | Move count > 50 | All moves for channel (from DB) | `turns: N-M\n---\nnarrative` | Parse turn range, write moment file |
+| `on-pressure.md` | `ContextPressure` event | Usage percentage | Free text (short warning) | Emit Warning event on bus |
+
+The prompts contain template variables that the runtime substitutes before calling the LLM:
+
+- `on-turn-complete.md` receives `{transcript}` (formatted messages) and `{turn_number}`
+- `on-compress.md` receives `{moves}` (all moves, formatted) and `{channel}`
+- `on-pressure.md` receives `{usage_percent}`
+
+If a prompt file does not exist, that handler is disabled — the spectator silently skips it. No hardcoded fallbacks for prompt content. The only hardcoded fallback is the model-failure path for move generation (role/tool summary).
+
+### What this replaces
+
+The three-file identity split (AGENTS.md, IDENTITY.md, RULES.md) is replaced by the single `identity.md`. The `Compressor`, `Curator`, and `RoomWriter` structs are replaced by the prompt dispatch runtime. Room notes and curation are removed from this spec — they can be re-added later as additional prompt files if desired.
 
 ---
 
 ## What Gets Removed
 
 - `embeddings/moves/` directory and all flat file operations
-- `Compressor::moves_dir()` — no longer needed
-- `Compressor::read_moves()` — replaced by `Database::get_moves()`
-- `Compressor::archive_moves()` — moves stay in DB, no archival step
-- `Compressor::list_channels()` — replaced by `SELECT DISTINCT channel FROM moves`
-- `Compressor::classify_move()` — removed entirely
+- `Compressor` struct entirely — replaced by prompt dispatch runtime
+- `Curator` struct — removed (can return as a prompt file later)
+- `RoomWriter` struct — removed (can return as a prompt file later)
+- `classify_move()` — removed
 - 80-char truncation of transcript summaries
+- Three-file spectator identity (AGENTS.md, IDENTITY.md, RULES.md) — replaced by single `identity.md`
 
 ## What Stays Unchanged
 
-- Room notes (`RoomWriter`) — separate concern, untouched
-- Curator / flash system — separate concern, untouched
 - Event bus and coordinator — same events, same flow
-- Spectator identity loading (AGENTS.md, IDENTITY.md, RULES.md)
 - Spectator config (model URL, model name, timeouts) — extended but not restructured
 - `embeddings/moments/` directory — now the only thing the spectator writes to in embeddings/
+- Flash system — stays as infrastructure, just not driven by the spectator in this spec
 
 ---
 
@@ -194,34 +219,41 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 
 ### river-gateway (spectator)
 
-- `compress.rs` — rewritten:
-  - `Compressor` takes a `Database` handle via `Arc<Mutex<Database>>` (matching the existing pattern in `AgentLoop`) instead of `embeddings_dir: PathBuf`. All DB access uses lock-query-drop: acquire the mutex, perform the synchronous rusqlite operation, drop the guard, then proceed to any `.await` points. The mutex is never held across an await.
-  - Constructor also takes `moments_dir: PathBuf` (for writing moment files to `embeddings/moments/`)
-  - `update_moves()` queries messages from DB, calls LLM, inserts move to DB. On model failure, falls back to a summary built from message roles and tool names.
-  - `create_moment()` reads moves from DB, calls LLM, parses turn range from response, writes to `embeddings/moments/`
-  - `count_moves()` delegates to `Database::count_moves()`
-  - `classify_move()` deleted
+The `spectator/` module is rewritten. `compress.rs`, `curate.rs`, `room.rs` are deleted and replaced by a prompt dispatch runtime.
 
-- `mod.rs`:
-  - `SpectatorConfig` gains `prompts_dir: PathBuf`
-  - `SpectatorTask` gains `Arc<Mutex<Database>>` handle (same instance used by `AgentLoop`)
-  - `SpectatorTask::new()` takes DB handle parameter
-  - All DB access in the spectator uses lock-query-drop: acquire mutex, do sync operation, drop guard before any `.await`
-  - Prompt files loaded in `run()` at startup alongside identity
-  - `COMPRESSION_MOVES_THRESHOLD` changed from 15 to 50
-  - `should_compress()` updated to use DB count
+- `mod.rs` — rewritten as the prompt dispatch runtime:
+  - `SpectatorConfig` gains `spectator_dir: PathBuf` (default `workspace/spectator/`)
+  - `SpectatorTask` holds `Arc<Mutex<Database>>`, `ModelClient`, `EventBus`, `moments_dir: PathBuf`
+  - All DB access uses lock-query-drop: acquire mutex, do sync operation, drop guard before any `.await`
+  - On startup: load `identity.md` from spectator dir, check which prompt files exist
+  - Event dispatch:
+    - `TurnComplete` → if `on-turn-complete.md` exists, run move generation handler
+    - Move count > 50 → if `on-compress.md` exists, run moment generation handler
+    - `ContextPressure` → if `on-pressure.md` exists, run pressure handler
+  - `COMPRESSION_MOVES_THRESHOLD` = 50
+
+- `handlers.rs` — new file containing the three handler functions:
+  - `handle_turn_complete()` — query messages, format transcript, call LLM, insert move
+  - `handle_compress()` — query moves, call LLM, parse turn range, write moment file
+  - `handle_pressure()` — call LLM, emit Warning event
+
+- `prompt.rs` — new file for prompt loading and template substitution:
+  - `load_prompt(path) → Option<String>` — returns None if file missing
+  - `substitute(template, vars: &[(&str, &str)]) → String` — replaces `{key}` with value
 
 ### river-gateway (agent)
 
 - `agent/task.rs` — the agent maintains a `turn_number: u64` counter, incremented on each new user message. All messages persisted during that cycle get the current turn number. The `TurnComplete` event continues to carry `turn_number` as it does today.
 - `loop/mod.rs` (deprecated AgentLoop) — same change if this code path is still active: tag persisted messages with turn number.
 
-### New workspace files (defaults)
+### New workspace files
 
-- `workspace/spectator/prompts/move.md`
-- `workspace/spectator/prompts/moment.md`
+- `workspace/spectator/identity.md` — spectator system prompt
+- `workspace/spectator/on-turn-complete.md` — move generation prompt (template vars: `{transcript}`, `{turn_number}`)
+- `workspace/spectator/on-compress.md` — moment generation prompt (template vars: `{moves}`, `{channel}`)
+- `workspace/spectator/on-pressure.md` — pressure warning prompt (template vars: `{usage_percent}`)
 
-These are user-editable. The spectator reads them; it does not write them.
+All user-editable. The spectator reads them; it does not write them. If a prompt file is missing, that handler is disabled.
 
 ---
 
