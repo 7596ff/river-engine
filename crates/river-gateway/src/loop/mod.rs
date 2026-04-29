@@ -870,6 +870,7 @@ impl AgentLoop {
                 name: chat_msg.name.clone(),
                 created_at: now,
                 metadata: None,
+                turn_number: 0,
             };
 
             if let Err(e) = db.insert_message(&msg) {

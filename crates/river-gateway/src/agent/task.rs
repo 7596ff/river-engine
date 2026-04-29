@@ -12,11 +12,14 @@ use crate::preferences::{Preferences, format_current_time};
 use crate::r#loop::{MessageQueue, ModelClient};
 use crate::r#loop::context::ChatMessage;
 use crate::r#loop::state::ToolCallRequest;
+use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ToolExecutor, ToolCall, ToolSchema};
 use chrono::Utc;
+use river_core::{SnowflakeGenerator, SnowflakeType};
+use river_db::{Database, Message, MessageRole};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 /// Configuration for the agent task
@@ -73,6 +76,8 @@ pub struct AgentTask {
     tool_executor: Arc<RwLock<ToolExecutor>>,
     context_assembler: ContextAssembler,
     flash_queue: Arc<FlashQueue>,
+    db: Arc<Mutex<Database>>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
     turn_count: u64,
     channel_context: Option<ChannelContext>,
     /// Conversation messages for context (accumulated across turns)
@@ -89,6 +94,8 @@ impl AgentTask {
         model_client: ModelClient,
         tool_executor: Arc<RwLock<ToolExecutor>>,
         flash_queue: Arc<FlashQueue>,
+        db: Arc<Mutex<Database>>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
         let context_assembler = ContextAssembler::new(
             config.context_budget.clone(),
@@ -103,6 +110,8 @@ impl AgentTask {
             tool_executor,
             context_assembler,
             flash_queue,
+            db,
+            snowflake_gen,
             turn_count: 0,
             channel_context: None,
             conversation: Vec::new(),
@@ -334,6 +343,9 @@ impl AgentTask {
         }
 
         // ========== SETTLE ==========
+        // Persist messages BEFORE emitting TurnComplete (ordering guarantee)
+        self.persist_turn_messages();
+
         let transcript_summary = format!(
             "Turn {} completed: {} messages, {} tool calls ({} failed)",
             self.turn_count,
@@ -460,6 +472,64 @@ impl AgentTask {
         }
     }
 
+    /// Persist all conversation messages from this turn to the database.
+    /// Must be called before emitting TurnComplete (ordering guarantee).
+    fn persist_turn_messages(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::error!(error = %e, "DB lock poisoned in persist_turn_messages");
+                return;
+            }
+        };
+
+        let mut persisted = 0;
+        for chat_msg in &self.conversation {
+            if chat_msg.role == "system" {
+                continue;
+            }
+
+            let role = match chat_msg.role.as_str() {
+                "user" => MessageRole::User,
+                "assistant" => MessageRole::Assistant,
+                "tool" => MessageRole::Tool,
+                _ => continue,
+            };
+
+            let tool_calls_json = chat_msg.tool_calls.as_ref().map(|tc| {
+                serde_json::to_string(tc).unwrap_or_default()
+            });
+
+            let msg = Message {
+                id: self.snowflake_gen.next_id(SnowflakeType::Message),
+                session_id: PRIMARY_SESSION_ID.to_string(),
+                role,
+                content: chat_msg.content.clone(),
+                tool_calls: tool_calls_json,
+                tool_call_id: chat_msg.tool_call_id.clone(),
+                name: chat_msg.name.clone(),
+                created_at: now,
+                metadata: None,
+                turn_number: self.turn_count,
+            };
+
+            if let Err(e) = db.insert_message(&msg) {
+                tracing::warn!(error = %e, "Failed to persist message");
+            } else {
+                persisted += 1;
+            }
+        }
+
+        if persisted > 0 {
+            tracing::debug!(persisted = persisted, turn = self.turn_count, "Messages persisted");
+        }
+    }
+
     /// Trim conversation to stay within history limit
     fn trim_conversation(&mut self) {
         let max_messages = self.config.history_limit * 2; // Some buffer
@@ -514,8 +584,16 @@ mod tests {
     use crate::agent::channel::ChannelContext;
     use crate::coordinator::Coordinator;
     use crate::tools::ToolRegistry;
+    use river_db::init_db;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn test_db(temp: &TempDir) -> (Arc<Mutex<Database>>, Arc<SnowflakeGenerator>) {
+        let db = init_db(&temp.path().join("test.db")).unwrap();
+        let db_arc = Arc::new(Mutex::new(db));
+        let sg = Arc::new(SnowflakeGenerator::new(0));
+        (db_arc, sg)
+    }
 
     fn test_config(workspace: &TempDir) -> AgentTaskConfig {
         AgentTaskConfig {
@@ -556,6 +634,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
+        let (db, sg) = test_db(&temp);
         let task = AgentTask::new(
             config,
             bus.clone(),
@@ -563,6 +642,8 @@ mod tests {
             model_client,
             tool_executor,
             flash_queue,
+            db,
+            sg,
         );
 
         // Note: turn_cycle would fail without a real model, so we just test the event emission
@@ -594,6 +675,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
+        let (db, sg) = test_db(&temp);
         let mut task = AgentTask::new(
             config,
             bus,
@@ -601,6 +683,8 @@ mod tests {
             model_client,
             tool_executor,
             flash_queue,
+            db,
+            sg,
         );
 
         assert!(task.channel_context().is_none());
@@ -637,6 +721,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
+        let (db, sg) = test_db(&temp);
         let task = AgentTask::new(
             config,
             bus,
@@ -644,6 +729,8 @@ mod tests {
             model_client,
             tool_executor,
             flash_queue,
+            db,
+            sg,
         );
 
         let prompt = task.build_system_prompt().await;
@@ -670,6 +757,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
+        let (db, sg) = test_db(&temp);
         let task = AgentTask::new(
             config,
             bus,
@@ -677,6 +765,8 @@ mod tests {
             model_client,
             tool_executor,
             flash_queue,
+            db,
+            sg,
         );
 
         let prompt = task.build_system_prompt().await;
@@ -695,6 +785,7 @@ mod tests {
     #[test]
     fn test_trim_conversation() {
         // Test that trim_conversation properly removes old messages
+        let temp = TempDir::new().unwrap();
         let coord = Coordinator::new();
         let bus = coord.bus().clone();
 
@@ -707,6 +798,7 @@ mod tests {
             Duration::from_secs(30),
         ).unwrap();
 
+        let (db, sg) = test_db(&temp);
         let mut task = AgentTask::new(
             AgentTaskConfig {
                 history_limit: 5,
@@ -717,6 +809,8 @@ mod tests {
             model_client,
             tool_executor,
             flash_queue,
+            db,
+            sg,
         );
 
         // Add more messages than the limit

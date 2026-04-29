@@ -97,7 +97,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Create vector store and run initial sync if embeddings are configured
     let embeddings_dir = config.workspace.join("embeddings");
-    let vector_store = if config.embedding_url.is_some() {
+    let _vector_store = if config.embedding_url.is_some() {
         let vectors_db_path = config.data_dir.join("vectors.db");
         match VectorStore::open(&vectors_db_path) {
             Ok(store) => {
@@ -400,6 +400,8 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         agent_model_client,
         state.tool_executor.clone(),
         flash_queue.clone(),
+        db_arc.clone(),
+        snowflake_gen.clone(),
     );
 
     coordinator.spawn_task("agent", |_| agent_task.run());
@@ -411,18 +413,18 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         Duration::from_secs(60),
     )?;
 
-    let spectator_config = SpectatorConfig::from_workspace(
-        agent_workspace,
-        spectator_model_url,
-        spectator_model_name,
-    );
+    let spectator_config = SpectatorConfig {
+        spectator_dir: config.workspace.join("spectator"),
+        moments_dir: config.workspace.join("embeddings").join("moments"),
+        model_timeout: Duration::from_secs(60),
+    };
 
     let spectator_task = SpectatorTask::new(
         spectator_config,
         coordinator.bus().clone(),
         spectator_model,
-        vector_store,
-        flash_queue,
+        db_arc.clone(),
+        snowflake_gen.clone(),
     );
 
     coordinator.spawn_task("spectator", |_| spectator_task.run());
