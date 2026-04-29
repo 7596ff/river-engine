@@ -1,4 +1,4 @@
-# Adversarial Review: Spectator Compression Spec (Final)
+# Adversarial Review: Spectator Compression Spec (Prompt-Driven Runtime)
 
 **Date:** 2026-04-29
 **Spec:** `docs/specs/2026-04-29-spectator-compression-design.md`
@@ -8,37 +8,38 @@
 
 ## 1. Executive Summary
 
-The revised specification successfully addresses the critical technical flaws identified in previous reviews, specifically the **Mutex Trap** and the **Message/Move Race Condition**. By explicitly defining a "lock-query-drop" pattern and an "ordering guarantee" for persistence, the spec now provides a technically sound foundation for implementation.
+The revised specification introduces a significant architectural shift, transforming the spectator from a hardcoded multi-struct system (`Compressor`, `Curator`, `RoomWriter`) into a generic **Prompt-Driven Dispatch Runtime**. This design is highly flexible but relies on the existence and correctness of external Markdown files in `workspace/spectator/`.
 
 ## 2. Resolved Issues
 
-- **Mutex Trap (Fixed):** The spec now explicitly mandates that the `std::sync::MutexGuard` be dropped before any `.await` points. This prevents compilation errors and deadlocks in the async runtime.
-- **Race Condition (Fixed):** The spec adds an ordering guarantee requiring the agent to persist messages *before* emitting the `TurnComplete` event, ensuring the spectator always finds the data it needs.
-- **Internal Contradictions (Resolved):** The role of `classify_move()` is clarified (removed), and the fallback logic is replaced with a simpler role/tool-based summary.
-- **Turn Number Consistency (Fixed):** `turn_number` is now correctly defined as `NOT NULL` in the schema and a mandatory `u64` in the Rust struct.
+- **Mutex Trap (Fixed):** The spec mandates a "lock-query-drop" pattern, ensuring the `std::sync::MutexGuard` is dropped before any `.await` points.
+- **Race Condition (Fixed):** An "Ordering Guarantee" is established, requiring the agent to persist messages *before* emitting the `TurnComplete` event.
+- **Sync Service Compatibility (Verified):** The `NoteType` enum in `crates/river-gateway/src/embeddings/note.rs` already includes `Moment`, confirming that `type: moment` files in `embeddings/moments/` will be correctly indexed.
+- **Curation/Room Notes (Cleaned up):** By removing the hardcoded `Curator` and `RoomWriter` and moving to a prompt-dispatch model, the "incomplete intelligence" problem is solved by making these behaviors optional and prompt-defined.
 
 ## 3. Remaining Code Discrepancies
 
 | File | Spec Claim | Code Reality | Discrepancy |
 | :--- | :--- | :--- | :--- |
-| `crates/river-gateway/src/spectator/mod.rs` | Identity loaded from `spectator/AGENTS.md`, etc. | Workspace uses `roles/spectator.md` and `roles/actor.md`. | **Existing Bug Propagation:** The spec maintains the current code's incorrect assumption about identity file paths. While this is an existing issue, the spec misses the opportunity to align with the actual workspace structure. |
-| `crates/river-gateway/src/coordinator/events.rs` | `tool_calls` stored as "JSON array". | `AgentEvent::TurnComplete` uses `Vec<String>`. | Minor terminology mismatch between the internal Rust representation and the SQLite storage format. |
+| `crates/river-gateway/src/agent/task.rs` | Agent persists messages before event. | `AgentTask` currently has no `Database` handle. | **Major Wiring Gap:** To implement the ordering guarantee, `AgentTask` must be updated to hold an `Arc<Mutex<Database>>`, which it currently lacks. |
+| `crates/river-gateway/src/coordinator/events.rs` | Spectator receives `tool_calls`. | `AgentEvent::TurnComplete` contains `tool_calls: Vec<String>`. | The spec's DB schema uses "JSON array of tool names," which is a lossy conversion from the event's `Vec<String>` (though acceptable for analysis). |
+| `workspace/roles/` | (Old directory structure) | `actor.md` and `spectator.md` exist here. | **Migration:** The spec moves all spectator identity to `workspace/spectator/identity.md`. The implementation must ensure the old files are either migrated or correctly ignored. |
 
 ## 4. Unaddressed Technical Concerns
 
-- **Robust Parsing:** The regex `turns:\s*(\d+)\s*-\s*(\d+)` remains fragile. If the LLM produces Markdown formatting (e.g., `turns: **12-34**`), the parser will fail. The fallback to the "entire range" prevents data loss but may lead to overlapping or poorly bounded moments.
-- **Sync Service Compatibility:** It remains unverified if the `SyncService`'s `Note::parse` logic (in `crates/river-gateway/src/embeddings/note.rs`) will accept `type: moment` in the YAML frontmatter. If the parser is strict about `type: note`, moments will not be indexed as intended.
-- **Prompt Hot-reloading:** Loading prompts only once at startup remains a limitation for developer experience, though not a functional blocker.
+- **Transcript Token Budget:** The `{transcript}` substitution in `on-turn-complete.md` has no defined truncation logic. A turn involving a large file `read` or a complex `bash` output could easily exceed the model's context limit, causing the move generation to fail.
+- **Identity.md Absence:** The spec says event handlers are skipped if their prompt files are missing, but it doesn't define a hardcoded fallback for `identity.md` (the system prompt). If this file is missing, every LLM call in the spectator will likely fail or require a default identity (e.g., "You are a spectator.").
+- **Blocking Synchronous DB Calls:** While "lock-query-drop" solves the async threading issue, the underlying `rusqlite` operations are still synchronous and blocking. A slow DB query for a large message set or move list could block the gateway's event loop.
 
 ## 5. Grades
 
-- **Completeness:** **A-** (Now covers cross-crate changes to `messages` and `agent/task.rs`).
-- **Consistency:** **A** (Internal contradictions are resolved).
-- **Precision:** **A** (Clear SQL and explicit threading/ordering rules).
-- **Honesty:** **A** (Directly addresses the previously ignored Mutex conflict).
+- **Completeness:** **A-** (The prompt-driven dispatcher is a comprehensive solution).
+- **Consistency:** **A** (The dispatcher model simplifies the internal logic significantly).
+- **Precision:** **B+** (The Rust module structure is clear, but `{transcript}` formatting and truncation are "hand-wavy").
+- **Honesty:** **A** (Directly addresses the persistence ordering and mutex conflicts).
 
 ---
 
 **Verdict: APPROVED.**
 
-The specification is now technically robust and ready for implementation. The remaining concerns regarding file paths and parsing robustness are minor compared to the core architectural fixes and can be resolved during the implementation phase.
+The "Prompt-Driven Runtime" is a superior architectural choice that aligns with the "River Engine" philosophy of making agent behavior user-auditable and editable. The remaining wiring gap in `AgentTask` is an implementation detail that must be addressed during the build phase.

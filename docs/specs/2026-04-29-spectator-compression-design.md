@@ -243,8 +243,13 @@ The `spectator/` module is rewritten. `compress.rs`, `curate.rs`, `room.rs` are 
 
 ### river-gateway (agent)
 
-- `agent/task.rs` — the agent maintains a `turn_number: u64` counter, incremented on each new user message. All messages persisted during that cycle get the current turn number. The `TurnComplete` event continues to carry `turn_number` as it does today.
-- `loop/mod.rs` (deprecated AgentLoop) — same change if this code path is still active: tag persisted messages with turn number.
+- `agent/task.rs`:
+  - Gains `Arc<Mutex<Database>>` handle (currently absent — must be wired in at construction in `server.rs`)
+  - Maintains a `turn_number: u64` counter, incremented on each new user message
+  - All messages persisted during that cycle get the current turn number
+  - Persists messages to DB *before* emitting `TurnComplete` on the bus (ordering guarantee)
+- `server.rs` — passes `Arc<Mutex<Database>>` to `AgentTask` constructor (same instance shared with `AgentLoop` and `SpectatorTask`)
+- `loop/mod.rs` (deprecated AgentLoop) — same change if this code path is still active: tag persisted messages with turn number
 
 ### New workspace files
 
@@ -253,7 +258,9 @@ The `spectator/` module is rewritten. `compress.rs`, `curate.rs`, `room.rs` are 
 - `workspace/spectator/on-compress.md` — moment generation prompt (template vars: `{moves}`, `{channel}`)
 - `workspace/spectator/on-pressure.md` — pressure warning prompt (template vars: `{usage_percent}`)
 
-All user-editable. The spectator reads them; it does not write them. If a prompt file is missing, that handler is disabled.
+All user-editable. The spectator reads them; it does not write them.
+
+`identity.md` is required — the gateway fails to start if it is missing. Event prompt files are optional — if missing, that handler is disabled silently.
 
 ---
 
