@@ -113,7 +113,7 @@ When `count_moves(channel)` exceeds 50, the spectator considers creating a momen
    - User prompt: the substituted `on-compress.md`
 
 If `on-compress.md` does not exist, this handler is skipped silently (moves accumulate but no moments are created).
-4. The prompt instructs the model to respond in this format:
+4. The `on-compress.md` prompt must instruct the model to respond in exactly this format:
 
 ```
 turns: {start}-{end}
@@ -123,13 +123,13 @@ turns: {start}-{end}
 
 The model chooses which range of moves forms a coherent arc. It does not have to use all of them.
 
-5. Parse the response:
+5. Parse the response with a single method (`parse_moment_response`):
    - Split on first `---`
    - Parse `turns: N-M` from the header (regex: `turns:\s*(\d+)\s*-\s*(\d+)`)
    - Everything after `---` is the narrative
-   - **Fallback**: if parsing fails, use the full move range from the DB (`SELECT MIN(turn_number), MAX(turn_number) FROM moves WHERE channel = ?`) and treat the entire response as the narrative
+   - If parsing fails (no `---`, no valid turn range, empty narrative), the moment creation fails. Log an error and return. No fallback, no guessing. The moves stay in the DB and compression will be attempted again next time the threshold is checked.
 
-6. Write the moment to `embeddings/moments/{channel}-{timestamp}.md`:
+6. On successful parse, write the moment to `embeddings/moments/{channel}-{timestamp}.md`:
 
 ```yaml
 ---
@@ -275,7 +275,9 @@ All user-editable. The spectator reads them; it does not write them. If a prompt
 - `test_get_max_turn` — cursor behavior, empty table returns None
 - `test_count_moves` — accurate count per channel
 - `test_moment_parses_turn_range` — response with `turns: 5-20\n---\nnarrative` correctly parsed
-- `test_moment_fallback_on_parse_failure` — malformed response uses full DB range
+- `test_moment_rejects_missing_separator` — response without `---` returns error
+- `test_moment_rejects_missing_turn_range` — response with `---` but no `turns:` line returns error
+- `test_moment_rejects_empty_narrative` — response with valid header but empty body returns error
 - `test_move_fallback_on_model_failure` — heuristic one-liner written when LLM is unavailable
 - `test_moves_persist_after_moment` — moment creation does not delete moves
 - `test_get_turn_messages` — messages with matching session_id and turn_number returned in order
