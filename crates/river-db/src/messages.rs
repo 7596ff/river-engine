@@ -47,6 +47,7 @@ pub struct Message {
     pub name: Option<String>,
     pub created_at: i64,
     pub metadata: Option<String>,    // JSON
+    pub turn_number: u64,
 }
 
 impl Message {
@@ -80,6 +81,7 @@ impl Message {
             name: row.get(6)?,
             created_at: row.get(7)?,
             metadata: row.get(8)?,
+            turn_number: row.get::<_, i64>(9)? as u64,
         })
     }
 }
@@ -88,8 +90,8 @@ impl Database {
     /// Insert a message
     pub fn insert_message(&self, msg: &Message) -> RiverResult<()> {
         self.conn().execute(
-            "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 msg.id.to_bytes().to_vec(),
                 msg.session_id,
@@ -100,6 +102,7 @@ impl Database {
                 msg.name,
                 msg.created_at,
                 msg.metadata,
+                msg.turn_number as i64,
             ],
         ).map_err(|e| RiverError::database(e.to_string()))?;
         Ok(())
@@ -108,7 +111,7 @@ impl Database {
     /// Get messages for a session, ordered by creation time
     pub fn get_session_messages(&self, session_id: &str, limit: usize) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
              FROM messages
              WHERE session_id = ?
              ORDER BY created_at DESC
@@ -127,7 +130,7 @@ impl Database {
     /// Get recent messages across all sessions
     pub fn get_recent_messages(&self, limit: usize) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
              FROM messages
              ORDER BY created_at DESC
              LIMIT ?"
@@ -139,6 +142,23 @@ impl Database {
             .map_err(|e| RiverError::database(e.to_string()))?;
 
         Ok(messages.into_iter().rev().collect())
+    }
+
+    /// Get messages for a specific turn in a session
+    pub fn get_turn_messages(&self, session_id: &str, turn_number: u64) -> RiverResult<Vec<Message>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
+             FROM messages
+             WHERE session_id = ? AND turn_number = ?
+             ORDER BY created_at"
+        ).map_err(|e| RiverError::database(e.to_string()))?;
+
+        let messages = stmt.query_map(params![session_id, turn_number as i64], Message::from_row)
+            .map_err(|e| RiverError::database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        Ok(messages)
     }
 }
 
@@ -163,6 +183,7 @@ mod tests {
             name: None,
             created_at: 1234567890,
             metadata: None,
+            turn_number: 0,
         };
 
         db.insert_message(&msg).unwrap();
@@ -189,6 +210,7 @@ mod tests {
                 name: None,
                 created_at: 1000 + i,
                 metadata: None,
+                turn_number: 0,
             };
             db.insert_message(&msg).unwrap();
         }
@@ -197,5 +219,77 @@ mod tests {
         assert_eq!(messages.len(), 5);
         assert_eq!(messages[0].content, Some("Message 0".to_string()));
         assert_eq!(messages[4].content, Some("Message 4".to_string()));
+    }
+
+    #[test]
+    fn test_insert_message_with_turn_number() {
+        let db = Database::open_in_memory().unwrap();
+        let birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
+        let gen = SnowflakeGenerator::new(birth);
+
+        let msg = Message {
+            id: gen.next_id(SnowflakeType::Message),
+            session_id: "test-session".to_string(),
+            role: MessageRole::User,
+            content: Some("Hello".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            turn_number: 1,
+            created_at: 1000,
+            metadata: None,
+        };
+
+        db.insert_message(&msg).unwrap();
+        let messages = db.get_session_messages("test-session", 10).unwrap();
+        assert_eq!(messages[0].turn_number, 1);
+    }
+
+    #[test]
+    fn test_get_turn_messages() {
+        let db = Database::open_in_memory().unwrap();
+        let birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
+        let gen = SnowflakeGenerator::new(birth);
+
+        for (role, content) in [
+            (MessageRole::User, "What is X?"),
+            (MessageRole::Assistant, "X is Y."),
+        ] {
+            let msg = Message {
+                id: gen.next_id(SnowflakeType::Message),
+                session_id: "sess".to_string(),
+                role,
+                content: Some(content.to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                turn_number: 1,
+                created_at: 1000,
+                metadata: None,
+            };
+            db.insert_message(&msg).unwrap();
+        }
+
+        let msg = Message {
+            id: gen.next_id(SnowflakeType::Message),
+            session_id: "sess".to_string(),
+            role: MessageRole::User,
+            content: Some("Next question".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            turn_number: 2,
+            created_at: 2000,
+            metadata: None,
+        };
+        db.insert_message(&msg).unwrap();
+
+        let turn_1 = db.get_turn_messages("sess", 1).unwrap();
+        assert_eq!(turn_1.len(), 2);
+        assert_eq!(turn_1[0].content, Some("What is X?".to_string()));
+        assert_eq!(turn_1[1].content, Some("X is Y.".to_string()));
+
+        let turn_2 = db.get_turn_messages("sess", 2).unwrap();
+        assert_eq!(turn_2.len(), 1);
     }
 }

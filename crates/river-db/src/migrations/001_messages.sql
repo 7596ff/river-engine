@@ -8,11 +8,13 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_call_id TEXT,             -- For tool response messages
     name TEXT,                     -- Tool name for tool responses
     created_at INTEGER NOT NULL,
-    metadata TEXT                  -- JSON
+    metadata TEXT,                 -- JSON
+    turn_number INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_turn ON messages(session_id, turn_number);
 
 -- Sessions table
 CREATE TABLE IF NOT EXISTS sessions (
