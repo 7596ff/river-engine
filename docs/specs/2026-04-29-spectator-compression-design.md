@@ -12,6 +12,10 @@ The context assembly design (stream/engine/context-assembly-design.md) describes
 
 This spec builds the compression pipeline. Context assembly integration is deferred to a separate spec.
 
+### transcript_summary provenance
+
+The `transcript_summary` field in `TurnComplete` events is constructed in `agent/task.rs` via `format!()`, combining the assistant's response content and tool call names. Its length is bounded by the model's output — typically a few hundred to a few thousand characters. This is what the spectator sends to its model for move generation.
+
 ---
 
 ## Database Schema
@@ -45,7 +49,7 @@ New methods on `Database`:
 - `get_moves(channel: &str, limit: usize) → RiverResult<Vec<Move>>`  — ordered by turn_number ascending
 - `get_max_turn(channel: &str) → RiverResult<Option<u64>>` — the cursor (highest turn number with a move)
 - `count_moves(channel: &str) → RiverResult<usize>`
-- `delete_moves(channel: &str, up_to_turn: u64) → RiverResult<usize>` — available but not used by moment creation; exists for future maintenance
+No `delete_moves` method. Moves accumulate permanently. If cleanup is ever needed, it's a manual database operation, not an API surface.
 
 ---
 
@@ -134,8 +138,9 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 - `Compressor::read_moves()` — replaced by `Database::get_moves()`
 - `Compressor::archive_moves()` — moves stay in DB, no archival step
 - `Compressor::list_channels()` — replaced by `SELECT DISTINCT channel FROM moves`
-- `Compressor::classify_move()` — demoted to fallback only, not the primary path
 - 80-char truncation of transcript summaries
+
+Note: `Compressor::classify_move()` is retained as a private fallback method (see Move Generation fallback), not removed.
 
 ## What Stays Unchanged
 
@@ -160,7 +165,7 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 ### river-gateway (spectator)
 
 - `compress.rs` — rewritten:
-  - `Compressor` takes a `Database` handle (via `Arc<Database>` or similar) instead of `embeddings_dir: PathBuf`
+  - `Compressor` takes a `Database` handle via `Arc<Mutex<Database>>` (matching the existing pattern in `AgentLoop`) instead of `embeddings_dir: PathBuf`
   - Constructor also takes `moments_dir: PathBuf` (for writing moment files to `embeddings/moments/`)
   - `update_moves()` calls LLM then inserts to DB. Falls back to heuristic on model failure.
   - `create_moment()` reads from DB, calls LLM, parses turn range from response, writes to `embeddings/moments/`
@@ -169,8 +174,8 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 
 - `mod.rs`:
   - `SpectatorConfig` gains `prompts_dir: PathBuf`
-  - `SpectatorTask` gains `Database` handle
-  - `SpectatorTask::new()` takes DB handle parameter
+  - `SpectatorTask` gains `Arc<Mutex<Database>>` handle
+  - `SpectatorTask::new()` takes DB handle parameter (same `Arc<Mutex<Database>>` already used by `AgentLoop`)
   - Prompt files loaded in `run()` at startup alongside identity
   - `COMPRESSION_MOVES_THRESHOLD` changed from 15 to 50
   - `should_compress()` updated to use DB count
