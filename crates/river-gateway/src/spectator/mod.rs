@@ -1,84 +1,49 @@
-//! Spectator task — the observing self (You)
+//! Spectator — prompt-driven observing self
 //!
-//! The spectator watches agent turn transcripts, compresses conversations
-//! into moves and moments, curates memories by pushing flashes, and writes
-//! room notes as witness observations.
+//! The spectator is a thin event dispatcher. On each event it loads
+//! a prompt file, assembles context, calls the LLM, and handles
+//! the structured output.
 
-pub mod compress;
-pub mod curate;
-pub mod room;
+pub mod format;
+pub mod handlers;
+pub mod prompt;
 
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
-use crate::embeddings::VectorStore;
-use crate::flash::FlashQueue;
 use crate::r#loop::ModelClient;
+use crate::session::PRIMARY_SESSION_ID;
 use chrono::Utc;
+use river_core::SnowflakeGenerator;
+use river_db::Database;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
-pub use compress::Compressor;
-pub use curate::Curator;
-pub use room::RoomWriter;
+/// Compression threshold: consider creating a moment when moves exceed this
+const COMPRESSION_MOVES_THRESHOLD: usize = 50;
 
 /// Configuration for the spectator task
 #[derive(Debug, Clone)]
 pub struct SpectatorConfig {
-    /// Workspace path
-    pub workspace: PathBuf,
-    /// Directory containing embeddings/notes
-    pub embeddings_dir: PathBuf,
-    /// Model URL for spectator (may differ from agent's model)
-    pub model_url: String,
-    /// Model name (e.g., "llama-3-8b" or "claude-sonnet")
-    pub model_name: String,
-    /// Agents operations guide path
-    pub agents_path: PathBuf,
-    /// Identity file path
-    pub identity_path: PathBuf,
-    /// Rules file path
-    pub rules_path: PathBuf,
+    /// Directory containing spectator prompt files
+    pub spectator_dir: PathBuf,
+    /// Directory for writing moment files
+    pub moments_dir: PathBuf,
     /// Model timeout
-    pub model_timeout: Duration,
+    pub model_timeout: std::time::Duration,
 }
 
-impl SpectatorConfig {
-    /// Create config with default paths based on workspace
-    pub fn from_workspace(workspace: PathBuf, model_url: String, model_name: String) -> Self {
-        Self {
-            embeddings_dir: workspace.join("embeddings"),
-            agents_path: workspace.join("spectator/AGENTS.md"),
-            identity_path: workspace.join("spectator/IDENTITY.md"),
-            rules_path: workspace.join("spectator/RULES.md"),
-            workspace,
-            model_url,
-            model_name,
-            model_timeout: Duration::from_secs(60),
-        }
-    }
-}
-
-/// Compression trigger configuration
-const COMPRESSION_INTERVAL_TURNS: u64 = 10;
-const COMPRESSION_PRESSURE_THRESHOLD: f64 = 80.0;
-const COMPRESSION_MOVES_THRESHOLD: usize = 15;
-
-/// The spectator task — observes, compresses, curates
+/// The spectator task
 pub struct SpectatorTask {
     config: SpectatorConfig,
     bus: EventBus,
-    #[allow(dead_code)] // Used when model calls are enabled
     model_client: ModelClient,
-    vector_store: Option<Arc<VectorStore>>,
-    #[allow(dead_code)] // Referenced by curator
-    flash_queue: Arc<FlashQueue>,
-    compressor: Compressor,
-    curator: Curator,
-    room_writer: RoomWriter,
-    /// Cached identity text
-    identity: Option<String>,
-    /// Last observed context pressure
-    last_context_pressure: Option<f64>,
+    db: Arc<Mutex<Database>>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
+    /// Cached identity (system prompt)
+    identity: String,
+    /// Cached prompt templates (None = handler disabled)
+    on_turn_complete: Option<String>,
+    on_compress: Option<String>,
+    on_pressure: Option<String>,
 }
 
 impl SpectatorTask {
@@ -86,123 +51,81 @@ impl SpectatorTask {
         config: SpectatorConfig,
         bus: EventBus,
         model_client: ModelClient,
-        vector_store: Option<Arc<VectorStore>>,
-        flash_queue: Arc<FlashQueue>,
+        db: Arc<Mutex<Database>>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
-        let compressor = Compressor::new(config.embeddings_dir.clone());
-        let curator = Curator::new(flash_queue.clone());
-        let room_writer = RoomWriter::new(config.embeddings_dir.join("room-notes"));
-
         Self {
             config,
             bus,
             model_client,
-            vector_store,
-            flash_queue,
-            compressor,
-            curator,
-            room_writer,
-            identity: None,
-            last_context_pressure: None,
-        }
-    }
-
-    /// Check if we should run full compression this turn
-    fn should_compress(&self, turn_number: u64) -> bool {
-        // Every N turns
-        if turn_number % COMPRESSION_INTERVAL_TURNS == 0 {
-            return true;
-        }
-        // On high context pressure
-        if let Some(pressure) = self.last_context_pressure {
-            if pressure > COMPRESSION_PRESSURE_THRESHOLD {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Run compression across all channels
-    async fn run_compression(&self, identity: &str) {
-        let channels = match self.compressor.list_channels().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to list channels for compression");
-                return;
-            }
-        };
-
-        for channel in channels {
-            let move_count = match self.compressor.count_moves(&channel).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(channel = %channel, error = %e, "Failed to count moves");
-                    continue;
-                }
-            };
-
-            if move_count >= COMPRESSION_MOVES_THRESHOLD {
-                tracing::info!(
-                    channel = %channel,
-                    moves = move_count,
-                    "Compressing moves into moment"
-                );
-
-                // Read moves
-                let moves_text = match self.compressor.read_moves(&channel).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::error!(channel = %channel, error = %e, "Failed to read moves");
-                        continue;
-                    }
-                };
-
-                // Create moment
-                if let Err(e) = self.compressor.create_moment(
-                    &channel,
-                    &moves_text,
-                    &self.model_client,
-                    identity,
-                ).await {
-                    tracing::error!(channel = %channel, error = %e, "Failed to create moment");
-                    continue;
-                }
-
-                // Archive old moves
-                if let Err(e) = self.compressor.archive_moves(&channel).await {
-                    tracing::error!(channel = %channel, error = %e, "Failed to archive moves");
-                }
-
-                // Emit compression event
-                self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
-                    channel: channel.clone(),
-                    timestamp: Utc::now(),
-                }));
-            }
+            db,
+            snowflake_gen,
+            identity: String::new(),
+            on_turn_complete: None,
+            on_compress: None,
+            on_pressure: None,
         }
     }
 
     /// Main run loop
     pub async fn run(mut self) {
-        let mut event_rx = self.bus.subscribe();
+        // Load identity — required, fail if missing
+        let identity_path = self.config.spectator_dir.join("identity.md");
+        self.identity = match prompt::load_prompt(&identity_path) {
+            Some(id) => {
+                tracing::info!("Spectator identity loaded from {:?}", identity_path);
+                id
+            }
+            None => {
+                tracing::error!("Spectator identity.md not found at {:?} — cannot start", identity_path);
+                return;
+            }
+        };
 
-        // Load identity once at startup
-        self.identity = Some(self.load_identity().await);
+        // Load optional prompts
+        self.on_turn_complete = prompt::load_prompt(
+            &self.config.spectator_dir.join("on-turn-complete.md"),
+        );
+        self.on_compress = prompt::load_prompt(
+            &self.config.spectator_dir.join("on-compress.md"),
+        );
+        self.on_pressure = prompt::load_prompt(
+            &self.config.spectator_dir.join("on-pressure.md"),
+        );
+
+        tracing::info!(
+            turn_complete = self.on_turn_complete.is_some(),
+            compress = self.on_compress.is_some(),
+            pressure = self.on_pressure.is_some(),
+            "Spectator handlers loaded"
+        );
+
+        let mut event_rx = self.bus.subscribe();
 
         tracing::info!("Spectator task started");
 
         loop {
             match event_rx.recv().await {
-                Ok(CoordinatorEvent::Agent(event)) => {
-                    let identity = self.identity.clone().unwrap_or_default();
-                    self.observe(event, &identity).await;
+                Ok(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
+                    channel,
+                    turn_number,
+                    tool_calls,
+                    ..
+                })) => {
+                    self.handle_turn_complete(&channel, turn_number, &tool_calls).await;
+                }
+                Ok(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
+                    usage_percent,
+                    ..
+                })) => {
+                    self.handle_pressure(usage_percent).await;
                 }
                 Ok(CoordinatorEvent::Shutdown) => {
-                    tracing::info!("Spectator task: shutdown received");
+                    tracing::info!("Spectator: shutdown received");
                     break;
                 }
-                Ok(CoordinatorEvent::Spectator(_)) => {
-                    // Ignore own events
+                Ok(_) => {
+                    // Ignore other events
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Event receive error");
@@ -213,374 +136,209 @@ impl SpectatorTask {
         tracing::info!("Spectator task stopped");
     }
 
-    /// Process an agent event
-    async fn observe(&mut self, event: AgentEvent, identity: &str) {
-        match event {
-            AgentEvent::TurnComplete {
-                channel,
-                turn_number,
-                transcript_summary,
-                tool_calls,
-                ..
-            } => {
-                tracing::debug!(turn = turn_number, channel = %channel, "Spectator observing turn");
-
-                // Job 1: Compress — update moves for this channel
-                if let Err(e) = self.compressor.update_moves(
-                    &channel,
-                    turn_number,
-                    &transcript_summary,
-                    &tool_calls,
-                    &self.model_client,
-                    identity,
-                ).await {
-                    tracing::error!(error = %e, "Failed to update moves");
-                }
-
-                // Job 2: Curate — search for relevant memories and push flashes
-                if let Some(ref store) = self.vector_store {
-                    if let Err(e) = self.curator.curate(
-                        &transcript_summary,
-                        store,
-                        &self.bus,
-                    ).await {
-                        tracing::error!(error = %e, "Failed to curate");
-                    }
-                }
-
-                // Job 3: Room notes — write witness observation
-                if let Err(e) = self.room_writer.write_observation(
-                    turn_number,
-                    &transcript_summary,
-                    &self.model_client,
-                    identity,
-                ).await {
-                    tracing::error!(error = %e, "Failed to write room note");
-                }
-
-                // Emit MovesUpdated
-                self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
-                    channel: channel.clone(),
-                    timestamp: Utc::now(),
-                }));
-
-                // Check if we should run full compression
-                if self.should_compress(turn_number) {
-                    tracing::debug!(turn = turn_number, "Compression trigger fired");
-                    self.run_compression(identity).await;
-                    // Reset pressure after compression
-                    self.last_context_pressure = None;
-                }
-            }
-
-            AgentEvent::NoteWritten { path, .. } => {
-                tracing::debug!(path = %path, "Spectator: agent wrote note");
-                // Could trigger re-indexing or review
-            }
-
-            AgentEvent::ContextPressure { usage_percent, .. } => {
-                // Track for compression triggers
-                self.last_context_pressure = Some(usage_percent);
-
-                if usage_percent > 85.0 {
-                    self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::Warning {
-                        content: format!(
-                            "Context at {:.0}% — consider rotation",
-                            usage_percent
-                        ),
-                        timestamp: Utc::now(),
-                    }));
-                    tracing::warn!(
-                        usage_percent = format!("{:.0}", usage_percent),
-                        "Spectator warning: high context pressure"
-                    );
-                }
-            }
-
-            AgentEvent::TurnStarted { .. } => {
-                // Could use for timing analysis
-            }
-
-            AgentEvent::ChannelSwitched { from, to, .. } => {
-                tracing::debug!(from = %from, to = %to, "Spectator: channel switched");
-            }
-        }
-    }
-
-    /// Load spectator agents guide, identity, and rules
-    async fn load_identity(&self) -> String {
-        let mut parts = Vec::new();
-
-        // Load AGENTS.md (operations guide)
-        if let Ok(agents) = tokio::fs::read_to_string(&self.config.agents_path).await {
-            parts.push(agents);
-        } else {
-            tracing::warn!(path = %self.config.agents_path.display(), "Agents file not found");
-        }
-
-        // Load IDENTITY.md
-        match tokio::fs::read_to_string(&self.config.identity_path).await {
-            Ok(identity) => parts.push(identity),
-            Err(_) => {
-                tracing::warn!(path = %self.config.identity_path.display(), "Identity file not found");
-                parts.push("You observe. You do not act.".to_string());
-            }
-        }
-
-        // Load RULES.md
-        if let Ok(rules) = tokio::fs::read_to_string(&self.config.rules_path).await {
-            parts.push(rules);
-        } else {
-            tracing::warn!(path = %self.config.rules_path.display(), "Rules file not found");
-        }
-
-        parts.join("\n\n---\n\n")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::coordinator::Coordinator;
-    use tempfile::TempDir;
-
-    fn test_config(temp: &TempDir) -> SpectatorConfig {
-        SpectatorConfig::from_workspace(
-            temp.path().to_path_buf(),
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-        )
-    }
-
-    fn test_model_client() -> ModelClient {
-        ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap()
-    }
-
-    #[test]
-    fn test_spectator_config_from_workspace() {
-        let config = SpectatorConfig::from_workspace(
-            PathBuf::from("/workspace"),
-            "http://model:8080".to_string(),
-            "llama".to_string(),
-        );
-
-        assert_eq!(config.workspace, PathBuf::from("/workspace"));
-        assert_eq!(config.embeddings_dir, PathBuf::from("/workspace/embeddings"));
-        assert_eq!(config.agents_path, PathBuf::from("/workspace/spectator/AGENTS.md"));
-        assert_eq!(config.identity_path, PathBuf::from("/workspace/spectator/IDENTITY.md"));
-        assert_eq!(config.rules_path, PathBuf::from("/workspace/spectator/RULES.md"));
-    }
-
-    #[tokio::test]
-    async fn test_spectator_observes_turn_complete() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let mut rx = bus.subscribe();
-
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let mut spectator = SpectatorTask::new(
-            config,
-            bus.clone(),
-            model,
-            None,
-            flash_queue,
-        );
-
-        // Simulate loading identity
-        spectator.identity = Some("Test identity".to_string());
-
-        // Observe a TurnComplete event
-        let event = AgentEvent::TurnComplete {
-            channel: "general".to_string(),
-            turn_number: 1,
-            transcript_summary: "User asked a question".to_string(),
-            tool_calls: vec![],
-            timestamp: Utc::now(),
+    async fn handle_turn_complete(&self, channel: &str, turn_number: u64, tool_calls: &[String]) {
+        let template = match &self.on_turn_complete {
+            Some(t) => t,
+            None => return,
         };
 
-        spectator.observe(event, "Test identity").await;
-
-        // Should emit MovesUpdated
-        let response = rx.try_recv();
-        assert!(matches!(
-            response,
-            Ok(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated { .. }))
-        ));
-
-        // Check moves file was created
-        let moves_path = temp.path().join("embeddings/moves/general.md");
-        assert!(moves_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_spectator_emits_warning_on_high_pressure() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let mut rx = bus.subscribe();
-
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let mut spectator = SpectatorTask::new(
-            config,
-            bus.clone(),
-            model,
-            None,
-            flash_queue,
-        );
-
-        spectator.identity = Some("Test".to_string());
-
-        // Simulate high context pressure
-        let event = AgentEvent::ContextPressure {
-            usage_percent: 90.0,
-            timestamp: Utc::now(),
-        };
-
-        spectator.observe(event, "Test").await;
-
-        // Should emit Warning
-        let response = rx.try_recv();
-        assert!(matches!(
-            response,
-            Ok(CoordinatorEvent::Spectator(SpectatorEvent::Warning { .. }))
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_load_identity_with_files() {
-        let temp = TempDir::new().unwrap();
-
-        // Create identity files
-        let spectator_dir = temp.path().join("spectator");
-        tokio::fs::create_dir_all(&spectator_dir).await.unwrap();
-        tokio::fs::write(spectator_dir.join("AGENTS.md"), "# Spectator Guide").await.unwrap();
-        tokio::fs::write(spectator_dir.join("IDENTITY.md"), "I observe").await.unwrap();
-        tokio::fs::write(spectator_dir.join("RULES.md"), "Never act").await.unwrap();
-
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let spectator = SpectatorTask::new(config, bus, model, None, flash_queue);
-        let identity = spectator.load_identity().await;
-
-        assert!(identity.contains("# Spectator Guide"));
-        assert!(identity.contains("I observe"));
-        assert!(identity.contains("Never act"));
-    }
-
-    #[tokio::test]
-    async fn test_load_identity_missing_files() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let spectator = SpectatorTask::new(config, bus, model, None, flash_queue);
-        let identity = spectator.load_identity().await;
-
-        // Should use default
-        assert!(identity.contains("observe"));
-    }
-
-    #[test]
-    fn test_should_compress_on_interval() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let spectator = SpectatorTask::new(config, bus, model, None, flash_queue);
-
-        // Turn 10 should trigger compression
-        assert!(spectator.should_compress(10));
-        // Turn 20 should trigger compression
-        assert!(spectator.should_compress(20));
-        // Turn 5 should not
-        assert!(!spectator.should_compress(5));
-    }
-
-    #[test]
-    fn test_should_compress_on_pressure() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let mut spectator = SpectatorTask::new(config, bus, model, None, flash_queue);
-
-        // Without pressure, turn 5 should not trigger
-        assert!(!spectator.should_compress(5));
-
-        // With high pressure, turn 5 should trigger
-        spectator.last_context_pressure = Some(85.0);
-        assert!(spectator.should_compress(5));
-    }
-
-    #[tokio::test]
-    async fn test_compression_trigger_on_turn_10() {
-        let temp = TempDir::new().unwrap();
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let model = test_model_client();
-
-        let mut spectator = SpectatorTask::new(
-            config,
-            bus.clone(),
-            model,
-            None,
-            flash_queue,
-        );
-        spectator.identity = Some("Test".to_string());
-
-        // Simulate 15 turns to build up moves
-        for i in 1..=15 {
-            let event = AgentEvent::TurnComplete {
-                channel: "general".to_string(),
-                turn_number: i,
-                transcript_summary: format!("Turn {} summary", i),
-                tool_calls: vec![],
-                timestamp: Utc::now(),
+        // Lock-query-drop: get messages for this turn
+        let messages = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!(error = %e, "DB lock poisoned");
+                    return;
+                }
             };
-            spectator.observe(event, "Test").await;
+            match db.get_turn_messages(PRIMARY_SESSION_ID, turn_number) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    tracing::error!(turn = turn_number, error = %e, "Failed to query turn messages");
+                    return;
+                }
+            }
+        }; // MutexGuard dropped here
+
+        if messages.is_empty() {
+            tracing::error!(turn = turn_number, "No messages found for turn — skipping");
+            return;
         }
 
-        // At turn 10 and with 15+ moves, compression should have run
-        // Check that moment was created
-        let moments_dir = temp.path().join("embeddings/moments");
-        if moments_dir.exists() {
-            let entries: Vec<_> = std::fs::read_dir(&moments_dir)
-                .unwrap()
-                .filter_map(|e| e.ok())
-                .collect();
-            // May or may not have a moment depending on timing
-            // This test verifies the path works without errors
-            tracing::info!("Moments created: {}", entries.len());
+        // Format transcript and substitute into prompt
+        let transcript = format::format_transcript(&messages);
+        let user_prompt = prompt::substitute(template, &[
+            ("transcript", &transcript),
+            ("turn_number", &turn_number.to_string()),
+        ]);
+
+        // Call LLM
+        let summary = match self.call_model(&user_prompt).await {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!(turn = turn_number, error = %e, "Model call failed, using fallback");
+                format::fallback_summary(&messages)
+            }
+        };
+
+        // Lock-query-drop: insert move
+        {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!(error = %e, "DB lock poisoned");
+                    return;
+                }
+            };
+            let m = river_db::Move {
+                id: self.snowflake_gen.next_id(river_core::SnowflakeType::Embedding),
+                channel: channel.to_string(),
+                turn_number,
+                summary: summary.clone(),
+                tool_calls: Some(serde_json::to_string(tool_calls).unwrap_or_default()),
+                created_at: Utc::now().timestamp(),
+            };
+            if let Err(e) = db.insert_move(&m) {
+                tracing::error!(error = %e, "Failed to insert move");
+                return;
+            }
+        }; // MutexGuard dropped here
+
+        // Emit event
+        self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
+            channel: channel.to_string(),
+            timestamp: Utc::now(),
+        }));
+
+        tracing::debug!(turn = turn_number, channel = %channel, "Move recorded");
+
+        // Check compression threshold
+        if self.on_compress.is_some() {
+            let count = {
+                let db = self.db.lock().unwrap();
+                db.count_moves(channel).unwrap_or(0)
+            };
+            if count > COMPRESSION_MOVES_THRESHOLD {
+                self.handle_compress(channel).await;
+            }
+        }
+    }
+
+    async fn handle_compress(&self, channel: &str) {
+        let template = match &self.on_compress {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Lock-query-drop: get all moves
+        let moves = {
+            let db = self.db.lock().unwrap();
+            match db.get_moves(channel, 10_000) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to query moves for compression");
+                    return;
+                }
+            }
+        };
+
+        let moves_text = format::format_moves(&moves);
+        let user_prompt = prompt::substitute(template, &[
+            ("moves", &moves_text),
+            ("channel", channel),
+        ]);
+
+        // Call LLM
+        let response_text = match self.call_model(&user_prompt).await {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::error!(error = %e, "Model call failed for compression");
+                return;
+            }
+        };
+
+        // Parse — strict, no fallback
+        let moment = match handlers::parse_moment_response(&response_text) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to parse moment response");
+                return;
+            }
+        };
+
+        // Write moment file
+        let timestamp = Utc::now();
+        let sanitized_channel = channel.replace(['/', '\\', ' '], "-");
+        let filename = format!("{}-{}.md", sanitized_channel, timestamp.format("%Y%m%d%H%M%S"));
+        let moment_path = self.config.moments_dir.join(&filename);
+
+        let content = format!(
+            "---\nchannel: {}\nturns: {}-{}\ncreated: {}\nauthor: spectator\ntype: moment\n---\n\n{}",
+            channel,
+            moment.start_turn,
+            moment.end_turn,
+            timestamp.to_rfc3339(),
+            moment.narrative,
+        );
+
+        if let Err(e) = tokio::fs::create_dir_all(&self.config.moments_dir).await {
+            tracing::error!(error = %e, "Failed to create moments directory");
+            return;
         }
 
-        // Moves file should exist
-        let moves_path = temp.path().join("embeddings/moves/general.md");
-        assert!(moves_path.exists());
+        if let Err(e) = tokio::fs::write(&moment_path, &content).await {
+            tracing::error!(error = %e, "Failed to write moment file");
+            return;
+        }
+
+        self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MomentCreated {
+            summary: moment.narrative,
+            timestamp,
+        }));
+
+        tracing::info!(
+            channel = %channel,
+            turns = format!("{}-{}", moment.start_turn, moment.end_turn),
+            path = %moment_path.display(),
+            "Moment created"
+        );
+    }
+
+    async fn handle_pressure(&self, usage_percent: f64) {
+        let template = match &self.on_pressure {
+            Some(t) => t,
+            None => return,
+        };
+
+        let user_prompt = prompt::substitute(template, &[
+            ("usage_percent", &format!("{:.1}", usage_percent)),
+        ]);
+
+        if let Ok(warning) = self.call_model(&user_prompt).await {
+            self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::Warning {
+                content: warning,
+                timestamp: Utc::now(),
+            }));
+        }
+    }
+
+    /// Call the model with the spectator's identity as system prompt.
+    async fn call_model(&self, user_prompt: &str) -> Result<String, String> {
+        use crate::r#loop::context::ChatMessage;
+
+        let messages = vec![
+            ChatMessage::system(self.identity.clone()),
+            ChatMessage::user(user_prompt.to_string()),
+        ];
+
+        let response = self
+            .model_client
+            .complete(&messages, &[])
+            .await
+            .map_err(|e| format!("Model error: {}", e))?;
+
+        response
+            .content
+            .ok_or_else(|| "Model returned no content".to_string())
     }
 }
