@@ -3,7 +3,6 @@
 use crate::inbox::{format_inbox_line, build_discord_path, append_line, sanitize_name};
 use crate::metrics::{get_rss_bytes, LoopStateLabel};
 use crate::policy::HealthStatus;
-use crate::r#loop::LoopEvent;
 use crate::state::AppState;
 use river_adapter::{RegisterRequest, RegisterResponse};
 use axum::{
@@ -277,12 +276,6 @@ async fn handle_incoming(
 
     tracing::debug!(path = %inbox_path.display(), "Message written to inbox");
 
-    // Send inbox update to the loop
-    if state.loop_tx.send(LoopEvent::InboxUpdate(vec![inbox_path.clone()])).await.is_err() {
-        tracing::error!("Failed to send inbox update to loop - channel closed");
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
-    }
-
     tracing::info!(
         channel = %msg.channel,
         author = %msg.author.name,
@@ -335,7 +328,7 @@ mod tests {
     use crate::db::Database;
     use crate::metrics::AgentMetrics;
     use crate::policy::HealthPolicy;
-    use crate::r#loop::MessageQueue;
+    use crate::queue::MessageQueue;
     use crate::state::GatewayConfig;
     use crate::subagent::SubagentManager;
     use crate::tools::ToolRegistry;
@@ -344,10 +337,10 @@ mod tests {
     use river_core::{AgentBirth, SnowflakeGenerator};
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::{mpsc, RwLock};
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
-    fn test_state() -> (Arc<AppState>, mpsc::Receiver<LoopEvent>) {
+    fn test_state() -> Arc<AppState> {
         let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
@@ -365,7 +358,6 @@ mod tests {
 
         let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        let (loop_tx, loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
@@ -378,13 +370,12 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/test"),
         )));
-        // No auth token for basic tests - tests that need auth should set it explicitly
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, None, subagent_manager, metrics, policy)), loop_rx)
+        Arc::new(AppState::new(config, db, registry, None, None, message_queue, None, subagent_manager, metrics, policy))
     }
 
     #[tokio::test]
     async fn test_health_check() {
-        let (state, _rx) = test_state();
+        let state = test_state();
         let app = create_router(state);
 
         let response = app
@@ -397,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tools() {
-        let (state, _rx) = test_state();
+        let state = test_state();
         let app = create_router(state);
 
         let response = app
@@ -410,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_incoming() {
-        let (state, _rx) = test_state();
+        let state = test_state();
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -439,7 +430,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    fn test_state_with_auth(token: &str) -> (Arc<AppState>, mpsc::Receiver<LoopEvent>) {
+    fn test_state_with_auth(token: &str) -> Arc<AppState> {
         let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let config = GatewayConfig {
             workspace: PathBuf::from("/tmp/test"),
@@ -457,7 +448,6 @@ mod tests {
 
         let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        let (loop_tx, loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
@@ -470,12 +460,12 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/test"),
         )));
-        (Arc::new(AppState::new(config, db, registry, None, None, loop_tx, message_queue, Some(token.to_string()), subagent_manager, metrics, policy)), loop_rx)
+        Arc::new(AppState::new(config, db, registry, None, None, message_queue, Some(token.to_string()), subagent_manager, metrics, policy))
     }
 
     #[tokio::test]
     async fn test_incoming_requires_auth_when_configured() {
-        let (state, _rx) = test_state_with_auth("secret-token");
+        let state = test_state_with_auth("secret-token");
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -505,7 +495,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_accepts_valid_token() {
-        let (state, _rx) = test_state_with_auth("secret-token");
+        let state = test_state_with_auth("secret-token");
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -535,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_rejects_invalid_token() {
-        let (state, _rx) = test_state_with_auth("secret-token");
+        let state = test_state_with_auth("secret-token");
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -565,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_returns_rich_response() {
-        let (state, _rx) = test_state();
+        let state = test_state();
         let app = create_router(state);
 
         let response = app
@@ -588,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_includes_policy_info() {
-        let (state, _rx) = test_state();
+        let state = test_state();
         let app = create_router(state);
 
         let response = app
@@ -612,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_returns_503_for_needs_attention() {
-        let (state, _rx) = test_state();
+        let state = test_state();
 
         // Escalate the policy to NeedsAttention
         {
@@ -638,7 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_returns_200_for_degraded() {
-        let (state, _rx) = test_state();
+        let state = test_state();
 
         // Degrade the policy (simulate some errors)
         {

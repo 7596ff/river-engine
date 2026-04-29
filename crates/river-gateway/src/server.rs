@@ -10,7 +10,8 @@ use crate::spectator::{SpectatorTask, SpectatorConfig};
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
-use crate::r#loop::{MessageQueue, ModelClient};
+use crate::model::ModelClient;
+use crate::queue::MessageQueue;
 use crate::watchdog::{spawn_watchdog_task, notify_ready};
 use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
@@ -311,8 +312,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     tracing::info!("Registered {} tools total", registry.names().len());
 
-    // Create loop components (loop_tx used by API, message_queue shared)
-    let (loop_tx, _loop_rx) = mpsc::channel(256);
     let message_queue = Arc::new(MessageQueue::new());
 
     // Load auth token if configured
@@ -349,7 +348,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         registry,
         embedding_client,
         redis_client,
-        loop_tx,
         message_queue.clone(),
         auth_token,
         subagent_manager,

@@ -9,7 +9,7 @@ pub mod handlers;
 pub mod prompt;
 
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
-use crate::r#loop::ModelClient;
+use crate::model::ModelClient;
 use crate::session::PRIMARY_SESSION_ID;
 use chrono::Utc;
 use river_core::SnowflakeGenerator;
@@ -324,7 +324,7 @@ impl SpectatorTask {
 
     /// Call the model with the spectator's identity as system prompt.
     async fn call_model(&self, user_prompt: &str) -> Result<String, String> {
-        use crate::r#loop::context::ChatMessage;
+        use crate::model::ChatMessage;
 
         let messages = vec![
             ChatMessage::system(self.identity.clone()),

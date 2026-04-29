@@ -2,7 +2,7 @@
 
 use crate::embeddings::VectorStore;
 use crate::flash::FlashQueue;
-use crate::r#loop::context::ChatMessage;
+use crate::model::ChatMessage;
 use std::path::PathBuf;
 
 /// Token budget allocation for context layers

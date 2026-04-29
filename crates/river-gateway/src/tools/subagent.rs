@@ -2,7 +2,7 @@
 //!
 //! These tools allow the parent agent to spawn and manage subagents.
 
-use crate::r#loop::ModelClient;
+use crate::model::ModelClient;
 use crate::subagent::{
     create_subagent_registry, SubagentConfig, SubagentManager, SubagentRunner,
     SubagentResult, SubagentType,

@@ -9,8 +9,8 @@
 
 use super::{InternalQueue, SubagentResult, SubagentStatus, SubagentType};
 use crate::preferences::{Preferences, format_current_time};
-use crate::r#loop::{ChatMessage, ContextBuilder, ModelClient, ToolCallRequest};
-use crate::tools::{ToolCall, ToolExecutor, ToolRegistry};
+use crate::model::{ChatMessage, ModelClient, ToolCallRequest};
+use crate::tools::{ToolCall, ToolExecutor, ToolRegistry, ToolSchema};
 use river_core::{RiverError, Snowflake};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,7 +46,8 @@ pub struct SubagentRunner {
     queue: Arc<InternalQueue>,
     shutdown_rx: oneshot::Receiver<()>,
     result_tx: Option<oneshot::Sender<SubagentResult>>,
-    context: ContextBuilder,
+    messages: Vec<ChatMessage>,
+    tools: Vec<ToolSchema>,
     config: SubagentConfig,
 }
 
@@ -73,7 +74,8 @@ impl SubagentRunner {
             queue,
             shutdown_rx,
             result_tx: Some(result_tx),
-            context: ContextBuilder::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
             config,
         }
     }
@@ -126,7 +128,7 @@ impl SubagentRunner {
 
     /// Build the initial context for the subagent
     async fn build_initial_context(&mut self) {
-        self.context.clear();
+        self.messages.clear();
 
         // System prompt for subagent
         let prefs = Preferences::load(&self.config.workspace);
@@ -145,14 +147,13 @@ impl SubagentRunner {
             self.task,
             time_str
         );
-        self.context.add_message(ChatMessage::system(system_prompt));
+        self.messages.push(ChatMessage::system(system_prompt));
 
         // Add the task as a user message
-        self.context
-            .add_message(ChatMessage::user(format!("Execute task: {}", self.task)));
+        self.messages.push(ChatMessage::user(format!("Execute task: {}", self.task)));
 
         // Set available tools
-        self.context.set_tools(self.tool_executor.schemas());
+        self.tools = self.tool_executor.schemas();
     }
 
     /// Run as a task worker (terminates when no tool calls)
@@ -173,17 +174,16 @@ impl SubagentRunner {
             // Call model
             let response = self
                 .model_client
-                .complete(self.context.messages(), self.context.tools())
+                .complete(&self.messages, &self.tools)
                 .await?;
 
-            // Add assistant response to context
+            // Add assistant response to messages
             let tool_calls = if response.tool_calls.is_empty() {
                 None
             } else {
                 Some(response.tool_calls.clone())
             };
-            self.context
-                .add_assistant_response(response.content.clone(), tool_calls);
+            self.messages.push(ChatMessage::assistant(response.content.clone(), tool_calls));
 
             // Save content for result
             if let Some(content) = &response.content {
@@ -234,7 +234,7 @@ impl SubagentRunner {
             // Call model
             let response = self
                 .model_client
-                .complete(self.context.messages(), self.context.tools())
+                .complete(&self.messages, &self.tools)
                 .await?;
 
             let tool_calls = if response.tool_calls.is_empty() {
@@ -242,8 +242,7 @@ impl SubagentRunner {
             } else {
                 Some(response.tool_calls.clone())
             };
-            self.context
-                .add_assistant_response(response.content.clone(), tool_calls);
+            self.messages.push(ChatMessage::assistant(response.content.clone(), tool_calls));
 
             if let Some(content) = &response.content {
                 last_content = content.clone();
@@ -279,7 +278,7 @@ impl SubagentRunner {
         );
 
         for msg in messages {
-            self.context.add_message(ChatMessage::system(format!(
+            self.messages.push(ChatMessage::system(format!(
                 "[Parent Message] {}",
                 msg.content
             )));
@@ -319,9 +318,14 @@ impl SubagentRunner {
             results.push(result);
         }
 
-        // Add results to context
-        self.context
-            .add_tool_results(results, Vec::new());
+        // Add tool results to messages
+        for result in results {
+            let content = match result.result {
+                Ok(r) => r.output,
+                Err(e) => format!("Error: {}", e),
+            };
+            self.messages.push(ChatMessage::tool(result.tool_call_id, content));
+        }
 
         Ok(())
     }

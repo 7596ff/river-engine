@@ -1,7 +1,6 @@
 //! Model client supporting OpenAI-compatible and Anthropic APIs
 
-use crate::r#loop::context::ChatMessage;
-use crate::r#loop::state::{FunctionCall, ToolCallRequest};
+use super::types::{ChatMessage, FunctionCall, ToolCallRequest};
 use crate::tools::ToolSchema;
 use river_core::RiverError;
 use serde::{Deserialize, Serialize};

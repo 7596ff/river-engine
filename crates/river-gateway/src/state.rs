@@ -5,14 +5,14 @@ use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
-use crate::r#loop::{LoopEvent, MessageQueue};
+use crate::queue::MessageQueue;
 use crate::redis::{RedisClient, RedisConfig};
 use crate::subagent::SubagentManager;
 use crate::tools::{ToolExecutor, ToolRegistry};
 use river_core::{AgentBirth, SnowflakeGenerator};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 
 /// Shared application state
 pub struct AppState {
@@ -22,7 +22,6 @@ pub struct AppState {
     pub tool_executor: Arc<RwLock<ToolExecutor>>,
     pub embedding_client: Option<Arc<EmbeddingClient>>,
     pub redis_client: Option<Arc<RedisClient>>,
-    pub loop_tx: mpsc::Sender<LoopEvent>,
     pub message_queue: Arc<MessageQueue>,
     /// Bearer token for authentication (if configured)
     pub auth_token: Option<String>,
@@ -65,7 +64,6 @@ impl AppState {
         registry: ToolRegistry,
         embedding_client: Option<EmbeddingClient>,
         redis_client: Option<RedisClient>,
-        loop_tx: mpsc::Sender<LoopEvent>,
         message_queue: Arc<MessageQueue>,
         auth_token: Option<String>,
         subagent_manager: Arc<RwLock<SubagentManager>>,
@@ -82,7 +80,6 @@ impl AppState {
             tool_executor: Arc::new(RwLock::new(executor)),
             embedding_client: embedding_client.map(Arc::new),
             redis_client: redis_client.map(Arc::new),
-            loop_tx,
             message_queue,
             config,
             auth_token,
@@ -123,7 +120,6 @@ mod tests {
 
         let db = Arc::new(Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
-        let (loop_tx, _loop_rx) = mpsc::channel(256);
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
         let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
@@ -142,7 +138,6 @@ mod tests {
             registry,
             None,
             None,
-            loop_tx,
             message_queue,
             None,
             subagent_manager,
