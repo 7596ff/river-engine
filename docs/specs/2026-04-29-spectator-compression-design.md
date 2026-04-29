@@ -22,14 +22,19 @@ Instead, the spectator queries the messages table directly for the turn's messag
 
 A new `turn_number INTEGER` column is added to the messages table. A turn begins with each new user message. All messages within that conversational cycle (assistant responses, tool calls, tool results, system messages) share the same turn number. The agent increments the turn counter on each new user input.
 
-This requires a new migration (`005_messages_turn_number.sql`):
+This is added directly to the existing `001_messages.sql` migration (fresh DB, no backward compatibility needed):
 
 ```sql
-ALTER TABLE messages ADD COLUMN turn_number INTEGER;
+turn_number INTEGER NOT NULL
+```
+
+With index:
+
+```sql
 CREATE INDEX IF NOT EXISTS idx_messages_turn ON messages (session_id, turn_number);
 ```
 
-The agent is responsible for setting `turn_number` on every message it persists. The spectator queries:
+No separate migration file. The agent sets `turn_number` on every message it persists. The spectator queries:
 
 ```sql
 SELECT * FROM messages WHERE session_id = ? AND turn_number = ? ORDER BY created_at
@@ -87,7 +92,9 @@ On each `TurnComplete` event, the spectator:
 
 **Fallback**: if the model call fails (timeout, connection error, malformed response), write a fallback summary constructed from the message roles and tool names (e.g., "User message → assistant response with tools: read, write") so the moves table always gets an entry. Log a warning. The turn is never lost.
 
-If the messages query returns empty (timing issue — messages not yet persisted), skip this turn and log a warning. The move will be missing but subsequent moments can still compress the surrounding turns.
+**Ordering guarantee**: the agent must persist all messages for the turn to the database *before* emitting `TurnComplete` on the event bus. This eliminates the race condition where the spectator queries for messages that haven't been written yet. This requires a change to `agent/task.rs`: move `persist_messages()` (or equivalent) before the `bus.publish(TurnComplete)` call.
+
+If the messages query returns empty despite this guarantee (bug or DB error), skip this turn and log an error. The move will be missing but subsequent moments can still compress the surrounding turns.
 
 ---
 
@@ -179,26 +186,27 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 ### river-db
 
 - New file: `src/migrations/004_moves.sql`
-- New file: `src/migrations/005_messages_turn_number.sql` — adds `turn_number` column and index to messages
 - New file: `src/moves.rs` — `Move` struct, CRUD methods on `Database`
-- `schema.rs` — add `004_moves` and `005_messages_turn_number` to migration list
-- `messages.rs` — add `turn_number: Option<u64>` field to `Message` struct, update insert/query methods, add `get_turn_messages(session_id, turn_number)` method
+- `schema.rs` — add `004_moves` to migration list
+- `migrations/001_messages.sql` — add `turn_number INTEGER NOT NULL` column and `idx_messages_turn` index to messages table (fresh DB, no backward compat needed)
+- `messages.rs` — add `turn_number: u64` field to `Message` struct, update insert/query methods, add `get_turn_messages(session_id, turn_number)` method
 - `lib.rs` — add `pub mod moves` and re-exports
 
 ### river-gateway (spectator)
 
 - `compress.rs` — rewritten:
-  - `Compressor` takes a `Database` handle via `Arc<Mutex<Database>>` (matching the existing pattern in `AgentLoop`) instead of `embeddings_dir: PathBuf`
+  - `Compressor` takes a `Database` handle via `Arc<Mutex<Database>>` (matching the existing pattern in `AgentLoop`) instead of `embeddings_dir: PathBuf`. All DB access uses lock-query-drop: acquire the mutex, perform the synchronous rusqlite operation, drop the guard, then proceed to any `.await` points. The mutex is never held across an await.
   - Constructor also takes `moments_dir: PathBuf` (for writing moment files to `embeddings/moments/`)
-  - `update_moves()` calls LLM then inserts to DB. Falls back to heuristic on model failure.
-  - `create_moment()` reads from DB, calls LLM, parses turn range from response, writes to `embeddings/moments/`
+  - `update_moves()` queries messages from DB, calls LLM, inserts move to DB. On model failure, falls back to a summary built from message roles and tool names.
+  - `create_moment()` reads moves from DB, calls LLM, parses turn range from response, writes to `embeddings/moments/`
   - `count_moves()` delegates to `Database::count_moves()`
-  - `classify_move()` removed
+  - `classify_move()` deleted
 
 - `mod.rs`:
   - `SpectatorConfig` gains `prompts_dir: PathBuf`
-  - `SpectatorTask` gains `Arc<Mutex<Database>>` handle
-  - `SpectatorTask::new()` takes DB handle parameter (same `Arc<Mutex<Database>>` already used by `AgentLoop`)
+  - `SpectatorTask` gains `Arc<Mutex<Database>>` handle (same instance used by `AgentLoop`)
+  - `SpectatorTask::new()` takes DB handle parameter
+  - All DB access in the spectator uses lock-query-drop: acquire mutex, do sync operation, drop guard before any `.await`
   - Prompt files loaded in `run()` at startup alongside identity
   - `COMPRESSION_MOVES_THRESHOLD` changed from 15 to 50
   - `should_compress()` updated to use DB count
