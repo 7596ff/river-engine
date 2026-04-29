@@ -49,7 +49,6 @@ New methods on `Database`:
 - `get_moves(channel: &str, limit: usize) → RiverResult<Vec<Move>>`  — ordered by turn_number ascending
 - `get_max_turn(channel: &str) → RiverResult<Option<u64>>` — the cursor (highest turn number with a move)
 - `count_moves(channel: &str) → RiverResult<usize>`
-No `delete_moves` method. Moves accumulate permanently. If cleanup is ever needed, it's a manual database operation, not an API surface.
 
 ---
 
@@ -65,7 +64,7 @@ On each `TurnComplete` event, the spectator:
 4. Writes the LLM response as the `summary` field in a new moves row via `insert_move()`
 5. Emits `MovesUpdated { channel }` on the event bus
 
-**Fallback**: if the model call fails (timeout, connection error, malformed response), write a heuristic one-liner using the existing `classify_move()` logic so the moves table always gets an entry. Log a warning. The turn is never lost.
+**Fallback**: if the model call fails (timeout, connection error, malformed response), write the raw `transcript_summary` truncated to 200 chars as the move summary so the moves table always gets an entry. Log a warning. The turn is never lost.
 
 ---
 
@@ -138,9 +137,8 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 - `Compressor::read_moves()` — replaced by `Database::get_moves()`
 - `Compressor::archive_moves()` — moves stay in DB, no archival step
 - `Compressor::list_channels()` — replaced by `SELECT DISTINCT channel FROM moves`
+- `Compressor::classify_move()` — removed entirely
 - 80-char truncation of transcript summaries
-
-Note: `Compressor::classify_move()` is retained as a private fallback method (see Move Generation fallback), not removed.
 
 ## What Stays Unchanged
 
@@ -170,7 +168,7 @@ Note: `Compressor::classify_move()` is retained as a private fallback method (se
   - `update_moves()` calls LLM then inserts to DB. Falls back to heuristic on model failure.
   - `create_moment()` reads from DB, calls LLM, parses turn range from response, writes to `embeddings/moments/`
   - `count_moves()` delegates to `Database::count_moves()`
-  - `classify_move()` retained as private fallback method
+  - `classify_move()` removed
 
 - `mod.rs`:
   - `SpectatorConfig` gains `prompts_dir: PathBuf`
@@ -198,7 +196,6 @@ These are user-editable. The spectator reads them; it does not write them.
 ### Update
 - `test_update_moves_creates_file` → `test_update_moves_inserts_to_db`
 - `test_update_moves_appends` → `test_update_moves_sequential_turns`
-- `test_classify_move_types` — keep, now tests fallback path
 - `test_create_moment` → verify writes to `embeddings/moments/`, verify YAML frontmatter includes parsed turn range
 - `test_should_compress_on_interval` — update threshold to 50
 - `test_compression_trigger` — update threshold to 50
