@@ -65,7 +65,14 @@ messages: Vec<ChatMessage>,
 tools: Vec<ToolSchema>,
 ```
 
-The `add_tool_results` helper logic (~15 lines) inlines into the runner. No abstraction needed for a single consumer.
+Seven `ContextBuilder` method calls to replace:
+- `self.context.clear()` → `self.messages.clear()`
+- `self.context.add_message(msg)` → `self.messages.push(msg)`
+- `self.context.set_tools(schemas)` → `self.tools = schemas`
+- `self.context.messages()` → `&self.messages`
+- `self.context.tools()` → `&self.tools`
+- `self.context.add_assistant_response(content, tool_calls)` → `self.messages.push(ChatMessage::assistant(content, tool_calls))`
+- `self.context.add_tool_results(results, incoming)` → inline loop: push `ChatMessage::tool()` per result, then system message for incoming if non-empty (~15 lines)
 
 ### Dead plumbing removal
 
@@ -77,10 +84,13 @@ Removing `LoopEvent` forces removal of:
 
 This is mechanical — deleting dead code that references a deleted type. The send was going nowhere (receiver immediately dropped in `server.rs`).
 
+**Note:** This is a behavioral bugfix. Currently `handle_incoming` always returns 503 because `loop_tx.send()` fails (receiver dropped). After removing the send, the endpoint will correctly return 200. The inbox file write was always succeeding; only the dead wake signal was "failing."
+
 ### Import updates
 
 Every `use crate::r#loop::X` becomes `use crate::model::X` or `use crate::queue::MessageQueue`:
 
+- `lib.rs` — remove `pub mod r#loop;`, add `pub mod model;` and `pub mod queue;`
 - `agent/task.rs` — `ModelClient`, `MessageQueue`, `ChatMessage`, `ToolCallRequest`
 - `agent/context.rs` — `ChatMessage`
 - `spectator/mod.rs` — `ModelClient`, `ChatMessage` (in tests)
@@ -89,6 +99,9 @@ Every `use crate::r#loop::X` becomes `use crate::model::X` or `use crate::queue:
 - `api/routes.rs` — remove `LoopEvent` import and send call
 - `tools/subagent.rs` — `ModelClient`
 - `subagent/runner.rs` — `ChatMessage`, `ModelClient`, `ToolCallRequest` (remove `ContextBuilder`)
+
+Within the moved files themselves, internal `use crate::r#loop::` imports must be rewritten:
+- `model/client.rs` — `ChatMessage` becomes `use super::types::ChatMessage`, `ToolCallRequest`/`FunctionCall` become `use super::types::{ToolCallRequest, FunctionCall}`
 
 ### Not in scope
 
@@ -103,7 +116,7 @@ The following are known dead weight noted during analysis but not addressed here
 
 ### Test impact
 
-- All `loop/` module tests deleted with the module (~25 tests)
+- All `loop/` module tests deleted with the module (~49 tests across mod.rs, state.rs, context.rs, model.rs, persistence.rs)
 - `api/routes.rs` test helpers that construct `AppState` lose the `loop_tx` parameter
-- No behavioral change to any live code path
+- One behavioral bugfix: `handle_incoming` stops returning 503 (see Dead plumbing removal)
 - Build must pass with 0 deprecated warnings from the `loop` module
