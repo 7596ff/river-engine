@@ -12,9 +12,28 @@ The context assembly design (stream/engine/context-assembly-design.md) describes
 
 This spec builds the compression pipeline. Context assembly integration is deferred to a separate spec.
 
-### transcript_summary provenance
+### How the spectator gets turn content
 
-The `transcript_summary` field in `TurnComplete` events is constructed in `agent/task.rs` via `format!()`, combining the assistant's response content and tool call names. Its length is bounded by the model's output — typically a few hundred to a few thousand characters. This is what the spectator sends to its model for move generation.
+The `transcript_summary` field in `TurnComplete` events is currently a stats line (`"Turn 5 completed: 2 messages, 3 tool calls (0 failed)"`), not actual content. The spectator ignores it.
+
+Instead, the spectator queries the messages table directly for the turn's messages using the `turn_number`. This gives it the raw conversational material — user input, assistant response, tool calls and results — and lets it form its own structural summary without depending on the agent to self-summarize.
+
+### Turn numbering
+
+A new `turn_number INTEGER` column is added to the messages table. A turn begins with each new user message. All messages within that conversational cycle (assistant responses, tool calls, tool results, system messages) share the same turn number. The agent increments the turn counter on each new user input.
+
+This requires a new migration (`005_messages_turn_number.sql`):
+
+```sql
+ALTER TABLE messages ADD COLUMN turn_number INTEGER;
+CREATE INDEX IF NOT EXISTS idx_messages_turn ON messages (session_id, turn_number);
+```
+
+The agent is responsible for setting `turn_number` on every message it persists. The spectator queries:
+
+```sql
+SELECT * FROM messages WHERE session_id = ? AND turn_number = ? ORDER BY created_at
+```
 
 ---
 
@@ -56,15 +75,19 @@ New methods on `Database`:
 
 On each `TurnComplete` event, the spectator:
 
-1. Receives `{ channel, turn_number, transcript_summary, tool_calls }`
-2. Loads the move prompt from `workspace/spectator/prompts/move.md` (loaded once at startup, cached)
-3. Calls the model client with:
+1. Receives `{ channel, turn_number, tool_calls }` (ignores `transcript_summary`)
+2. Queries the messages table for all messages with that `turn_number` and `session_id`
+3. Formats the messages into a readable transcript (role, content, tool calls/results)
+4. Loads the move prompt from `workspace/spectator/prompts/move.md` (loaded once at startup, cached)
+5. Calls the model client with:
    - System prompt: spectator identity (AGENTS.md + IDENTITY.md + RULES.md, concatenated as today)
-   - User prompt: the move prompt template with `{transcript_summary}` and `{tool_calls}` substituted
-4. Writes the LLM response as the `summary` field in a new moves row via `insert_move()`
-5. Emits `MovesUpdated { channel }` on the event bus
+   - User prompt: the move prompt template with the formatted transcript substituted
+6. Writes the LLM response as the `summary` field in a new moves row via `insert_move()`
+7. Emits `MovesUpdated { channel }` on the event bus
 
-**Fallback**: if the model call fails (timeout, connection error, malformed response), write the raw `transcript_summary` truncated to 200 chars as the move summary so the moves table always gets an entry. Log a warning. The turn is never lost.
+**Fallback**: if the model call fails (timeout, connection error, malformed response), write a fallback summary constructed from the message roles and tool names (e.g., "User message → assistant response with tools: read, write") so the moves table always gets an entry. Log a warning. The turn is never lost.
+
+If the messages query returns empty (timing issue — messages not yet persisted), skip this turn and log a warning. The move will be missing but subsequent moments can still compress the surrounding turns.
 
 ---
 
@@ -156,8 +179,10 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
 ### river-db
 
 - New file: `src/migrations/004_moves.sql`
+- New file: `src/migrations/005_messages_turn_number.sql` — adds `turn_number` column and index to messages
 - New file: `src/moves.rs` — `Move` struct, CRUD methods on `Database`
-- `schema.rs` — add `004_moves` to migration list
+- `schema.rs` — add `004_moves` and `005_messages_turn_number` to migration list
+- `messages.rs` — add `turn_number: Option<u64>` field to `Message` struct, update insert/query methods, add `get_turn_messages(session_id, turn_number)` method
 - `lib.rs` — add `pub mod moves` and re-exports
 
 ### river-gateway (spectator)
@@ -177,6 +202,11 @@ The `SpectatorConfig` struct gains a `prompts_dir: PathBuf` field, defaulting to
   - Prompt files loaded in `run()` at startup alongside identity
   - `COMPRESSION_MOVES_THRESHOLD` changed from 15 to 50
   - `should_compress()` updated to use DB count
+
+### river-gateway (agent)
+
+- `agent/task.rs` — the agent maintains a `turn_number: u64` counter, incremented on each new user message. All messages persisted during that cycle get the current turn number. The `TurnComplete` event continues to carry `turn_number` as it does today.
+- `loop/mod.rs` (deprecated AgentLoop) — same change if this code path is still active: tag persisted messages with turn number.
 
 ### New workspace files (defaults)
 
@@ -208,3 +238,5 @@ These are user-editable. The spectator reads them; it does not write them.
 - `test_moment_fallback_on_parse_failure` — malformed response uses full DB range
 - `test_move_fallback_on_model_failure` — heuristic one-liner written when LLM is unavailable
 - `test_moves_persist_after_moment` — moment creation does not delete moves
+- `test_get_turn_messages` — messages with matching session_id and turn_number returned in order
+- `test_spectator_queries_messages_not_summary` — spectator uses DB messages, not transcript_summary field
