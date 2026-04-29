@@ -1,25 +1,19 @@
-//! Adapter error types.
+//! Adapter error types
 
-use crate::feature::FeatureId;
+use crate::capabilities::Feature;
+use thiserror::Error;
 
-/// Errors that can occur in adapter operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum AdapterError {
-    #[error("connection failed: {0}")]
-    Connection(String),
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
 
-    #[error("request timeout")]
-    Timeout,
+    #[error("Adapter not found: {0}")]
+    NotFound(String),
 
-    #[error("feature not supported: {0:?}")]
-    Unsupported(FeatureId),
+    #[error("Feature not supported: {0:?}")]
+    FeatureNotSupported(Feature),
 
-    #[error("rate limited, retry after {retry_after_ms}ms")]
-    RateLimited { retry_after_ms: u64 },
-
-    #[error("platform error: {0}")]
-    Platform(String),
-
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
+    #[error("Adapter error: {0}")]
+    Other(String),
 }

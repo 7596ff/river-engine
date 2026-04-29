@@ -3,14 +3,14 @@ name = "river-adapter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+description = "Types-only library for adapter ↔ worker communication"
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
-chrono.workspace = true
-thiserror.workspace = true
-async-trait = "0.1"
-reqwest.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true
+river-protocol = { path = "../river-protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+utoipa = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }

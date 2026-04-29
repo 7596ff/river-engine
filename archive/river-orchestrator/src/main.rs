@@ -1,170 +1,265 @@
+//! River Orchestrator - Process supervisor for River Engine.
+//!
+//! Spawns workers, adapters, and embed services, maintains registry,
+//! handles model/role switching, and manages respawn policy.
+
+mod config;
+mod http;
+mod model;
+mod registry;
+mod respawn;
+mod supervisor;
+
 use clap::Parser;
-use river_orchestrator::{
-    api::create_router,
-    config::OrchestratorConfig,
-    discovery::ModelScanner,
-    external::ExternalModelsFile,
-    process::ProcessConfig,
-    resources::ResourceConfig,
-    OrchestratorState,
-};
+use config::load_config;
+use http::{router, AppState};
+use registry::new_shared_registry;
+use respawn::new_shared_respawn_manager;
+use supervisor::{new_shared_supervisor, run_health_checks, spawn_dyad};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
 #[command(name = "river-orchestrator")]
-#[command(about = "River Engine Orchestrator - Coordination Service")]
+#[command(about = "Process supervisor for River Engine")]
 struct Args {
-    /// Port to listen on
-    #[arg(short, long, default_value = "5000")]
-    port: u16,
+    /// Config file path
+    #[arg(short, long, default_value = "river.json")]
+    config: PathBuf,
 
-    /// Health threshold in seconds
-    #[arg(long, default_value = "120")]
-    health_threshold: u64,
-
-    /// Directories to scan for GGUF models (comma-separated)
-    #[arg(long, value_delimiter = ',')]
-    model_dirs: Vec<PathBuf>,
-
-    /// Path to external models config JSON file
-    #[arg(long)]
-    external_models: Option<PathBuf>,
-
-    /// Idle timeout in seconds before unloading models
-    #[arg(long, default_value = "900")]
-    idle_timeout: u64,
-
-    /// Path to llama-server binary
-    #[arg(long, default_value = "llama-server")]
-    llama_server_path: PathBuf,
-
-    /// Port range for llama-server instances (start-end)
-    #[arg(long, default_value = "8080-8180")]
-    port_range: String,
-
-    /// Reserved VRAM in MB
-    #[arg(long, default_value = "500")]
-    reserve_vram_mb: u64,
-
-    /// Reserved RAM in MB
-    #[arg(long, default_value = "2000")]
-    reserve_ram_mb: u64,
-}
-
-fn parse_port_range(s: &str) -> (u16, u16) {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() == 2 {
-        let start = parts[0].parse().unwrap_or(8080);
-        let end = parts[1].parse().unwrap_or(8180);
-        (start, end)
-    } else {
-        (8080, 8180)
-    }
+    /// Override config port
+    #[arg(short, long)]
+    port: Option<u16>,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive("river_orchestrator=info".parse()?))
+        .init();
 
     let args = Args::parse();
 
-    tracing::info!("Starting River Orchestrator");
-    tracing::info!("Port: {}", args.port);
-    tracing::info!("Health threshold: {}s", args.health_threshold);
+    // Load config
+    tracing::info!("Loading config from {:?}", args.config);
+    let mut config = load_config(&args.config).await?;
 
-    let (port_start, port_end) = parse_port_range(&args.port_range);
+    // Override port if specified
+    if let Some(port) = args.port {
+        config.port = port;
+    }
 
-    // Scan for local models
-    let scanner = ModelScanner::new(args.model_dirs.clone());
-    let local_models = scanner.scan();
-    tracing::info!("Discovered {} local models", local_models.len());
+    let port = config.port;
+    let config = Arc::new(config);
+    let orchestrator_url = format!("http://localhost:{}", port);
 
-    // Load external models
-    let external_models = if let Some(path) = &args.external_models {
-        tracing::info!("Loading external models from {:?}", path);
-        let content = std::fs::read_to_string(path)?;
-        let file: ExternalModelsFile = serde_json::from_str(&content)?;
-        file.external_models
-    } else {
-        Vec::new()
-    };
-    tracing::info!("Loaded {} external models", external_models.len());
+    // Create shared state
+    let registry = new_shared_registry();
+    let supervisor = new_shared_supervisor();
+    let respawn = new_shared_respawn_manager();
+    let client = reqwest::Client::new();
+    let dyad_locks = Arc::new(RwLock::new(HashMap::new()));
 
-    let config = OrchestratorConfig {
-        port: args.port,
-        health_threshold_seconds: args.health_threshold,
-        model_dirs: args.model_dirs,
-        external_models_config: args.external_models,
-        idle_timeout_seconds: args.idle_timeout,
-        llama_server_path: args.llama_server_path.clone(),
-        port_range_start: port_start,
-        port_range_end: port_end,
-        reserve_vram_mb: args.reserve_vram_mb,
-        reserve_ram_mb: args.reserve_ram_mb,
+    let state = AppState {
+        config: config.clone(),
+        registry: registry.clone(),
+        supervisor: supervisor.clone(),
+        respawn: respawn.clone(),
+        client: client.clone(),
+        dyad_locks,
+        orchestrator_url: orchestrator_url.clone(),
     };
 
-    let resource_config = ResourceConfig {
-        reserve_vram_bytes: args.reserve_vram_mb * 1024 * 1024,
-        reserve_ram_bytes: args.reserve_ram_mb * 1024 * 1024,
-    };
+    // Bind HTTP server
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = TcpListener::bind(addr).await?;
+    let actual_addr = listener.local_addr()?;
+    tracing::info!("Orchestrator listening on http://{}", actual_addr);
+    // Print to stdout for test harness discovery (when port 0 is used)
+    println!("Orchestrator listening on http://{}", actual_addr);
 
-    let process_config = ProcessConfig {
-        llama_server_path: args.llama_server_path,
-        port_range_start: port_start,
-        port_range_end: port_end,
-        default_ctx_size: 8192,
-        health_check_timeout: Duration::from_secs(30),
-    };
-
-    let state = Arc::new(OrchestratorState::new(
-        config,
-        local_models,
-        external_models,
-        resource_config,
-        process_config,
-    ));
-
-    // Spawn background loops
-    // Idle eviction loop
-    let state_clone = state.clone();
-    let idle_timeout = Duration::from_secs(args.idle_timeout);
-    tokio::spawn(async move {
-        idle_eviction_loop(state_clone, idle_timeout).await;
+    // Spawn the HTTP server
+    let app = router(state.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await
     });
 
-    // Health check loop
-    let process_manager = state.process_manager.clone();
-    tokio::spawn(async move {
-        river_orchestrator::process::health_check_loop(
-            process_manager,
-            Duration::from_secs(10),
-        ).await;
-    });
+    // Give server a moment to start
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let app = create_router(state);
+    // Spawn embed service if configured
+    if config.embed.is_some() {
+        tracing::info!("Spawning embed service");
+        let mut sup = supervisor.write().await;
+        if let Err(e) = sup.spawn_embed(&orchestrator_url, "embed").await {
+            tracing::warn!("Failed to spawn embed service: {}. Continuing without embedding.", e);
+        }
+        drop(sup);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
-    tracing::info!("Orchestrator listening on {}", addr);
+        // Wait for registration
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Spawn dyads
+    for (dyad_name, dyad_config) in &config.dyads {
+        tracing::info!("Spawning dyad: {}", dyad_name);
+        if let Err(e) = spawn_dyad(&supervisor, &orchestrator_url, dyad_name, dyad_config).await {
+            tracing::error!("Failed to spawn dyad {}: {}", dyad_name, e);
+        }
 
-    Ok(())
-}
+        // Wait for registrations
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 
-async fn idle_eviction_loop(state: Arc<OrchestratorState>, timeout: Duration) {
+    tracing::info!("Startup complete. Entering supervision loop.");
+
+    // Health check interval (60s)
+    let health_interval = Duration::from_secs(60);
+    let mut health_ticker = tokio::time::interval(health_interval);
+
+    // Maximum wake check interval (10s)
+    let max_wake_interval = Duration::from_secs(10);
+
+    // Main supervision loop with shutdown handling
     loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        tokio::select! {
+            _ = health_ticker.tick() => {
+                let dead = run_health_checks(&client, &supervisor).await;
+                for key in dead {
+                    tracing::warn!("Dead process detected: {:?}", key);
 
-        let idle_models = state.process_manager.idle_models(timeout).await;
-        for model_id in idle_models {
-            tracing::info!("Evicting idle model: {}", model_id);
-            if let Err(e) = state.unload_model(&model_id).await {
-                tracing::warn!("Failed to unload {}: {}", model_id, e);
+                    // Remove from supervisor
+                    {
+                        let mut sup = supervisor.write().await;
+                        sup.remove(&key);
+                    }
+
+                    // Respawn based on process type
+                    match &key {
+                        supervisor::ProcessKey::Worker { dyad, side } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_worker(dyad, side);
+                            }
+                            // Respawn worker
+                            let mut sup = supervisor.write().await;
+                            if let Err(e) = sup.spawn_worker(&orchestrator_url, dyad, side.clone()).await {
+                                tracing::error!("Failed to respawn worker: {}", e);
+                            }
+                        }
+                        supervisor::ProcessKey::Adapter { dyad, adapter_type } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_adapter(dyad, adapter_type);
+                            }
+                            // Find adapter config and respawn
+                            if let Some(dyad_config) = config.dyads.get(dyad) {
+                                if let Some(adapter_config) = dyad_config.adapters.iter()
+                                    .find(|a| a.adapter_type() == adapter_type)
+                                {
+                                    let mut sup = supervisor.write().await;
+                                    if let Err(e) = sup.spawn_adapter(&orchestrator_url, dyad, adapter_config).await {
+                                        tracing::error!("Failed to respawn adapter: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        supervisor::ProcessKey::Embed { name } => {
+                            // Remove from registry
+                            {
+                                let mut reg = registry.write().await;
+                                reg.remove_embed(name);
+                            }
+                            // Respawn embed
+                            let mut sup = supervisor.write().await;
+                            if let Err(e) = sup.spawn_embed(&orchestrator_url, name).await {
+                                tracing::error!("Failed to respawn embed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            _ = async {
+                // Calculate dynamic sleep based on next wake time
+                let sleep_duration = {
+                    let mgr = respawn.read().await;
+                    if let Some(next_wake) = mgr.next_wake_time() {
+                        let now = std::time::Instant::now();
+                        if next_wake > now {
+                            let duration = next_wake - now;
+                            // Cap at max_wake_interval
+                            std::cmp::min(duration, max_wake_interval)
+                        } else {
+                            // Already past wake time, check immediately
+                            Duration::from_millis(0)
+                        }
+                    } else {
+                        // No pending wakes, use max interval
+                        max_wake_interval
+                    }
+                };
+                tokio::time::sleep(sleep_duration).await;
+            } => {
+                // Check for sleeping workers ready to wake
+                let ready = {
+                    let mgr = respawn.read().await;
+                    mgr.ready_to_wake()
+                };
+
+                for worker_key in ready {
+                    tracing::info!(
+                        "Waking worker: dyad={}, side={:?}",
+                        worker_key.dyad,
+                        worker_key.side
+                    );
+
+                    // Spawn the worker
+                    {
+                        let mut sup = supervisor.write().await;
+                        if let Err(e) = sup
+                            .spawn_worker(&orchestrator_url, &worker_key.dyad, worker_key.side.clone())
+                            .await
+                        {
+                            tracing::error!("Failed to wake worker: {}", e);
+                            continue;
+                        }
+                    }
+
+                    // Clear respawn state (will be re-populated on next registration)
+                    {
+                        let mut mgr = respawn.write().await;
+                        mgr.clear(&worker_key.dyad, &worker_key.side);
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received shutdown signal");
+                break;
             }
         }
     }
+
+    // Graceful shutdown
+    tracing::info!("Initiating graceful shutdown");
+    {
+        let mut sup = supervisor.write().await;
+        sup.shutdown(Duration::from_secs(300)).await;
+    }
+
+    // Stop the HTTP server
+    server.abort();
+
+    tracing::info!("Shutdown complete");
+    Ok(())
 }

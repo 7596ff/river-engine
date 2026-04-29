@@ -1,22 +1,31 @@
-//! Adapter trait for gateway-side abstraction
+//! Adapter trait definition.
 
-use crate::{AdapterError, Feature, IncomingEvent, SendRequest, SendResponse};
 use async_trait::async_trait;
 
+use crate::error::AdapterError;
+use crate::feature::{FeatureId, OutboundRequest};
+use crate::response::OutboundResponse;
+
+/// Trait that adapter implementations must implement.
 #[async_trait]
 pub trait Adapter: Send + Sync {
-    /// Adapter name
-    fn name(&self) -> &str;
+    /// Adapter type name (e.g. "discord", "slack").
+    fn adapter_type(&self) -> &str;
 
-    /// Check if feature is supported
-    fn supports(&self, feature: &Feature) -> bool;
+    /// Which features this adapter supports.
+    fn features(&self) -> Vec<FeatureId>;
 
-    /// Send a message
-    async fn send(&self, request: SendRequest) -> Result<SendResponse, AdapterError>;
+    /// Check if a specific feature is supported.
+    fn supports(&self, feature: FeatureId) -> bool {
+        self.features().contains(&feature)
+    }
 
-    /// Read channel history (if supported)
-    async fn read_history(&self, channel: &str, limit: usize) -> Result<Vec<IncomingEvent>, AdapterError>;
+    /// Start receiving events, forward to bound Worker.
+    async fn start(&self, worker_endpoint: String) -> Result<(), AdapterError>;
 
-    /// Health check
-    async fn health(&self) -> Result<bool, AdapterError>;
+    /// Execute an outbound request.
+    async fn execute(&self, request: OutboundRequest) -> Result<OutboundResponse, AdapterError>;
+
+    /// Health check.
+    async fn health(&self) -> Result<(), AdapterError>;
 }

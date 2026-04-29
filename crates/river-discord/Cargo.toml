@@ -4,27 +4,30 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Discord adapter for River Engine"
+description = "River Engine Discord adapter using Twilight"
+
+[[bin]]
+name = "river-discord"
+path = "src/main.rs"
 
 [dependencies]
+river-core = { path = "../river-core" }
 river-adapter = { path = "../river-adapter" }
-river-protocol = { path = "../river-protocol" }
-
-tokio = { workspace = true, features = ["sync", "time", "signal"] }
-axum = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-clap = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-twilight-gateway = { workspace = true }
-twilight-http = { workspace = true }
-twilight-model = { workspace = true }
-chrono = { workspace = true }
-async-trait = { workspace = true }
-thiserror = { workspace = true }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+twilight-gateway.workspace = true
+twilight-http.workspace = true
+twilight-model.workspace = true
+twilight-util.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tempfile = "3.10"
+tower = { workspace = true, features = ["util"] }
