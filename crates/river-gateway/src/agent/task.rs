@@ -591,7 +591,8 @@ mod tests {
     fn test_db(temp: &TempDir) -> (Arc<Mutex<Database>>, Arc<SnowflakeGenerator>) {
         let db = init_db(&temp.path().join("test.db")).unwrap();
         let db_arc = Arc::new(Mutex::new(db));
-        let sg = Arc::new(SnowflakeGenerator::new(0));
+        let birth = river_core::AgentBirth::new(2026, 4, 29, 12, 0, 0).unwrap();
+        let sg = Arc::new(SnowflakeGenerator::new(birth));
         (db_arc, sg)
     }
 
