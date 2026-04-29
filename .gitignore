@@ -12,4 +12,4 @@ target/
 Thumbs.db
 
 .env
-.obsidian/
+.obsidian/*
