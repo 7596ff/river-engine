@@ -34,6 +34,7 @@
 - `crates/river-gateway/src/spectator/compress.rs`
 - `crates/river-gateway/src/spectator/curate.rs`
 - `crates/river-gateway/src/spectator/room.rs`
+- `crates/river-gateway/tests/iyou_test.rs`
 
 ---
 
@@ -131,19 +132,32 @@ Expected: compilation errors — `turn_number` field doesn't exist on `Message`.
 
 - [ ] **Step 3: Add turn_number to migration and Message struct**
 
-In `crates/river-db/src/migrations/001_messages.sql`, add after the `metadata TEXT` line:
+In `crates/river-db/src/migrations/001_messages.sql`, add `turn_number` column after `metadata`. The full column list becomes:
 
 ```sql
+CREATE TABLE IF NOT EXISTS messages (
+    id BLOB PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_calls TEXT,
+    tool_call_id TEXT,
+    name TEXT,
+    created_at INTEGER NOT NULL,
+    metadata TEXT,
     turn_number INTEGER NOT NULL DEFAULT 0
+);
 ```
 
-And add the index after the existing indexes:
+Add the index after the existing indexes:
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_messages_turn ON messages(session_id, turn_number);
 ```
 
-In `crates/river-db/src/messages.rs`, add to the `Message` struct:
+Column order in the table: id(0), session_id(1), role(2), content(3), tool_calls(4), tool_call_id(5), name(6), created_at(7), metadata(8), turn_number(9). Adding at the end avoids disrupting existing column indices.
+
+In `crates/river-db/src/messages.rs`, add `turn_number` to the `Message` struct:
 
 ```rust
 pub struct Message {
@@ -154,13 +168,13 @@ pub struct Message {
     pub tool_calls: Option<String>,
     pub tool_call_id: Option<String>,
     pub name: Option<String>,
-    pub turn_number: u64,
     pub created_at: i64,
     pub metadata: Option<String>,
+    pub turn_number: u64,
 }
 ```
 
-Update `from_row` — insert `turn_number: row.get(8)?` and shift `metadata` to index 9:
+Update `from_row` — add `turn_number` at the end (index 9), keeping all existing indices unchanged:
 
 ```rust
 Ok(Self {
@@ -171,9 +185,9 @@ Ok(Self {
     tool_calls: row.get(4)?,
     tool_call_id: row.get(5)?,
     name: row.get(6)?,
-    turn_number: row.get::<_, i64>(7)? as u64,
-    created_at: row.get(8)?,
-    metadata: row.get(9)?,
+    created_at: row.get(7)?,
+    metadata: row.get(8)?,
+    turn_number: row.get::<_, i64>(9)? as u64,
 })
 ```
 
@@ -182,7 +196,7 @@ Update `insert_message` to include `turn_number`:
 ```rust
 pub fn insert_message(&self, msg: &Message) -> RiverResult<()> {
     self.conn().execute(
-        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, turn_number, created_at, metadata)
+        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             msg.id.to_bytes().to_vec(),
@@ -192,19 +206,19 @@ pub fn insert_message(&self, msg: &Message) -> RiverResult<()> {
             msg.tool_calls,
             msg.tool_call_id,
             msg.name,
-            msg.turn_number as i64,
             msg.created_at,
             msg.metadata,
+            msg.turn_number as i64,
         ],
     ).map_err(|e| RiverError::database(e.to_string()))?;
     Ok(())
 }
 ```
 
-Update all SELECT queries to include `turn_number` in the column list (after `name`, before `created_at`):
+Update all SELECT queries to include `turn_number` at the end:
 
 ```sql
-SELECT id, session_id, role, content, tool_calls, tool_call_id, name, turn_number, created_at, metadata
+SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
 ```
 
 Add `get_turn_messages`:
@@ -213,7 +227,7 @@ Add `get_turn_messages`:
 /// Get messages for a specific turn in a session
 pub fn get_turn_messages(&self, session_id: &str, turn_number: u64) -> RiverResult<Vec<Message>> {
     let mut stmt = self.conn().prepare(
-        "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, turn_number, created_at, metadata
+        "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
          FROM messages
          WHERE session_id = ? AND turn_number = ?
          ORDER BY created_at"
@@ -1009,7 +1023,9 @@ pub mod prompt;
 
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::r#loop::ModelClient;
+use crate::session::PRIMARY_SESSION_ID;
 use chrono::Utc;
+use river_core::SnowflakeGenerator;
 use river_db::Database;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1024,8 +1040,6 @@ pub struct SpectatorConfig {
     pub spectator_dir: PathBuf,
     /// Directory for writing moment files
     pub moments_dir: PathBuf,
-    /// Session ID for querying messages
-    pub session_id: String,
     /// Model timeout
     pub model_timeout: std::time::Duration,
 }
@@ -1036,6 +1050,7 @@ pub struct SpectatorTask {
     bus: EventBus,
     model_client: ModelClient,
     db: Arc<Mutex<Database>>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
     /// Cached identity (system prompt)
     identity: String,
     /// Cached prompt templates (None = handler disabled)
@@ -1050,12 +1065,14 @@ impl SpectatorTask {
         bus: EventBus,
         model_client: ModelClient,
         db: Arc<Mutex<Database>>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
         Self {
             config,
             bus,
             model_client,
             db,
+            snowflake_gen,
             identity: String::new(),
             on_turn_complete: None,
             on_compress: None,
@@ -1147,7 +1164,7 @@ impl SpectatorTask {
                     return;
                 }
             };
-            match db.get_turn_messages(&self.config.session_id, turn_number) {
+            match db.get_turn_messages(PRIMARY_SESSION_ID, turn_number) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!(turn = turn_number, error = %e, "Failed to query turn messages");
@@ -1186,11 +1203,8 @@ impl SpectatorTask {
                     return;
                 }
             };
-            let gen = river_core::SnowflakeGenerator::new(
-                river_core::AgentBirth::now(),
-            );
             let m = river_db::Move {
-                id: gen.next_id(river_core::SnowflakeType::Embedding),
+                id: self.snowflake_gen.next_id(river_core::SnowflakeType::Embedding),
                 channel: channel.to_string(),
                 turn_number,
                 summary: summary.clone(),
@@ -1363,104 +1377,233 @@ identity.md required, event prompts optional."
 
 ---
 
-### Task 7: Wire DB to AgentTask and SpectatorTask in server.rs
+### Task 7: Wire DB and SnowflakeGenerator to AgentTask and SpectatorTask in server.rs
 
 **Files:**
-- Modify: `crates/river-gateway/src/server.rs`
 - Modify: `crates/river-gateway/src/agent/task.rs`
+- Modify: `crates/river-gateway/src/server.rs`
+- Delete: `crates/river-gateway/tests/iyou_test.rs`
 
-- [ ] **Step 1: Add DB handle to AgentTask**
+- [ ] **Step 1: Add DB handle and SnowflakeGenerator to AgentTask**
 
 In `crates/river-gateway/src/agent/task.rs`, add to imports:
 
 ```rust
-use river_db::Database;
+use river_db::{Database, Message, MessageRole};
+use crate::session::PRIMARY_SESSION_ID;
+use river_core::{SnowflakeGenerator, SnowflakeType};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 ```
 
-Add to `AgentTask` struct (you'll need to read the full struct to find the right location):
+Add two fields to the `AgentTask` struct (after `last_prompt_tokens`):
 
 ```rust
-db: Arc<Mutex<Database>>,
-turn_number: u64,
+    db: Arc<Mutex<Database>>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
 ```
 
-Add to the `AgentTask::new()` constructor parameters and initialization. The exact changes depend on the current constructor signature — read the file for the current fields and add `db` as a parameter.
-
-- [ ] **Step 2: Update server.rs wiring**
-
-In `crates/river-gateway/src/server.rs`, update the `AgentTask::new()` call (around line 396) to pass `db_arc.clone()`.
-
-Update the `SpectatorTask::new()` call (around line 420) to use the new constructor:
+Update `AgentTask::new()` — add parameters and initialize:
 
 ```rust
-let spectator_config = SpectatorConfig {
-    spectator_dir: config.workspace.join("spectator"),
-    moments_dir: config.workspace.join("embeddings").join("moments"),
-    session_id: "primary".to_string(),
-    model_timeout: Duration::from_secs(60),
-};
+    pub fn new(
+        config: AgentTaskConfig,
+        bus: EventBus,
+        message_queue: Arc<MessageQueue>,
+        model_client: ModelClient,
+        tool_executor: Arc<RwLock<ToolExecutor>>,
+        flash_queue: Arc<FlashQueue>,
+        db: Arc<Mutex<Database>>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
+    ) -> Self {
+        let context_assembler = ContextAssembler::new(
+            config.context_budget.clone(),
+            config.embeddings_dir.clone(),
+        );
 
-let spectator_task = SpectatorTask::new(
-    spectator_config,
-    coordinator.bus().clone(),
-    spectator_model,
-    db_arc.clone(),
-);
+        Self {
+            config,
+            bus,
+            message_queue,
+            model_client,
+            tool_executor,
+            context_assembler,
+            flash_queue,
+            turn_count: 0,
+            channel_context: None,
+            conversation: Vec::new(),
+            last_prompt_tokens: 0,
+            db,
+            snowflake_gen,
+        }
+    }
 ```
 
-Remove the old `SpectatorConfig::from_workspace()` call and the `vector_store` and `flash_queue` arguments that the new constructor doesn't take.
+- [ ] **Step 2: Add persist_turn_messages to AgentTask**
 
-- [ ] **Step 3: Verify compilation**
+Add this method to the `impl AgentTask` block:
+
+```rust
+    /// Persist all conversation messages from this turn to the database.
+    /// Must be called before emitting TurnComplete (ordering guarantee).
+    fn persist_turn_messages(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::error!(error = %e, "DB lock poisoned in persist_turn_messages");
+                return;
+            }
+        };
+
+        let mut persisted = 0;
+        for chat_msg in &self.conversation {
+            // Skip system messages
+            if chat_msg.role == "system" {
+                continue;
+            }
+
+            let role = match chat_msg.role.as_str() {
+                "user" => MessageRole::User,
+                "assistant" => MessageRole::Assistant,
+                "tool" => MessageRole::Tool,
+                _ => continue,
+            };
+
+            let tool_calls_json = chat_msg.tool_calls.as_ref().map(|tc| {
+                serde_json::to_string(tc).unwrap_or_default()
+            });
+
+            let msg = Message {
+                id: self.snowflake_gen.next_id(SnowflakeType::Message),
+                session_id: PRIMARY_SESSION_ID.to_string(),
+                role,
+                content: chat_msg.content.clone(),
+                tool_calls: tool_calls_json,
+                tool_call_id: chat_msg.tool_call_id.clone(),
+                name: chat_msg.name.clone(),
+                created_at: now,
+                metadata: None,
+                turn_number: self.turn_count,
+            };
+
+            if let Err(e) = db.insert_message(&msg) {
+                tracing::warn!(error = %e, "Failed to persist message");
+            } else {
+                persisted += 1;
+            }
+        }
+
+        if persisted > 0 {
+            tracing::debug!(persisted = persisted, turn = self.turn_count, "Messages persisted");
+        }
+    }
+```
+
+- [ ] **Step 3: Update turn_cycle settle section**
+
+In the `turn_cycle` method (around line 336), change the settle section to persist before emitting:
+
+```rust
+        // ========== SETTLE ==========
+        // Persist messages BEFORE emitting TurnComplete (ordering guarantee)
+        self.persist_turn_messages();
+
+        let transcript_summary = format!(
+            "Turn {} completed: {} messages, {} tool calls ({} failed)",
+            self.turn_count,
+            incoming.len(),
+            stats.total_tool_calls,
+            stats.failed_tool_calls
+        );
+
+        self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
+```
+
+- [ ] **Step 4: Update server.rs AgentTask construction**
+
+In `crates/river-gateway/src/server.rs`, update the `AgentTask::new()` call (around line 396):
+
+```rust
+    let agent_task = AgentTask::new(
+        agent_config,
+        coordinator.bus().clone(),
+        message_queue,
+        agent_model_client,
+        state.tool_executor.clone(),
+        flash_queue.clone(),
+        db_arc.clone(),
+        snowflake_gen.clone(),
+    );
+```
+
+- [ ] **Step 5: Update server.rs SpectatorTask construction**
+
+Replace the spectator setup block (around lines 407-428) with:
+
+```rust
+    // Create and spawn spectator task
+    let spectator_model = ModelClient::new(
+        spectator_model_url.clone(),
+        spectator_model_name.clone(),
+        Duration::from_secs(60),
+    )?;
+
+    let spectator_config = SpectatorConfig {
+        spectator_dir: config.workspace.join("spectator"),
+        moments_dir: config.workspace.join("embeddings").join("moments"),
+        model_timeout: Duration::from_secs(60),
+    };
+
+    let spectator_task = SpectatorTask::new(
+        spectator_config,
+        coordinator.bus().clone(),
+        spectator_model,
+        db_arc.clone(),
+        snowflake_gen.clone(),
+    );
+
+    coordinator.spawn_task("spectator", |_| spectator_task.run());
+```
+
+Remove unused imports for `VectorStore` and old `SpectatorConfig::from_workspace` if they cause warnings.
+
+- [ ] **Step 6: Delete iyou_test.rs**
+
+```bash
+rm crates/river-gateway/tests/iyou_test.rs
+```
+
+This test file references `Compressor`, `RoomWriter`, `Curator`, and `SpectatorConfig::from_workspace`, all of which are deleted.
+
+- [ ] **Step 7: Verify compilation**
 
 Run: `cd /home/cassie/river-engine && cargo check -p river-gateway 2>&1 | tail -30`
 
-Expected: may need to fix remaining references to old spectator types. Iterate until clean.
+Iterate until clean. Common fixes needed:
+- Remove unused imports in `server.rs` (`VectorStore`, old spectator types)
+- Update any remaining references to old `SpectatorConfig::from_workspace`
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/cassie/river-engine
-git add crates/river-gateway/src/server.rs crates/river-gateway/src/agent/task.rs
-git commit -m "feat: wire DB to AgentTask and SpectatorTask"
+git add -A crates/river-gateway/
+git commit -m "feat: wire DB to AgentTask/SpectatorTask, delete iyou_test
+
+AgentTask gains Arc<Mutex<Database>> and SnowflakeGenerator.
+persist_turn_messages() called before TurnComplete emission.
+SpectatorTask constructed with new prompt-driven config.
+Old integration test deleted (referenced removed types)."
 ```
 
 ---
 
-### Task 8: Agent persist-before-emit ordering guarantee
-
-**Files:**
-- Modify: `crates/river-gateway/src/agent/task.rs`
-
-- [ ] **Step 1: Add turn numbering and persist-before-emit**
-
-In the agent's turn cycle (the settle section of the turn method around line 336 in `agent/task.rs`), the code currently emits `TurnComplete` immediately. Restructure so that:
-
-1. The agent maintains `self.turn_number`, incremented on each new user message
-2. All messages persisted during the turn get the current `turn_number`
-3. Messages are persisted to DB *before* `bus.publish(TurnComplete)`
-
-The exact code depends on how the agent currently persists messages — it may go through `AgentLoop.persist_messages()` or have its own path. Read the full `agent/task.rs` to find the right insertion points.
-
-The key change: move any DB persistence call to happen before the `bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete { ... }))` line.
-
-- [ ] **Step 2: Verify compilation**
-
-Run: `cd /home/cassie/river-engine && cargo check -p river-gateway 2>&1 | tail -30`
-
-Expected: clean.
-
-- [ ] **Step 3: Commit**
-
-```bash
-cd /home/cassie/river-engine
-git add crates/river-gateway/src/agent/task.rs
-git commit -m "feat(agent): turn numbering and persist-before-emit ordering"
-```
-
----
-
-### Task 9: Full compilation and integration test
+### Task 8: Full compilation and integration test
 
 **Files:**
 - All modified crates
@@ -1487,7 +1630,7 @@ git commit -m "fix: resolve compilation and test issues across workspace"
 
 ---
 
-### Task 10: Create default spectator prompt files
+### Task 9: Create default spectator prompt files
 
 **Files:**
 - Create: example spectator directory with default prompts
