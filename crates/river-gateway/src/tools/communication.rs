@@ -3,174 +3,15 @@
 //! These tools allow the agent to send messages through configured communication adapters.
 
 use crate::conversations::{Author, WriteOp};
-use river_tools::{Tool, ToolResult};
+use super::registry::{Tool, ToolResult};
+use super::adapters::{AdapterRegistry, send_to_adapter};
 use river_core::RiverError;
 use river_adapter::Feature;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
-
-/// Adapter endpoint configuration
-#[derive(Debug, Clone)]
-pub struct AdapterConfig {
-    /// Adapter name (e.g., "discord", "slack")
-    pub name: String,
-    /// Outbound webhook URL (for sending messages)
-    pub outbound_url: String,
-    /// Read URL (for fetching channel history), optional
-    pub read_url: Option<String>,
-    /// Supported features
-    pub features: HashSet<Feature>,
-}
-
-/// Registry of configured adapters
-#[derive(Debug, Clone, Default)]
-pub struct AdapterRegistry {
-    adapters: HashMap<String, AdapterConfig>,
-}
-
-impl AdapterRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(&mut self, config: AdapterConfig) {
-        self.adapters.insert(config.name.clone(), config);
-    }
-
-    pub fn get(&self, name: &str) -> Option<&AdapterConfig> {
-        self.adapters.get(name)
-    }
-
-    pub fn list(&self) -> Vec<&AdapterConfig> {
-        self.adapters.values().collect()
-    }
-
-    pub fn names(&self) -> Vec<&str> {
-        self.adapters.keys().map(|s| s.as_str()).collect()
-    }
-
-    pub fn supports(&self, name: &str, feature: Feature) -> bool {
-        self.adapters
-            .get(name)
-            .map(|c| c.features.contains(&feature))
-            .unwrap_or(false)
-    }
-}
-
-/// Send a message through an adapter (shared by speak and send_message)
-async fn send_to_adapter(
-    http_client: &reqwest::Client,
-    registry: &AdapterRegistry,
-    adapter: &str,
-    channel_id: &str,
-    content: &str,
-    reply_to: Option<&str>,
-    writer_tx: &mpsc::Sender<WriteOp>,
-    conversation_path: &std::path::Path,
-    agent_author: Author,
-) -> Result<ToolResult, RiverError> {
-    let config = registry
-        .get(adapter)
-        .ok_or_else(|| {
-            error!(
-                adapter = %adapter,
-                available = ?registry.names(),
-                "Unknown adapter"
-            );
-            RiverError::tool(format!("Adapter '{}' not registered", adapter))
-        })?;
-
-    let payload = serde_json::json!({
-        "channel": channel_id,
-        "content": content,
-        "reply_to": reply_to,
-    });
-
-    info!(
-        url = %config.outbound_url,
-        adapter = %adapter,
-        channel_id = %channel_id,
-        content_len = content.len(),
-        "Sending message to adapter"
-    );
-
-    let response = http_client
-        .post(&config.outbound_url)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| {
-            error!(error = %e, url = %config.outbound_url, "HTTP request failed");
-            RiverError::tool(format!("Failed to send message: {}", e))
-        })?;
-
-    let status = response.status();
-
-    if status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-
-        info!(adapter = %adapter, channel_id = %channel_id, "Message sent successfully");
-
-        // Extract message_id from adapter response
-        let message_id = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| format!("out-{}", chrono::Utc::now().timestamp_millis()));
-
-        // Record outgoing message
-        let msg = crate::conversations::Message::outgoing(&message_id, agent_author, content);
-
-        if let Err(e) = writer_tx
-            .send(WriteOp::Message {
-                path: conversation_path.to_path_buf(),
-                msg,
-            })
-            .await
-        {
-            warn!("Failed to record outgoing message: {}", e);
-        }
-
-        Ok(ToolResult::success(format!(
-            "Message sent to {} via {}",
-            channel_id, adapter
-        )))
-    } else {
-        let body = response.text().await.unwrap_or_default();
-        error!(
-            status = %status,
-            body = %body,
-            adapter = %adapter,
-            channel_id = %channel_id,
-            "Adapter returned error"
-        );
-
-        // Record failed message
-        let msg = crate::conversations::Message::failed(
-            agent_author,
-            &format!("Adapter returned error {}", status),
-            content,
-        );
-
-        if let Err(e) = writer_tx
-            .send(WriteOp::Message {
-                path: conversation_path.to_path_buf(),
-                msg,
-            })
-            .await
-        {
-            warn!("Failed to record failed message: {}", e);
-        }
-
-        Err(RiverError::tool(format!(
-            "Adapter returned error {}: {}",
-            status, body
-        )))
-    }
-}
 
 /// Send message via communication adapter
 pub struct SendMessageTool {
@@ -292,122 +133,6 @@ impl Tool for SendMessageTool {
                 .await
             })
         })
-    }
-}
-
-/// List available communication adapters
-pub struct ListAdaptersTool {
-    registry: Arc<RwLock<AdapterRegistry>>,
-}
-
-impl ListAdaptersTool {
-    pub fn new(registry: Arc<RwLock<AdapterRegistry>>) -> Self {
-        Self { registry }
-    }
-}
-
-impl Tool for ListAdaptersTool {
-    fn name(&self) -> &str {
-        "list_adapters"
-    }
-
-    fn description(&self) -> &str {
-        "List available communication adapters"
-    }
-
-    fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
-
-    fn execute(&self, _args: Value) -> Result<ToolResult, RiverError> {
-        info!("ListAdaptersTool::execute called");
-
-        let registry = self.registry.clone();
-
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let registry = registry.read().await;
-                let adapters: Vec<_> = registry
-                    .list()
-                    .iter()
-                    .map(|a| serde_json::json!({
-                        "name": a.name,
-                        "outbound_url": a.outbound_url
-                    }))
-                    .collect();
-
-                info!(
-                    adapter_count = adapters.len(),
-                    adapter_names = ?registry.names(),
-                    "ListAdaptersTool: Returning adapter list"
-                );
-
-                Ok(ToolResult::success(serde_json::to_string_pretty(&serde_json::json!({
-                    "adapters": adapters,
-                    "count": adapters.len()
-                })).unwrap()))
-            })
-        });
-
-        result
-    }
-}
-
-/// Get current context status
-pub struct ContextStatusTool {
-    context_limit: u64,
-    context_used: Arc<std::sync::atomic::AtomicU64>,
-}
-
-impl ContextStatusTool {
-    pub fn new(context_limit: u64, context_used: Arc<std::sync::atomic::AtomicU64>) -> Self {
-        Self {
-            context_limit,
-            context_used,
-        }
-    }
-}
-
-impl Tool for ContextStatusTool {
-    fn name(&self) -> &str {
-        "context_status"
-    }
-
-    fn description(&self) -> &str {
-        "Get current context window usage"
-    }
-
-    fn parameters(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
-
-    fn execute(&self, _args: Value) -> Result<ToolResult, RiverError> {
-        let used = self.context_used.load(std::sync::atomic::Ordering::Relaxed);
-        let limit = self.context_limit;
-        let percent = if limit > 0 {
-            (used as f64 / limit as f64) * 100.0
-        } else {
-            0.0
-        };
-        let remaining = limit.saturating_sub(used);
-
-        let output = serde_json::json!({
-            "used": used,
-            "limit": limit,
-            "remaining": remaining,
-            "percent": format!("{:.1}%", percent),
-            "near_limit": percent >= 90.0
-        });
-
-        Ok(ToolResult::success(serde_json::to_string_pretty(&output).unwrap()))
     }
 }
 
@@ -889,41 +614,8 @@ impl Tool for TypingTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_adapter_registry() {
-        let mut registry = AdapterRegistry::new();
-
-        registry.register(AdapterConfig {
-            name: "discord".to_string(),
-            outbound_url: "http://localhost:8080/outbound".to_string(),
-            read_url: Some("http://localhost:8080/read".to_string()),
-            features: HashSet::new(),
-        });
-
-        assert!(registry.get("discord").is_some());
-        assert!(registry.get("slack").is_none());
-        assert_eq!(registry.names().len(), 1);
-    }
-
-    #[test]
-    fn test_adapter_registry_supports() {
-        let mut registry = AdapterRegistry::new();
-
-        let mut features = HashSet::new();
-        features.insert(Feature::TypingIndicator);
-
-        registry.register(AdapterConfig {
-            name: "discord".to_string(),
-            outbound_url: "http://localhost:8080/send".to_string(),
-            read_url: None,
-            features,
-        });
-
-        assert!(registry.supports("discord", Feature::TypingIndicator));
-        assert!(!registry.supports("discord", Feature::Reactions));
-        assert!(!registry.supports("nonexistent", Feature::TypingIndicator));
-    }
+    use super::super::adapters::AdapterConfig;
+    use std::collections::HashSet;
 
     #[test]
     fn test_read_channel_tool_schema() {
@@ -935,15 +627,6 @@ mod tests {
         assert!(params["properties"]["adapter"].is_object());
         assert!(params["properties"]["channel"].is_object());
         assert!(params["properties"]["limit"].is_object());
-    }
-
-    #[test]
-    fn test_list_adapters_tool_schema() {
-        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let tool = ListAdaptersTool::new(registry);
-
-        assert_eq!(tool.name(), "list_adapters");
-        assert_eq!(tool.description(), "List available communication adapters");
     }
 
     #[tokio::test]
@@ -986,17 +669,6 @@ mod tests {
         let author = tool.agent_author();
         assert_eq!(author.name, "river");
         assert_eq!(author.id, "river_001");
-    }
-
-    #[test]
-    fn test_context_status_tool() {
-        use std::sync::atomic::AtomicU64;
-
-        let context_used = Arc::new(AtomicU64::new(5000));
-        let tool = ContextStatusTool::new(10000, context_used);
-
-        assert_eq!(tool.name(), "context_status");
-        assert_eq!(tool.description(), "Get current context window usage");
     }
 
     #[test]
