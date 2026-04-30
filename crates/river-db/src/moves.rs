@@ -99,6 +99,28 @@ impl Database {
         Ok(result.map(|n| n as u64))
     }
 
+    /// Get moves for a channel, ordered by turn_number descending (newest first)
+    pub fn get_moves_newest_first(&self, channel: &str, limit: usize) -> RiverResult<Vec<Move>> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT id, channel, turn_number, summary, tool_calls, created_at
+                 FROM moves
+                 WHERE channel = ?
+                 ORDER BY turn_number DESC
+                 LIMIT ?",
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        let moves = stmt
+            .query_map(params![channel, limit as i64], Move::from_row)
+            .map_err(|e| RiverError::database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        Ok(moves)
+    }
+
     /// Count moves for a channel
     pub fn count_moves(&self, channel: &str) -> RiverResult<usize> {
         let count: i64 = self
@@ -221,5 +243,35 @@ mod tests {
 
         assert_eq!(db.count_moves("general").unwrap(), 3);
         assert_eq!(db.count_moves("other").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_get_moves_newest_first() {
+        let db = test_db();
+        let gen = test_gen();
+
+        for turn in 1..=10 {
+            let m = Move {
+                id: gen.next_id(SnowflakeType::Embedding),
+                channel: "general".into(),
+                turn_number: turn,
+                summary: format!("Move for turn {}", turn),
+                tool_calls: None,
+                created_at: turn as i64 * 100,
+            };
+            db.insert_move(&m).unwrap();
+        }
+
+        let moves = db.get_moves_newest_first("general", 3).unwrap();
+        assert_eq!(moves.len(), 3);
+        assert_eq!(moves[0].turn_number, 10);
+        assert_eq!(moves[1].turn_number, 9);
+        assert_eq!(moves[2].turn_number, 8);
+
+        let moves = db.get_moves_newest_first("general", 100).unwrap();
+        assert_eq!(moves.len(), 10);
+
+        let moves = db.get_moves_newest_first("other", 10).unwrap();
+        assert_eq!(moves.len(), 0);
     }
 }

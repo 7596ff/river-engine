@@ -144,6 +144,75 @@ impl Database {
         Ok(messages.into_iter().rev().collect())
     }
 
+    /// Get messages with turn_number > the given turn, ordered chronologically
+    pub fn get_messages_above_turn(&self, session_id: &str, turn: u64) -> RiverResult<Vec<Message>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
+             FROM messages
+             WHERE session_id = ? AND turn_number > ?
+             ORDER BY created_at ASC"
+        ).map_err(|e| RiverError::database(e.to_string()))?;
+
+        let messages = stmt.query_map(params![session_id, turn as i64], Message::from_row)
+            .map_err(|e| RiverError::database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        Ok(messages)
+    }
+
+    /// Get messages for specific turn numbers, ordered chronologically
+    pub fn get_messages_for_turns(&self, session_id: &str, turns: &[u64]) -> RiverResult<Vec<Message>> {
+        if turns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<String> = turns.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
+             FROM messages
+             WHERE session_id = ? AND turn_number IN ({})
+             ORDER BY created_at ASC",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self.conn().prepare(&sql)
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        params_vec.push(Box::new(session_id.to_string()));
+        for t in turns {
+            params_vec.push(Box::new(*t as i64));
+        }
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+
+        let messages = stmt.query_map(params_refs.as_slice(), Message::from_row)
+            .map_err(|e| RiverError::database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RiverError::database(e.to_string()))?;
+
+        Ok(messages)
+    }
+
+    /// Get distinct turn numbers below a threshold, ordered newest first
+    pub fn get_distinct_turns_below(&self, session_id: &str, below_turn: u64, limit: usize) -> RiverResult<Vec<u64>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT DISTINCT turn_number FROM messages
+             WHERE session_id = ? AND turn_number < ?
+             ORDER BY turn_number DESC
+             LIMIT ?"
+        ).map_err(|e| RiverError::database(e.to_string()))?;
+
+        let turns = stmt.query_map(params![session_id, below_turn as i64, limit as i64], |row| {
+            row.get::<_, i64>(0).map(|n| n as u64)
+        })
+        .map_err(|e| RiverError::database(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| RiverError::database(e.to_string()))?;
+
+        Ok(turns)
+    }
+
     /// Get messages for a specific turn in a session
     pub fn get_turn_messages(&self, session_id: &str, turn_number: u64) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
@@ -291,5 +360,109 @@ mod tests {
 
         let turn_2 = db.get_turn_messages("sess", 2).unwrap();
         assert_eq!(turn_2.len(), 1);
+    }
+
+    #[test]
+    fn test_get_messages_above_turn() {
+        let db = Database::open_in_memory().unwrap();
+        let birth = AgentBirth::new(2026, 4, 30, 12, 0, 0).unwrap();
+        let gen = SnowflakeGenerator::new(birth);
+
+        for turn in 1..=3 {
+            let msg = Message {
+                id: gen.next_id(SnowflakeType::Message),
+                session_id: "sess".into(),
+                role: MessageRole::User,
+                content: Some(format!("Turn {} message", turn)),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                created_at: turn as i64 * 100,
+                metadata: None,
+                turn_number: turn,
+            };
+            db.insert_message(&msg).unwrap();
+        }
+
+        let msgs = db.get_messages_above_turn("sess", 1).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].turn_number, 2);
+        assert_eq!(msgs[1].turn_number, 3);
+
+        let msgs = db.get_messages_above_turn("sess", 0).unwrap();
+        assert_eq!(msgs.len(), 3);
+
+        let msgs = db.get_messages_above_turn("sess", 3).unwrap();
+        assert_eq!(msgs.len(), 0);
+    }
+
+    #[test]
+    fn test_get_messages_for_turns() {
+        let db = Database::open_in_memory().unwrap();
+        let birth = AgentBirth::new(2026, 4, 30, 12, 0, 0).unwrap();
+        let gen = SnowflakeGenerator::new(birth);
+
+        for i in 0..2 {
+            let msg = Message {
+                id: gen.next_id(SnowflakeType::Message),
+                session_id: "sess".into(),
+                role: MessageRole::User,
+                content: Some(format!("Turn 5 msg {}", i)),
+                tool_calls: None, tool_call_id: None, name: None,
+                created_at: 500 + i,
+                metadata: None,
+                turn_number: 5,
+            };
+            db.insert_message(&msg).unwrap();
+        }
+        for i in 0..3 {
+            let msg = Message {
+                id: gen.next_id(SnowflakeType::Message),
+                session_id: "sess".into(),
+                role: MessageRole::User,
+                content: Some(format!("Turn 6 msg {}", i)),
+                tool_calls: None, tool_call_id: None, name: None,
+                created_at: 600 + i,
+                metadata: None,
+                turn_number: 6,
+            };
+            db.insert_message(&msg).unwrap();
+        }
+
+        let msgs = db.get_messages_for_turns("sess", &[5, 6]).unwrap();
+        assert_eq!(msgs.len(), 5);
+
+        let msgs = db.get_messages_for_turns("sess", &[6]).unwrap();
+        assert_eq!(msgs.len(), 3);
+
+        let msgs = db.get_messages_for_turns("sess", &[]).unwrap();
+        assert_eq!(msgs.len(), 0);
+    }
+
+    #[test]
+    fn test_get_distinct_turns_below() {
+        let db = Database::open_in_memory().unwrap();
+        let birth = AgentBirth::new(2026, 4, 30, 12, 0, 0).unwrap();
+        let gen = SnowflakeGenerator::new(birth);
+
+        for turn in 1..=5 {
+            let msg = Message {
+                id: gen.next_id(SnowflakeType::Message),
+                session_id: "sess".into(),
+                role: MessageRole::User,
+                content: Some(format!("Turn {}", turn)),
+                tool_calls: None, tool_call_id: None, name: None,
+                created_at: turn as i64 * 100,
+                metadata: None,
+                turn_number: turn,
+            };
+            db.insert_message(&msg).unwrap();
+        }
+
+        let turns = db.get_distinct_turns_below("sess", 5, 3).unwrap();
+        assert_eq!(turns, vec![4, 3, 2]);
+
+        let turns = db.get_distinct_turns_below("sess", 2, 10).unwrap();
+        assert_eq!(turns, vec![1]);
     }
 }
