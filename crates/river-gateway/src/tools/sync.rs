@@ -2,7 +2,7 @@
 
 use crate::conversations::path::build_discord_path;
 use crate::conversations::{Author, Message, MessageDirection, WriteOp};
-use river_tools::{Tool, ToolResult};
+use super::registry::{Tool, ToolResult};
 use super::AdapterRegistry;
 use river_core::RiverError;
 use serde::Deserialize;

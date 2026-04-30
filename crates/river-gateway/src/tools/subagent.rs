@@ -7,7 +7,7 @@ use crate::subagent::{
     create_subagent_registry, SubagentConfig, SubagentManager, SubagentRunner,
     SubagentResult, SubagentType,
 };
-use river_tools::{Tool, ToolResult};
+use super::registry::{Tool, ToolResult};
 use river_core::{RiverError, Snowflake};
 use serde_json::Value;
 use std::path::PathBuf;

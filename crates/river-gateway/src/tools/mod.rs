@@ -1,31 +1,44 @@
-//! Tool system — re-exports from river-tools + gateway-specific tools
+//! Tool system — all agent capabilities
 
-// Gateway-specific tools (depend on gateway internals)
-mod communication;
-mod memory;
-mod subagent;
-mod sync;
+// Core
+pub mod registry;
+pub mod executor;
 
-// Re-export everything from river-tools
-pub use river_tools::{
-    Tool, ToolRegistry, ToolSchema, ToolResult,
-    ToolExecutor, ToolCall, ToolCallResponse,
-    ReadTool, WriteTool, EditTool, GlobTool, GrepTool,
-    BashTool,
-    WebFetchTool, WebSearchTool,
-    ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool,
-    ContextRotation, HeartbeatScheduler, RotateContextTool, ScheduleHeartbeatTool,
-    LogReadTool,
-};
+// Pure tools
+pub mod file;
+pub mod shell;
+pub mod web;
+pub mod logging;
 
-// Re-export gateway-specific tools
-pub use communication::{
-    AdapterConfig, AdapterRegistry, SendMessageTool, ListAdaptersTool, ContextStatusTool,
-    ReadChannelTool
-};
-pub use sync::SyncConversationTool;
+// Stateful tools
+pub mod model;
+pub mod context;
+pub mod heartbeat;
+pub mod memory;
+
+// Gateway-integrated tools
+pub mod adapters;
+pub mod communication;
+pub mod subagent;
+pub mod sync;
+
+// Re-export core types
+pub use registry::{Tool, ToolRegistry, ToolSchema, ToolResult};
+pub use executor::{ToolExecutor, ToolCall, ToolCallResponse};
+
+// Re-export tools
+pub use file::{ReadTool, WriteTool, EditTool, GlobTool, GrepTool};
+pub use shell::BashTool;
+pub use web::{WebFetchTool, WebSearchTool};
+pub use logging::LogReadTool;
+pub use model::{ModelManagerConfig, ModelManagerState, RequestModelTool, ReleaseModelTool, SwitchModelTool};
+pub use context::{ContextRotation, RotateContextTool, ContextStatusTool};
+pub use heartbeat::{HeartbeatScheduler, ScheduleHeartbeatTool};
+pub use adapters::{AdapterConfig, AdapterRegistry, ListAdaptersTool};
+pub use communication::{SendMessageTool, SpeakTool, SwitchChannelTool, TypingTool, ReadChannelTool};
 pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool};
 pub use subagent::{
     SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
     InternalSendTool, InternalReceiveTool, WaitForSubagentTool
 };
+pub use sync::SyncConversationTool;

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::db::{Database, Memory};
 use crate::memory::{EmbeddingClient, MemorySearcher};
-use river_tools::{Tool, ToolResult};
+use super::registry::{Tool, ToolResult};
 
 /// Embed tool - create embedding and store in memory
 pub struct EmbedTool {
