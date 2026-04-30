@@ -297,17 +297,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     if let Some(ref redis) = redis_client {
         let redis_arc = Arc::new(redis.clone());
         use crate::redis::*;
-        registry.register(Box::new(WorkingMemorySetTool::new(redis_arc.clone())));
-        registry.register(Box::new(WorkingMemoryGetTool::new(redis_arc.clone())));
-        registry.register(Box::new(WorkingMemoryDeleteTool::new(redis_arc.clone())));
         registry.register(Box::new(MediumTermSetTool::new(redis_arc.clone())));
         registry.register(Box::new(MediumTermGetTool::new(redis_arc.clone())));
-        registry.register(Box::new(ResourceLockTool::new(redis_arc.clone())));
-        registry.register(Box::new(CounterIncrementTool::new(redis_arc.clone())));
-        registry.register(Box::new(CounterGetTool::new(redis_arc.clone())));
-        registry.register(Box::new(CacheSetTool::new(redis_arc.clone())));
-        registry.register(Box::new(CacheGetTool::new(redis_arc.clone())));
-        tracing::info!("Registered Redis tools (10 tools)");
+        tracing::info!("Registered Redis tools");
     }
 
     tracing::info!("Registered {} tools total", registry.names().len());
@@ -383,10 +375,11 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     let agent_config = AgentTaskConfig {
         workspace: agent_workspace.clone(),
-        embeddings_dir: config.workspace.join("embeddings"),
-        context_limit: agent_context_limit,
+        context_config: crate::agent::ContextConfig {
+            limit: agent_context_limit as usize,
+            ..crate::agent::ContextConfig::default()
+        },
         max_tool_calls: 50,
-        history_limit: 50,
         heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),
         ..Default::default()
     };

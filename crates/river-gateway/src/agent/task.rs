@@ -1,11 +1,11 @@
 //! Agent task — the acting self (I)
 //!
 //! Runs as a peer task in the coordinator, managing the wake/think/act/settle
-//! turn cycle. Receives events from the coordinator bus and emits lifecycle
-//! events for the spectator to observe.
+//! turn cycle. Uses a persistent context that accumulates messages and compacts
+//! via spectator cursor coordination.
 
 use crate::agent::channel::ChannelContext;
-use crate::agent::context::{ContextAssembler, ContextBudget};
+use crate::agent::context::{PersistentContext, ContextConfig, ContextMessage};
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
 use crate::preferences::{Preferences, format_current_time};
@@ -16,7 +16,7 @@ use crate::tools::{ToolExecutor, ToolCall, ToolSchema};
 use chrono::Utc;
 use river_core::{SnowflakeGenerator, SnowflakeType};
 use river_db::{Database, Message, MessageRole};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -26,33 +26,24 @@ use tokio::sync::RwLock;
 pub struct AgentTaskConfig {
     /// Workspace path for loading identity and context files
     pub workspace: PathBuf,
-    /// Directory containing embeddings/notes
-    pub embeddings_dir: PathBuf,
-    /// Token budget allocation for context layers
-    pub context_budget: ContextBudget,
+    /// Context configuration
+    pub context_config: ContextConfig,
     /// Timeout for model calls
     pub model_timeout: Duration,
     /// Maximum tool calls per turn (safety limit)
     pub max_tool_calls: usize,
-    /// Number of recent messages to load for hot context
-    pub history_limit: usize,
     /// Heartbeat interval (how often to wake if no messages)
     pub heartbeat_interval: Duration,
-    /// Context limit in tokens (for rotation checks)
-    pub context_limit: u64,
 }
 
 impl Default for AgentTaskConfig {
     fn default() -> Self {
         Self {
             workspace: PathBuf::from("."),
-            embeddings_dir: PathBuf::from("embeddings"),
-            context_budget: ContextBudget::default(),
+            context_config: ContextConfig::default(),
             model_timeout: Duration::from_secs(120),
             max_tool_calls: 50,
-            history_limit: 50,
             heartbeat_interval: Duration::from_secs(45 * 60),
-            context_limit: 128_000,
         }
     }
 }
@@ -73,16 +64,17 @@ pub struct AgentTask {
     message_queue: Arc<MessageQueue>,
     model_client: ModelClient,
     tool_executor: Arc<RwLock<ToolExecutor>>,
-    context_assembler: ContextAssembler,
     flash_queue: Arc<FlashQueue>,
     db: Arc<Mutex<Database>>,
     snowflake_gen: Arc<SnowflakeGenerator>,
     turn_count: u64,
     channel_context: Option<ChannelContext>,
-    /// Conversation messages for context (accumulated across turns)
-    conversation: Vec<ChatMessage>,
-    /// Last known prompt token count
-    last_prompt_tokens: u64,
+    /// Pending channel switch (applied at start of next turn)
+    pending_channel_switch: Option<ChannelContext>,
+    /// The persistent context object
+    context: PersistentContext,
+    /// Last estimated prompt tokens (for calibration)
+    last_estimated_prompt_tokens: usize,
 }
 
 impl AgentTask {
@@ -96,10 +88,21 @@ impl AgentTask {
         db: Arc<Mutex<Database>>,
         snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
-        let context_assembler = ContextAssembler::new(
-            config.context_budget.clone(),
-            config.embeddings_dir.clone(),
-        );
+        // Build system prompt synchronously
+        let system_prompt = Self::build_system_prompt_sync(&config.workspace);
+
+        let channel = "default";
+
+        let context = {
+            let db_guard = db.lock().expect("DB lock poisoned");
+            PersistentContext::build(
+                config.context_config.clone(),
+                system_prompt,
+                &db_guard,
+                PRIMARY_SESSION_ID,
+                channel,
+            )
+        };
 
         Self {
             config,
@@ -107,14 +110,14 @@ impl AgentTask {
             message_queue,
             model_client,
             tool_executor,
-            context_assembler,
             flash_queue,
             db,
             snowflake_gen,
             turn_count: 0,
             channel_context: None,
-            conversation: Vec::new(),
-            last_prompt_tokens: 0,
+            pending_channel_switch: None,
+            context,
+            last_estimated_prompt_tokens: 0,
         }
     }
 
@@ -128,7 +131,6 @@ impl AgentTask {
             tokio::select! {
                 // Wait for messages or heartbeat timeout
                 _ = tokio::time::sleep(self.config.heartbeat_interval) => {
-                    // Heartbeat wake - always run a turn (agent can decide what to do)
                     tracing::info!("Heartbeat wake");
                     self.turn_cycle(true).await;
                 }
@@ -144,7 +146,6 @@ impl AgentTask {
                             break;
                         }
                         Ok(CoordinatorEvent::Spectator(SpectatorEvent::Flash { content, source, ttl_turns, .. })) => {
-                            // Buffer flash for next turn
                             self.flash_queue.push(Flash {
                                 id: format!("flash-{}", Utc::now().timestamp_millis()),
                                 content,
@@ -178,26 +179,43 @@ impl AgentTask {
     /// One turn: wake → think → act → settle
     async fn turn_cycle(&mut self, is_heartbeat: bool) {
         self.turn_count += 1;
-        let turn_start = Utc::now();
         let mut stats = TurnStats::default();
+
+        // ========== CHECK PENDING CHANNEL SWITCH ==========
+        if let Some(new_channel) = self.pending_channel_switch.take() {
+            let channel_name = new_channel.display_name().to_string();
+            self.channel_context = Some(new_channel);
+
+            let system_prompt = self.build_system_prompt().await;
+            let db_guard = self.db.lock().expect("DB lock poisoned");
+            self.context = PersistentContext::build(
+                self.config.context_config.clone(),
+                system_prompt,
+                &db_guard,
+                PRIMARY_SESSION_ID,
+                &channel_name,
+            );
+            drop(db_guard);
+
+            tracing::info!(channel = %channel_name, "Channel switch applied");
+        }
 
         // ========== WAKE ==========
         self.flash_queue.tick_turn().await;
+        let channel_name = self.channel_context
+            .as_ref()
+            .map(|c| c.display_name().to_string())
+            .unwrap_or_else(|| "default".to_string());
+
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
-            channel: self.channel_context
-                .as_ref()
-                .map(|c| c.display_name().to_string())
-                .unwrap_or_else(|| "unset".to_string()),
+            channel: channel_name.clone(),
             turn_number: self.turn_count,
-            timestamp: turn_start,
+            timestamp: Utc::now(),
         }));
 
         tracing::info!(
             turn = self.turn_count,
-            channel = %self.channel_context
-                .as_ref()
-                .map(|c| c.display_name())
-                .unwrap_or("unset"),
+            channel = %channel_name,
             is_heartbeat = is_heartbeat,
             "Turn started"
         );
@@ -209,39 +227,39 @@ impl AgentTask {
                 "[{}] {}: {}",
                 msg.channel, msg.author.name, msg.content
             ));
-            self.conversation.push(chat_msg);
+            self.context.append(ContextMessage::new(chat_msg, self.turn_count));
         }
 
         // Add heartbeat trigger if applicable
         if is_heartbeat && incoming.is_empty() {
-            self.conversation.push(ChatMessage::user(":heartbeat:"));
+            self.context.append(ContextMessage::new(
+                ChatMessage::user(":heartbeat:"),
+                self.turn_count,
+            ));
         }
 
-        // ========== ASSEMBLE CONTEXT ==========
-        let system_prompt = self.build_system_prompt().await;
-        let channel_name = self.channel_context
-            .as_ref()
-            .map(|c| c.display_name().to_string())
-            .unwrap_or_else(|| "default".to_string());
-        let context = self.context_assembler.assemble(
-            &channel_name,
-            &system_prompt,
-            &self.conversation,
-            &self.flash_queue,
-            None,  // vector store - TODO: integrate
-            None,  // query embedding - TODO: integrate
-        ).await;
+        // ========== CHECK COMPACTION ==========
+        if self.context.needs_compaction() {
+            let system_prompt = self.build_system_prompt().await;
+            let db_guard = self.db.lock().expect("DB lock poisoned");
+            self.context.compact(
+                system_prompt,
+                &db_guard,
+                PRIMARY_SESSION_ID,
+                &channel_name,
+                self.turn_count,
+            );
+            drop(db_guard);
+            tracing::info!(
+                turn = self.turn_count,
+                tokens = self.context.estimate_total_tokens(),
+                "Context compacted"
+            );
+        }
 
-        tracing::info!(
-            turn = self.turn_count,
-            tokens = context.token_estimate,
-            flashes = context.layer_stats.flashes_count,
-            hot_messages = context.layer_stats.hot_messages,
-            "Context assembled"
-        );
-
-        // Check for context pressure
-        let context_percent = (context.token_estimate as f64 / self.config.context_limit as f64) * 100.0;
+        // Check context pressure
+        let total_tokens = self.context.estimate_total_tokens();
+        let context_percent = (total_tokens as f64 / self.config.context_config.limit as f64) * 100.0;
         if context_percent >= 80.0 {
             self.bus.publish(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
                 usage_percent: context_percent,
@@ -260,20 +278,22 @@ impl AgentTask {
         };
 
         // ========== THINK + ACT LOOP ==========
-        let mut messages = context.messages;
+        let mut messages = self.context.to_messages();
         let mut iteration = 0;
-        let max_iterations = self.config.max_tool_calls;
 
         loop {
             iteration += 1;
-            if iteration > max_iterations {
+            if iteration > self.config.max_tool_calls {
                 tracing::warn!(
                     iterations = iteration,
-                    max = max_iterations,
+                    max = self.config.max_tool_calls,
                     "Max tool call iterations reached, breaking"
                 );
                 break;
             }
+
+            // Track estimated tokens before model call (for calibration)
+            self.last_estimated_prompt_tokens = self.context.estimate_total_tokens();
 
             // Call model
             let response = match self.model_client.complete(&messages, &tools).await {
@@ -284,8 +304,13 @@ impl AgentTask {
                 }
             };
 
+            // Calibrate token estimation
+            self.context.update_calibration(
+                response.usage.prompt_tokens as u64,
+                self.last_estimated_prompt_tokens,
+            );
+
             stats.prompt_tokens = response.usage.prompt_tokens as u64;
-            self.last_prompt_tokens = stats.prompt_tokens;
 
             tracing::info!(
                 iteration = iteration,
@@ -302,7 +327,7 @@ impl AgentTask {
                 if response.tool_calls.is_empty() { None } else { Some(response.tool_calls.clone()) },
             );
             messages.push(assistant_msg.clone());
-            self.conversation.push(assistant_msg);
+            self.context.append(ContextMessage::new(assistant_msg, self.turn_count));
 
             // If no tool calls, we're done
             if response.tool_calls.is_empty() {
@@ -322,7 +347,7 @@ impl AgentTask {
             for result in &tool_results {
                 let tool_msg = ChatMessage::tool(&result.0, &result.1);
                 messages.push(tool_msg.clone());
-                self.conversation.push(tool_msg);
+                self.context.append(ContextMessage::new(tool_msg, self.turn_count));
             }
 
             // Check for messages that arrived during tool execution
@@ -337,12 +362,11 @@ impl AgentTask {
                 }
                 let system_msg = ChatMessage::system(content);
                 messages.push(system_msg.clone());
-                self.conversation.push(system_msg);
+                self.context.append(ContextMessage::new(system_msg, self.turn_count));
             }
         }
 
         // ========== SETTLE ==========
-        // Persist messages BEFORE emitting TurnComplete (ordering guarantee)
         self.persist_turn_messages();
 
         let transcript_summary = format!(
@@ -354,10 +378,7 @@ impl AgentTask {
         );
 
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
-            channel: self.channel_context
-                .as_ref()
-                .map(|c| c.display_name().to_string())
-                .unwrap_or_else(|| "unset".to_string()),
+            channel: channel_name,
             turn_number: self.turn_count,
             transcript_summary: transcript_summary.clone(),
             tool_calls: stats.tool_calls,
@@ -370,9 +391,6 @@ impl AgentTask {
             prompt_tokens = stats.prompt_tokens,
             "Turn complete"
         );
-
-        // Trim conversation if too long
-        self.trim_conversation();
     }
 
     /// Execute a batch of tool calls
@@ -441,7 +459,7 @@ impl AgentTask {
         results
     }
 
-    /// Build system prompt from workspace files
+    /// Build system prompt from workspace files (async version)
     async fn build_system_prompt(&self) -> String {
         let mut parts = Vec::new();
 
@@ -451,12 +469,6 @@ impl AgentTask {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 parts.push(content);
             }
-        }
-
-        // Load continuity state
-        let state_path = self.config.workspace.join("thinking/current-state.md");
-        if let Ok(state) = tokio::fs::read_to_string(&state_path).await {
-            parts.push(format!("Continuing session. Last cycle you were:\n{}", state));
         }
 
         // Add current time with timezone from preferences
@@ -471,7 +483,29 @@ impl AgentTask {
         }
     }
 
-    /// Persist all conversation messages from this turn to the database.
+    /// Build system prompt synchronously (for use in new())
+    fn build_system_prompt_sync(workspace: &Path) -> String {
+        let mut parts = Vec::new();
+
+        for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
+            let path = workspace.join("actor").join(filename);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                parts.push(content);
+            }
+        }
+
+        let prefs = Preferences::load(workspace);
+        let time_str = format_current_time(prefs.timezone());
+        parts.push(format!("Current time: {}", time_str));
+
+        if parts.is_empty() {
+            "You are an AI assistant.".to_string()
+        } else {
+            parts.join("\n\n---\n\n")
+        }
+    }
+
+    /// Persist conversation messages from the current turn to the database.
     /// Must be called before emitting TurnComplete (ordering guarantee).
     fn persist_turn_messages(&self) {
         let now = SystemTime::now()
@@ -487,8 +521,13 @@ impl AgentTask {
             }
         };
 
+        // Persist messages from the persistent context
+        // TODO: Track a persistence cursor to avoid re-persisting old messages.
+        // For now this persists all non-system messages, which is the same
+        // behavior as the previous implementation.
+        let messages = self.context.to_messages();
         let mut persisted = 0;
-        for chat_msg in &self.conversation {
+        for chat_msg in &messages {
             if chat_msg.role == "system" {
                 continue;
             }
@@ -529,21 +568,7 @@ impl AgentTask {
         }
     }
 
-    /// Trim conversation to stay within history limit
-    fn trim_conversation(&mut self) {
-        let max_messages = self.config.history_limit * 2; // Some buffer
-        if self.conversation.len() > max_messages {
-            let trim_count = self.conversation.len() - max_messages;
-            self.conversation.drain(0..trim_count);
-            tracing::debug!(
-                trimmed = trim_count,
-                remaining = self.conversation.len(),
-                "Trimmed old conversation messages"
-            );
-        }
-    }
-
-    /// Switch to a different channel
+    /// Switch to a different channel (takes effect at next turn start)
     pub fn set_channel_context(&mut self, context: ChannelContext) {
         let old = self.channel_context
             .as_ref()
@@ -557,8 +582,8 @@ impl AgentTask {
             timestamp: Utc::now(),
         }));
 
-        tracing::info!(from = %old, to = %new, "Channel switched");
-        self.channel_context = Some(context);
+        tracing::info!(from = %old, to = %new, "Channel switch pending (applied at next turn)");
+        self.pending_channel_switch = Some(context);
     }
 
     /// Get current channel context
@@ -569,11 +594,6 @@ impl AgentTask {
     /// Get current turn count
     pub fn turn_count(&self) -> u64 {
         self.turn_count
-    }
-
-    /// Get last known prompt token count
-    pub fn last_prompt_tokens(&self) -> u64 {
-        self.last_prompt_tokens
     }
 }
 
@@ -598,7 +618,6 @@ mod tests {
     fn test_config(workspace: &TempDir) -> AgentTaskConfig {
         AgentTaskConfig {
             workspace: workspace.path().to_path_buf(),
-            embeddings_dir: workspace.path().join("embeddings"),
             heartbeat_interval: Duration::from_millis(100),
             ..Default::default()
         }
@@ -608,9 +627,8 @@ mod tests {
     fn test_agent_task_config_default() {
         let config = AgentTaskConfig::default();
         assert_eq!(config.max_tool_calls, 50);
-        assert_eq!(config.history_limit, 50);
         assert_eq!(config.heartbeat_interval, Duration::from_secs(45 * 60));
-        assert_eq!(config.context_limit, 128_000);
+        assert_eq!(config.context_config.limit, 128_000);
     }
 
     #[tokio::test]
@@ -620,14 +638,12 @@ mod tests {
         let coord = Coordinator::new();
         let bus = coord.bus().clone();
 
-        // Subscribe to events before creating task
         let mut event_rx = bus.subscribe();
 
         let message_queue = Arc::new(MessageQueue::new());
         let flash_queue = Arc::new(FlashQueue::new(10));
         let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
 
-        // Create model client (won't actually call API in test)
         let model_client = ModelClient::new(
             "http://localhost:8080".to_string(),
             "test-model".to_string(),
@@ -646,8 +662,6 @@ mod tests {
             sg,
         );
 
-        // Note: turn_cycle would fail without a real model, so we just test the event emission
-        // by checking the bus directly
         task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
             channel: "test".into(),
             turn_number: 1,
@@ -698,8 +712,9 @@ mod tests {
         };
         task.set_channel_context(ctx);
 
-        assert!(task.channel_context().is_some());
-        assert_eq!(task.channel_context().unwrap().display_name(), "general");
+        // Channel switch is now deferred — channel_context is still None
+        assert!(task.channel_context().is_none());
+        assert!(task.pending_channel_switch.is_some());
 
         let event = event_rx.try_recv();
         assert!(matches!(event, Ok(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched { .. }))));
@@ -734,7 +749,6 @@ mod tests {
         );
 
         let prompt = task.build_system_prompt().await;
-        // With no identity files, should have at least current time
         assert!(prompt.contains("Current time:") || prompt.contains("You are an AI assistant"));
     }
 
@@ -780,49 +794,5 @@ mod tests {
         assert_eq!(stats.total_tool_calls, 0);
         assert_eq!(stats.failed_tool_calls, 0);
         assert!(stats.tool_calls.is_empty());
-    }
-
-    #[test]
-    fn test_trim_conversation() {
-        // Test that trim_conversation properly removes old messages
-        let temp = TempDir::new().unwrap();
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-
-        let message_queue = Arc::new(MessageQueue::new());
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
-        let model_client = ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap();
-
-        let (db, sg) = test_db(&temp);
-        let mut task = AgentTask::new(
-            AgentTaskConfig {
-                history_limit: 5,
-                ..Default::default()
-            },
-            bus,
-            message_queue,
-            model_client,
-            tool_executor,
-            flash_queue,
-            db,
-            sg,
-        );
-
-        // Add more messages than the limit
-        for i in 0..20 {
-            task.conversation.push(ChatMessage::user(format!("Message {}", i)));
-        }
-
-        assert_eq!(task.conversation.len(), 20);
-        task.trim_conversation();
-        // history_limit * 2 = 10
-        assert_eq!(task.conversation.len(), 10);
-        // Should have kept the most recent messages
-        assert!(task.conversation[0].content.as_ref().unwrap().contains("Message 10"));
     }
 }
