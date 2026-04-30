@@ -1,6 +1,6 @@
 //! Tool executor with context tracking
 
-use super::registry::{ToolRegistry, ToolResult, ToolSchema};
+use super::registry::{Tool, ToolRegistry, ToolResult, ToolSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -97,7 +97,6 @@ impl ToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::registry::Tool;
     use river_core::RiverError;
 
     struct DummyTool;

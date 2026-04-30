@@ -1942,7 +1942,6 @@ dependencies = [
  "river-adapter",
  "river-core",
  "river-db",
- "river-tools",
  "rusqlite",
  "sd-notify",
  "serde",
@@ -1993,22 +1992,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "which",
-]
-
-[[package]]
-name = "river-tools"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "glob",
- "regex",
- "reqwest",
- "river-core",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
