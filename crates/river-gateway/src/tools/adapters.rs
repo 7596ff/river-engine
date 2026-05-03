@@ -1,13 +1,13 @@
 //! Adapter infrastructure — registry, config, shared send logic
 
-use crate::conversations::{Author, WriteOp};
 use super::registry::{Tool, ToolResult};
-use river_core::RiverError;
+use river_core::{RiverError, SnowflakeGenerator, SnowflakeType};
 use river_adapter::Feature;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 /// Adapter endpoint configuration
@@ -66,9 +66,8 @@ pub async fn send_to_adapter(
     channel_id: &str,
     content: &str,
     reply_to: Option<&str>,
-    writer_tx: &mpsc::Sender<WriteOp>,
-    conversation_path: &std::path::Path,
-    agent_author: Author,
+    channels_dir: &Path,
+    snowflake_gen: &SnowflakeGenerator,
 ) -> Result<ToolResult, RiverError> {
     let config = registry
         .get(adapter)
@@ -113,22 +112,21 @@ pub async fn send_to_adapter(
         info!(adapter = %adapter, channel_id = %channel_id, "Message sent successfully");
 
         // Extract message_id from adapter response
-        let message_id = serde_json::from_str::<serde_json::Value>(&body)
+        let adapter_msg_id = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
-            .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| format!("out-{}", chrono::Utc::now().timestamp_millis()));
+            .and_then(|v| v.get("message_id")?.as_str().map(|s| s.to_string()));
 
-        // Record outgoing message
-        let msg = crate::conversations::Message::outgoing(&message_id, agent_author, content);
-
-        if let Err(e) = writer_tx
-            .send(WriteOp::Message {
-                path: conversation_path.to_path_buf(),
-                msg,
-            })
-            .await
-        {
-            warn!("Failed to record outgoing message: {}", e);
+        // Log agent message to channel JSONL
+        let snowflake = snowflake_gen.next_id(SnowflakeType::Message);
+        let log = crate::channels::ChannelLog::open(channels_dir, adapter, channel_id);
+        let agent_entry = crate::channels::MessageEntry::agent(
+            snowflake.to_string(),
+            content.to_string(),
+            adapter.to_string(),
+            adapter_msg_id,
+        );
+        if let Err(e) = log.append_entry(&agent_entry).await {
+            warn!(error = %e, "Failed to log agent message to channel");
         }
 
         Ok(ToolResult::success(format!(
@@ -144,23 +142,6 @@ pub async fn send_to_adapter(
             channel_id = %channel_id,
             "Adapter returned error"
         );
-
-        // Record failed message
-        let msg = crate::conversations::Message::failed(
-            agent_author,
-            &format!("Adapter returned error {}", status),
-            content,
-        );
-
-        if let Err(e) = writer_tx
-            .send(WriteOp::Message {
-                path: conversation_path.to_path_buf(),
-                msg,
-            })
-            .await
-        {
-            warn!("Failed to record failed message: {}", e);
-        }
 
         Err(RiverError::tool(format!(
             "Adapter returned error {}: {}",

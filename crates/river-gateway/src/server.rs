@@ -37,7 +37,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 
 /// Server configuration from CLI args
 pub struct ServerConfig {
@@ -239,30 +239,17 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }
     }
 
-    // Create conversation writer channel
-    let (conv_writer_tx, conv_writer_rx) = mpsc::channel::<crate::conversations::WriteOp>(256);
-
-    // Spawn ConversationWriter task
-    use crate::conversations::writer::ConversationWriter;
-    let mut conversation_writer = ConversationWriter::new(conv_writer_rx);
-    tokio::spawn(async move {
-        conversation_writer.run().await;
-    });
-    tracing::info!("Spawned ConversationWriter");
-
     registry.register(Box::new(SendMessageTool::new(
         adapter_registry.clone(),
         config.workspace.clone(),
-        config.agent_name.clone(),
-        agent_birth.to_string(),
-        conv_writer_tx.clone(),
+        snowflake_gen.clone(),
     )));
     registry.register(Box::new(ListAdaptersTool::new(adapter_registry.clone())));
     registry.register(Box::new(ReadChannelTool::new(adapter_registry.clone())));
     registry.register(Box::new(SyncConversationTool::new(
         adapter_registry.clone(),
         config.workspace.clone(),
-        conv_writer_tx.clone(),
+        snowflake_gen.clone(),
     )));
     tracing::info!("Registered communication tools (send_message, list_adapters, read_channel, sync_conversation)");
 

@@ -2,10 +2,9 @@
 //!
 //! These tools allow the agent to send messages through configured communication adapters.
 
-use crate::conversations::{Author, WriteOp};
 use super::registry::{Tool, ToolResult};
 use super::adapters::{AdapterRegistry, send_to_adapter};
-use river_core::RiverError;
+use river_core::{RiverError, SnowflakeGenerator};
 use river_adapter::Feature;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -18,33 +17,20 @@ pub struct SendMessageTool {
     registry: Arc<RwLock<AdapterRegistry>>,
     http_client: reqwest::Client,
     workspace: PathBuf,
-    agent_name: String,
-    agent_id: String,
-    writer_tx: mpsc::Sender<WriteOp>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
 }
 
 impl SendMessageTool {
     pub fn new(
         registry: Arc<RwLock<AdapterRegistry>>,
         workspace: PathBuf,
-        agent_name: String,
-        agent_id: String,
-        writer_tx: mpsc::Sender<WriteOp>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
         Self {
             registry,
             http_client: reqwest::Client::new(),
             workspace,
-            agent_name,
-            agent_id,
-            writer_tx,
-        }
-    }
-
-    fn agent_author(&self) -> Author {
-        Author {
-            name: self.agent_name.clone(),
-            id: self.agent_id.clone(),
+            snowflake_gen,
         }
     }
 }
@@ -104,16 +90,12 @@ impl Tool for SendMessageTool {
 
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
-        let writer_tx = self.writer_tx.clone();
-        let workspace = self.workspace.clone();
-        let agent_author = self.agent_author();
+        let channels_dir = self.workspace.join("channels");
+        let snowflake_gen = self.snowflake_gen.clone();
         let adapter = adapter.to_string();
         let channel_id = channel_id.to_string();
         let content = content.to_string();
         let reply_to = reply_to.map(|s| s.to_string());
-
-        // Build conversation path from adapter/channel
-        let conversation_path = workspace.join(format!("conversations/{}/{}.txt", adapter, channel_id));
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
@@ -126,9 +108,8 @@ impl Tool for SendMessageTool {
                     &channel_id,
                     &content,
                     reply_to.as_deref(),
-                    &writer_tx,
-                    &conversation_path,
-                    agent_author,
+                    &channels_dir,
+                    &snowflake_gen,
                 )
                 .await
             })
@@ -390,9 +371,7 @@ pub struct SpeakTool {
     registry: Arc<RwLock<AdapterRegistry>>,
     http_client: reqwest::Client,
     workspace: PathBuf,
-    agent_name: String,
-    agent_id: String,
-    writer_tx: mpsc::Sender<WriteOp>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
     channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
 }
 
@@ -400,26 +379,15 @@ impl SpeakTool {
     pub fn new(
         registry: Arc<RwLock<AdapterRegistry>>,
         workspace: PathBuf,
-        agent_name: String,
-        agent_id: String,
-        writer_tx: mpsc::Sender<WriteOp>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
         channel_context: Arc<RwLock<Option<crate::agent::ChannelContext>>>,
     ) -> Self {
         Self {
             registry,
             http_client: reqwest::Client::new(),
             workspace,
-            agent_name,
-            agent_id,
-            writer_tx,
+            snowflake_gen,
             channel_context,
-        }
-    }
-
-    fn agent_author(&self) -> Author {
-        Author {
-            name: self.agent_name.clone(),
-            id: self.agent_id.clone(),
         }
     }
 }
@@ -464,9 +432,8 @@ impl Tool for SpeakTool {
 
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
-        let writer_tx = self.writer_tx.clone();
-        let workspace = self.workspace.clone();
-        let agent_author = self.agent_author();
+        let channels_dir = self.workspace.join("channels");
+        let snowflake_gen = self.snowflake_gen.clone();
         let channel_context = self.channel_context.clone();
         let content = content.to_string();
         let reply_to = reply_to.map(|s| s.to_string());
@@ -482,7 +449,6 @@ impl Tool for SpeakTool {
 
                 let adapter = ctx.adapter.clone();
                 let channel_id = ctx.channel_id.clone();
-                let conversation_path = workspace.join(&ctx.path);
 
                 drop(ctx_guard); // Release lock before async call
 
@@ -495,9 +461,8 @@ impl Tool for SpeakTool {
                     &channel_id,
                     &content,
                     reply_to.as_deref(),
-                    &writer_tx,
-                    &conversation_path,
-                    agent_author,
+                    &channels_dir,
+                    &snowflake_gen,
                 )
                 .await
             })
@@ -615,7 +580,14 @@ impl Tool for TypingTool {
 mod tests {
     use super::*;
     use super::super::adapters::AdapterConfig;
+    use river_core::AgentBirth;
     use std::collections::HashSet;
+    use tokio::sync::mpsc;
+
+    fn test_snowflake_gen() -> Arc<SnowflakeGenerator> {
+        let birth = AgentBirth::new(2026, 4, 29, 12, 0, 0).unwrap();
+        Arc::new(SnowflakeGenerator::new(birth))
+    }
 
     #[test]
     fn test_read_channel_tool_schema() {
@@ -631,17 +603,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message_tool_schema() {
-        use std::path::PathBuf;
-        use tokio::sync::mpsc;
-
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let (tx, _rx) = mpsc::channel(1);
         let tool = SendMessageTool::new(
             registry,
             PathBuf::from("."),
-            "test_agent".to_string(),
-            "agent_123".to_string(),
-            tx,
+            test_snowflake_gen(),
         );
 
         assert_eq!(tool.name(), "send_message");
@@ -649,26 +615,6 @@ mod tests {
         assert!(params["properties"]["adapter"].is_object());
         assert!(params["properties"]["channel"].is_object());
         assert!(params["properties"]["content"].is_object());
-    }
-
-    #[test]
-    fn test_send_message_tool_agent_author() {
-        use std::path::PathBuf;
-        use tokio::sync::mpsc;
-
-        let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let (tx, _rx) = mpsc::channel(1);
-        let tool = SendMessageTool::new(
-            registry,
-            PathBuf::from("/workspace"),
-            "river".to_string(),
-            "river_001".to_string(),
-            tx,
-        );
-
-        let author = tool.agent_author();
-        assert_eq!(author.name, "river");
-        assert_eq!(author.id, "river_001");
     }
 
     #[test]
@@ -717,15 +663,12 @@ mod tests {
     #[tokio::test]
     async fn test_speak_tool_schema() {
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let (tx, _rx) = mpsc::channel(1);
         let channel_context = Arc::new(RwLock::new(None));
 
         let tool = SpeakTool::new(
             registry,
             PathBuf::from("/workspace"),
-            "agent".to_string(),
-            "agent_001".to_string(),
-            tx,
+            test_snowflake_gen(),
             channel_context,
         );
 
@@ -739,15 +682,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_speak_without_channel_selected() {
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let (tx, _rx) = mpsc::channel(1);
         let channel_context = Arc::new(RwLock::new(None)); // No channel set
 
         let tool = SpeakTool::new(
             registry,
             PathBuf::from("/workspace"),
-            "agent".to_string(),
-            "agent_001".to_string(),
-            tx,
+            test_snowflake_gen(),
             channel_context,
         );
 

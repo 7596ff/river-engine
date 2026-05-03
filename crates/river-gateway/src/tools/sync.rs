@@ -1,15 +1,13 @@
 //! sync_conversation tool for fetching and merging message history
 
-use crate::conversations::path::build_discord_path;
-use crate::conversations::{Author, Message, MessageDirection, WriteOp};
 use super::registry::{Tool, ToolResult};
 use super::AdapterRegistry;
-use river_core::RiverError;
+use river_core::{RiverError, SnowflakeGenerator, SnowflakeType};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use urlencoding::encode;
 
@@ -17,20 +15,20 @@ pub struct SyncConversationTool {
     registry: Arc<RwLock<AdapterRegistry>>,
     http_client: reqwest::Client,
     workspace: PathBuf,
-    writer_tx: mpsc::Sender<WriteOp>,
+    snowflake_gen: Arc<SnowflakeGenerator>,
 }
 
 impl SyncConversationTool {
     pub fn new(
         registry: Arc<RwLock<AdapterRegistry>>,
         workspace: PathBuf,
-        writer_tx: mpsc::Sender<WriteOp>,
+        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
         Self {
             registry,
             http_client: reqwest::Client::new(),
             workspace,
-            writer_tx,
+            snowflake_gen,
         }
     }
 }
@@ -41,7 +39,7 @@ impl Tool for SyncConversationTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch message history from adapter and merge into conversation file"
+        "Fetch message history from adapter and write to channel log"
     }
 
     fn parameters(&self) -> Value {
@@ -83,7 +81,7 @@ impl Tool for SyncConversationTool {
         let registry = self.registry.clone();
         let http_client = self.http_client.clone();
         let workspace = self.workspace.clone();
-        let writer_tx = self.writer_tx.clone();
+        let snowflake_gen = self.snowflake_gen.clone();
         let adapter = adapter.to_string();
         let channel = channel.to_string();
 
@@ -116,55 +114,34 @@ impl Tool for SyncConversationTool {
                 let messages: Vec<FetchedMessage> = response.json().await
                     .map_err(|e| RiverError::tool(format!("Parse error: {}", e)))?;
 
-                // Build conversation path using the path helper
-                let path = build_discord_path(
-                    &workspace,
-                    None,  // guild_id not available in this flow
-                    None,  // guild_name
-                    &channel,
-                    &channel,  // use channel ID as name for now
-                );
+                // Write messages to channel log
+                let channels_dir = workspace.join("channels");
+                let log = crate::channels::ChannelLog::open(&channels_dir, &adapter, &channel);
 
                 let mut processed_count = 0;
                 for fetched in &messages {
-                    let msg = Message {
-                        direction: if fetched.is_bot {
-                            MessageDirection::Outgoing
-                        } else {
-                            MessageDirection::Read // Assume read from history
-                        },
-                        timestamp: chrono::DateTime::from_timestamp(fetched.timestamp, 0)
-                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .unwrap_or_else(|| {
-                                warn!(
-                                    message_id = %fetched.id,
-                                    timestamp = fetched.timestamp,
-                                    "Invalid timestamp, using current time"
-                                );
-                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-                            }),
-                        id: fetched.id.clone(),
-                        author: Author { name: fetched.author_name.clone(), id: fetched.author_id.clone() },
-                        content: fetched.content.clone(),
-                        reactions: vec![],
+                    let snowflake = snowflake_gen.next_id(SnowflakeType::Message);
+                    let entry = if fetched.is_bot {
+                        crate::channels::MessageEntry::agent(
+                            snowflake.to_string(),
+                            fetched.content.clone(),
+                            adapter.clone(),
+                            Some(fetched.id.clone()),
+                        )
+                    } else {
+                        crate::channels::MessageEntry::incoming(
+                            snowflake.to_string(),
+                            fetched.author_name.clone(),
+                            fetched.author_id.clone(),
+                            fetched.content.clone(),
+                            adapter.clone(),
+                            Some(fetched.id.clone()),
+                        )
                     };
 
-                    if let Err(e) = writer_tx.send(WriteOp::Message { path: path.clone(), msg }).await {
-                        warn!("Failed to send message to writer: {}", e);
-                        return Err(RiverError::tool("Writer channel closed"));
-                    }
-
-                    // Send reaction counts
-                    for r in &fetched.reactions {
-                        if let Err(e) = writer_tx.send(WriteOp::ReactionCount {
-                            path: path.clone(),
-                            message_id: fetched.id.clone(),
-                            emoji: r.emoji.clone(),
-                            count: r.count,
-                        }).await {
-                            warn!("Failed to send reaction to writer: {}", e);
-                            return Err(RiverError::tool("Writer channel closed"));
-                        }
+                    if let Err(e) = log.append_entry(&entry).await {
+                        warn!(error = %e, "Failed to write synced message to channel log");
+                        return Err(RiverError::tool("Failed to write to channel log"));
                     }
 
                     processed_count += 1;
@@ -187,12 +164,15 @@ struct FetchedMessage {
     author_id: String,
     author_name: String,
     content: String,
+    #[allow(dead_code)]
     timestamp: i64,
     is_bot: bool,
+    #[allow(dead_code)]
     reactions: Vec<FetchedReaction>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct FetchedReaction {
     emoji: String,
     count: usize,
@@ -205,8 +185,9 @@ mod tests {
     #[test]
     fn test_sync_tool_schema() {
         let registry = Arc::new(RwLock::new(AdapterRegistry::default()));
-        let (tx, _rx) = mpsc::channel(1);
-        let tool = SyncConversationTool::new(registry, PathBuf::from("."), tx);
+        let birth = river_core::AgentBirth::new(2026, 4, 29, 12, 0, 0).unwrap();
+        let sg = Arc::new(SnowflakeGenerator::new(birth));
+        let tool = SyncConversationTool::new(registry, PathBuf::from("."), sg);
 
         assert_eq!(tool.name(), "sync_conversation");
         let params = tool.parameters();
