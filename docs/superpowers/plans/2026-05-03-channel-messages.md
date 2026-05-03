@@ -318,8 +318,9 @@ impl ChannelLog {
             tokio::fs::create_dir_all(dir).await?;
         }
 
-        let json = serde_json::to_string(entry)
+        let mut json = serde_json::to_string(entry)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        json.push('\n');
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -327,8 +328,9 @@ impl ChannelLog {
             .open(&self.path)
             .await?;
 
+        // Single write_all for atomic-like behavior — avoids corrupted entries
+        // if the process crashes between separate write calls
         file.write_all(json.as_bytes()).await?;
-        file.write_all(b"\n").await?;
         file.flush().await?;
         Ok(())
     }
