@@ -16,7 +16,7 @@ pub mod memory;
 pub mod redis;
 pub mod heartbeat;
 pub mod git;
-pub mod inbox;
+// inbox module removed — replaced by channels module
 pub mod conversations;
 pub mod subagent;
 pub mod metrics;

@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/superpowers/specs/2026-04-30-context-assembly-rework-design.md",
+                "file": "docs/superpowers/specs/2026-05-03-channel-message-design.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "2026-04-30-context-assembly-rework-design"
+              "title": "2026-05-03-channel-message-design"
             }
           }
         ]
@@ -185,17 +185,24 @@
   },
   "active": "c94e11a79564083c",
   "lastOpenFiles": [
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/work-products.bin",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/query-cache.bin",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/f463q6npyhghyofwat5jf0di5.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/f3g04yzkm9u4g20yvcu0czp94.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/f2dlb6gxq3ivenpixivkjpvx1.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/ez6c24v5dlppz5btn7qm4o5vv.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/etubeq0n43fvrf48aftiilo2s.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/encnzg6mfnxx2bhbhffaj69xf.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/en6j5suetwxdiw6ig3kk38b2p.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/eljsdrojzfx9fy1ov0il0uw3s.o",
-    "target/debug/incremental/river_gateway-3knirkek4fyxl/s-hi3fm70jl8-1efoyv8-3xc5oxhlx77lhvefgbgn1ji0x/el98sj5d3npd1vh4nmz5d5058.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/work-products.bin",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/query-cache.bin",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f55mt3r21ymeb7whnh7py4cin.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f2b07pmazt7bozrlblc76a3t5.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f1io4wzow5rno0zkrkc47yefv.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f1ik21mcj8cbi8pxjub7k2rzl.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f1ccq7uhsv4pgsy8p73udk5ve.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f16snq3n0bahorbdaaevckkkw.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/f0cv1rin8pbi0009yegtugop3.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/eyzr36pchazs16g4jb3pqxqux.o",
+    "target/debug/incremental/river_gateway-3ft2vnm2artc3/s-hi6t04e5od-0xz5aig-9zpab1x83zb9s7osgrz5zciep/erfuv4guok7pmdgpi6ohaxzfo.o",
+    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review-v2.md",
+    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review.md",
+    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review-prompt.md",
+    "docs/superpowers/plans/2026-05-03-channel-messages.md",
+    "docs/superpowers/specs/2026-04-30-context-assembly-rework-design.md",
+    "docs/superpowers/reviews/2026-05-03-channel-message-review.md",
+    "docs/superpowers/reviews/2026-05-03-channel-message-review-prompt.md",
     "docs/superpowers/plans/2026-04-30-context-assembly-rework.md",
     "docs/superpowers/reviews/2026-04-30-context-assembly-rework-review-v3.md",
     "docs/superpowers/specs/2026-04-30-tool-consolidation-design.md",
@@ -207,7 +214,6 @@
     "docs/archive-v4/code-review-guide.md",
     "docs/context-assembly-design.md",
     "docs/archive-v4/research/context-assembly-design.md",
-    "docs/superpowers/specs/2026-04-30-context-assembly-rework-design.md",
     "docs/superpowers/reviews/2026-04-29-spectator-compression-review.md",
     "docs/superpowers/plans/2026-04-30-tool-consolidation.md",
     "docs/archive-v4/GAP-ANALYSIS.md",
@@ -215,12 +221,6 @@
     "docs/superpowers/plans/reviews/2026-04-29-spectator-compression-adversarial-review.md",
     "docs/archive-v4/superpowers/specs/2026-04-01-adapter-library-design.md",
     "docs/archive/superpowers/specs/2026-03-23-conversations-design.md",
-    "docs/archive/superpowers/specs/2026-03-16-river-engine-design.md",
-    "docs/archive/superpowers/specs/2026-03-16-discord-adapter-design.md",
-    "docs/archive/superpowers/sessions/2026-03-26-phase7-integration.md",
-    "docs/archive/superpowers/STATUS.md",
-    "docs/archive/2026-03-23-design-session.md",
-    "docs/archive/superpowers/FUTURE.md",
     "target/doc/static.files/rust-logo-9a9549ea.svg",
     "target/doc/static.files/favicon-32x32-eab170b8.png",
     "target/doc/static.files/favicon-044be391.svg"

@@ -62,14 +62,6 @@ pub struct ServerConfig {
 
 /// Initialize and run the gateway server
 pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
-    // Migrate inbox/ to conversations/ if needed
-    let inbox_path = config.workspace.join("inbox");
-    let conversations_path = config.workspace.join("conversations");
-    if inbox_path.exists() && !conversations_path.exists() {
-        std::fs::rename(&inbox_path, &conversations_path)?;
-        tracing::info!("Migrated inbox/ to conversations/");
-    }
-
     // Initialize database
     let db_path = config.data_dir.join("river.db");
     let db = init_db(&db_path)?;
