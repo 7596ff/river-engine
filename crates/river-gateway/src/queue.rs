@@ -1,90 +1,44 @@
-//! Thread-safe priority message queue for mid-generation messages
+//! Thread-safe notification queue
 //!
-//! Messages are ordered by priority: Interactive > Scheduled > Background.
-//! Within the same priority level, messages are processed in FIFO order.
-//!
-//! Note: This queue uses `unwrap()` on mutex locks. Mutex poisoning only occurs
-//! when a thread panics while holding the lock, which would indicate a severe
-//! bug elsewhere. In that case, propagating the panic is the correct behavior.
+//! Carries lightweight notifications (channel + snowflake ID) to wake the agent.
+//! The agent reads the actual message content from the channel log.
 
-use crate::api::IncomingMessage;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// Wrapper for IncomingMessage that implements ordering by priority
+/// A lightweight notification that a channel has a new message
+#[derive(Debug, Clone)]
+pub struct ChannelNotification {
+    /// Channel identifier (e.g., "discord_general")
+    pub channel: String,
+    /// Snowflake ID of the new message
+    pub snowflake_id: String,
+}
+
+/// Thread-safe notification queue
 ///
-/// Higher priority messages come first. Within same priority, earlier
-/// sequence numbers (FIFO) come first.
-struct PrioritizedMessage {
-    message: IncomingMessage,
-    sequence: u64, // For FIFO within same priority
-}
-
-impl PartialEq for PrioritizedMessage {
-    fn eq(&self, other: &Self) -> bool {
-        self.message.priority == other.message.priority && self.sequence == other.sequence
-    }
-}
-
-impl Eq for PrioritizedMessage {}
-
-impl PartialOrd for PrioritizedMessage {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PrioritizedMessage {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Higher priority first (reverse order for BinaryHeap max-heap)
-        match self.message.priority.cmp(&other.message.priority) {
-            Ordering::Equal => {
-                // Lower sequence number first (earlier messages) - reverse for max-heap
-                other.sequence.cmp(&self.sequence)
-            }
-            other_ord => other_ord,
-        }
-    }
-}
-
-/// Thread-safe priority queue for messages arriving mid-generation
-///
-/// Messages are ordered by priority (Interactive > Scheduled > Background).
-/// Within the same priority level, messages maintain FIFO order.
+/// Notifications are processed in FIFO order.
 pub struct MessageQueue {
-    inner: Mutex<BinaryHeap<PrioritizedMessage>>,
-    sequence: AtomicU64,
+    inner: Mutex<VecDeque<ChannelNotification>>,
 }
 
 impl MessageQueue {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(BinaryHeap::new()),
-            sequence: AtomicU64::new(0),
+            inner: Mutex::new(VecDeque::new()),
         }
     }
 
-    /// Add a message to the queue
-    pub fn push(&self, msg: IncomingMessage) {
-        let sequence = self.sequence.fetch_add(1, AtomicOrdering::SeqCst);
-        let prioritized = PrioritizedMessage {
-            message: msg,
-            sequence,
-        };
+    /// Push a notification
+    pub fn push(&self, notification: ChannelNotification) {
         let mut queue = self.inner.lock().unwrap();
-        queue.push(prioritized);
+        queue.push_back(notification);
     }
 
-    /// Drain all messages from the queue, ordered by priority
-    pub fn drain(&self) -> Vec<IncomingMessage> {
+    /// Drain all notifications
+    pub fn drain(&self) -> Vec<ChannelNotification> {
         let mut queue = self.inner.lock().unwrap();
-        let mut messages = Vec::with_capacity(queue.len());
-        while let Some(pm) = queue.pop() {
-            messages.push(pm.message);
-        }
-        messages
+        queue.drain(..).collect()
     }
 
     /// Check if queue is empty
@@ -109,46 +63,6 @@ impl Default for MessageQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Author;
-    use river_core::Priority;
-
-    fn test_message(content: &str) -> IncomingMessage {
-        IncomingMessage {
-            adapter: "test".to_string(),
-            event_type: "message".to_string(),
-            channel: "general".to_string(),
-            channel_name: None,
-            guild_id: None,
-            guild_name: None,
-            author: Author {
-                id: "user1".to_string(),
-                name: "Test User".to_string(),
-            },
-            content: content.to_string(),
-            message_id: None,
-            metadata: None,
-            priority: Priority::Interactive,
-        }
-    }
-
-    fn test_message_with_priority(content: &str, priority: Priority) -> IncomingMessage {
-        IncomingMessage {
-            adapter: "test".to_string(),
-            event_type: "message".to_string(),
-            channel: "general".to_string(),
-            channel_name: None,
-            guild_id: None,
-            guild_name: None,
-            author: Author {
-                id: "user1".to_string(),
-                name: "Test User".to_string(),
-            },
-            content: content.to_string(),
-            message_id: None,
-            metadata: None,
-            priority,
-        }
-    }
 
     #[test]
     fn test_new_queue_is_empty() {
@@ -161,17 +75,22 @@ mod tests {
     fn test_push_and_drain() {
         let queue = MessageQueue::new();
 
-        queue.push(test_message("hello"));
-        queue.push(test_message("world"));
+        queue.push(ChannelNotification {
+            channel: "discord_general".to_string(),
+            snowflake_id: "001".to_string(),
+        });
+        queue.push(ChannelNotification {
+            channel: "discord_general".to_string(),
+            snowflake_id: "002".to_string(),
+        });
 
         assert!(!queue.is_empty());
         assert_eq!(queue.len(), 2);
 
-        let messages = queue.drain();
-        assert_eq!(messages.len(), 2);
-        // Same priority, so FIFO order
-        assert_eq!(messages[0].content, "hello");
-        assert_eq!(messages[1].content, "world");
+        let notifications = queue.drain();
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[0].snowflake_id, "001");
+        assert_eq!(notifications[1].snowflake_id, "002");
 
         assert!(queue.is_empty());
     }
@@ -179,46 +98,31 @@ mod tests {
     #[test]
     fn test_drain_empty_queue() {
         let queue = MessageQueue::new();
-        let messages = queue.drain();
-        assert!(messages.is_empty());
+        let notifications = queue.drain();
+        assert!(notifications.is_empty());
     }
 
     #[test]
-    fn test_priority_ordering() {
+    fn test_fifo_order() {
         let queue = MessageQueue::new();
 
-        // Push in order: background, scheduled, interactive
-        queue.push(test_message_with_priority("bg1", Priority::Background));
-        queue.push(test_message_with_priority("sched1", Priority::Scheduled));
-        queue.push(test_message_with_priority("inter1", Priority::Interactive));
-        queue.push(test_message_with_priority("bg2", Priority::Background));
-        queue.push(test_message_with_priority("inter2", Priority::Interactive));
+        queue.push(ChannelNotification {
+            channel: "discord_general".to_string(),
+            snowflake_id: "first".to_string(),
+        });
+        queue.push(ChannelNotification {
+            channel: "discord_dm".to_string(),
+            snowflake_id: "second".to_string(),
+        });
+        queue.push(ChannelNotification {
+            channel: "discord_general".to_string(),
+            snowflake_id: "third".to_string(),
+        });
 
-        let messages = queue.drain();
-        assert_eq!(messages.len(), 5);
-
-        // Interactive first (FIFO within priority)
-        assert_eq!(messages[0].content, "inter1");
-        assert_eq!(messages[1].content, "inter2");
-        // Then scheduled
-        assert_eq!(messages[2].content, "sched1");
-        // Then background (FIFO within priority)
-        assert_eq!(messages[3].content, "bg1");
-        assert_eq!(messages[4].content, "bg2");
-    }
-
-    #[test]
-    fn test_fifo_within_same_priority() {
-        let queue = MessageQueue::new();
-
-        queue.push(test_message_with_priority("first", Priority::Interactive));
-        queue.push(test_message_with_priority("second", Priority::Interactive));
-        queue.push(test_message_with_priority("third", Priority::Interactive));
-
-        let messages = queue.drain();
-        assert_eq!(messages[0].content, "first");
-        assert_eq!(messages[1].content, "second");
-        assert_eq!(messages[2].content, "third");
+        let notifications = queue.drain();
+        assert_eq!(notifications[0].snowflake_id, "first");
+        assert_eq!(notifications[1].snowflake_id, "second");
+        assert_eq!(notifications[2].snowflake_id, "third");
     }
 
     #[test]
@@ -229,11 +133,13 @@ mod tests {
         let queue = Arc::new(MessageQueue::new());
         let mut handles = vec![];
 
-        // Spawn threads that push messages
         for i in 0..10 {
             let q = queue.clone();
             handles.push(thread::spawn(move || {
-                q.push(test_message(&format!("msg{}", i)));
+                q.push(ChannelNotification {
+                    channel: "test".to_string(),
+                    snowflake_id: format!("{}", i),
+                });
             }));
         }
 
@@ -242,21 +148,5 @@ mod tests {
         }
 
         assert_eq!(queue.len(), 10);
-    }
-
-    #[test]
-    fn test_interactive_preempts_background() {
-        let queue = MessageQueue::new();
-
-        // Many background messages, then one interactive
-        for i in 0..100 {
-            queue.push(test_message_with_priority(&format!("bg{}", i), Priority::Background));
-        }
-        queue.push(test_message_with_priority("urgent", Priority::Interactive));
-
-        let messages = queue.drain();
-        // Interactive should be first
-        assert_eq!(messages[0].content, "urgent");
-        assert_eq!(messages[0].priority, Priority::Interactive);
     }
 }

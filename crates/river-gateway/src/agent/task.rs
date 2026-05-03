@@ -220,18 +220,55 @@ impl AgentTask {
             "Turn started"
         );
 
-        // Drain incoming messages
-        let incoming = self.message_queue.drain();
-        for msg in &incoming {
+        // Drain notifications and read channel logs
+        let notifications = self.message_queue.drain();
+        let channels_dir = self.config.workspace.join("channels");
+
+        // Deduplicate channels (multiple notifications for same channel).
+        // This set grows if mid-turn notifications arrive for new channels.
+        let mut seen_channels = std::collections::HashSet::new();
+        for notification in &notifications {
+            seen_channels.insert(notification.channel.clone());
+        }
+
+        // Read new messages from each channel
+        let mut all_new_messages = Vec::new();
+        for channel_key in &seen_channels {
+            // Parse adapter and channel_id from the key
+            let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
+            if parts.len() != 2 {
+                tracing::warn!(channel = %channel_key, "Invalid channel key format");
+                continue;
+            }
+            let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
+            match log.read_since_cursor(50).await {
+                Ok(entries) => {
+                    for entry in entries {
+                        if let crate::channels::ChannelEntry::Message(msg) = entry {
+                            if !msg.is_agent() {
+                                all_new_messages.push((channel_key.clone(), msg));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(channel = %channel_key, error = %e, "Failed to read channel log");
+                }
+            }
+        }
+
+        // Add messages to context
+        for (channel, msg) in &all_new_messages {
+            let author = msg.author.as_deref().unwrap_or("unknown");
             let chat_msg = ChatMessage::user(format!(
                 "[{}] {}: {}",
-                msg.channel, msg.author.name, msg.content
+                channel, author, msg.content
             ));
             self.context.append(ContextMessage::new(chat_msg, self.turn_count));
         }
 
         // Add heartbeat trigger if applicable
-        if is_heartbeat && incoming.is_empty() {
+        if is_heartbeat && all_new_messages.is_empty() {
             self.context.append(ContextMessage::new(
                 ChatMessage::user(":heartbeat:"),
                 self.turn_count,
@@ -350,29 +387,66 @@ impl AgentTask {
                 self.context.append(ContextMessage::new(tool_msg, self.turn_count));
             }
 
-            // Check for messages that arrived during tool execution
-            let mid_turn_messages = self.message_queue.drain();
-            if !mid_turn_messages.is_empty() {
-                let mut content = String::from("Messages received during tool execution:\n");
-                for msg in mid_turn_messages {
-                    content.push_str(&format!(
-                        "- [{}] {}: {}\n",
-                        msg.channel, msg.author.name, msg.content
-                    ));
+            // Check for notifications that arrived during tool execution
+            let mid_turn_notifications = self.message_queue.drain();
+            if !mid_turn_notifications.is_empty() {
+                // Deduplicate channels
+                let mut mid_channels = std::collections::HashSet::new();
+                for n in &mid_turn_notifications {
+                    mid_channels.insert(n.channel.clone());
                 }
-                let system_msg = ChatMessage::system(content);
-                messages.push(system_msg.clone());
-                self.context.append(ContextMessage::new(system_msg, self.turn_count));
+                // Read new messages from each notified channel
+                let mut mid_content = String::from("Messages received during tool execution:\n");
+                let mut has_mid_messages = false;
+                for ch in &mid_channels {
+                    let parts: Vec<&str> = ch.splitn(2, '_').collect();
+                    if parts.len() != 2 { continue; }
+                    let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
+                    if let Ok(entries) = log.read_since_cursor(50).await {
+                        for entry in entries {
+                            if let crate::channels::ChannelEntry::Message(msg) = entry {
+                                if !msg.is_agent() {
+                                    let author = msg.author.as_deref().unwrap_or("unknown");
+                                    mid_content.push_str(&format!(
+                                        "- [{}] {}: {}\n",
+                                        ch, author, msg.content
+                                    ));
+                                    has_mid_messages = true;
+                                }
+                            }
+                        }
+                    }
+                    // Track these channels for cursor writing at settle
+                    seen_channels.insert(ch.clone());
+                }
+                if has_mid_messages {
+                    let system_msg = ChatMessage::system(mid_content);
+                    messages.push(system_msg.clone());
+                    self.context.append(ContextMessage::new(system_msg, self.turn_count));
+                }
             }
         }
 
         // ========== SETTLE ==========
+        // Write cursor entries for channels we read
+        for channel_key in &seen_channels {
+            let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
+            if parts.len() == 2 {
+                let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
+                let cursor_id = self.snowflake_gen.next_id(river_core::SnowflakeType::Message).to_string();
+                let cursor = crate::channels::CursorEntry::new(cursor_id);
+                if let Err(e) = log.append_entry(&cursor).await {
+                    tracing::warn!(channel = %channel_key, error = %e, "Failed to write cursor");
+                }
+            }
+        }
+
         self.persist_turn_messages();
 
         let transcript_summary = format!(
             "Turn {} completed: {} messages, {} tool calls ({} failed)",
             self.turn_count,
-            incoming.len(),
+            all_new_messages.len(),
             stats.total_tool_calls,
             stats.failed_tool_calls
         );

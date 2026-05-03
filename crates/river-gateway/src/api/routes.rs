@@ -1,6 +1,5 @@
 //! HTTP API routes
 
-use crate::inbox::{format_inbox_line, build_discord_path, append_line, sanitize_name};
 use crate::metrics::{get_rss_bytes, LoopStateLabel};
 use crate::policy::HealthStatus;
 use crate::state::AppState;
@@ -219,73 +218,52 @@ async fn handle_incoming(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     tracing::info!(
         adapter = %msg.adapter,
-        event_type = %msg.event_type,
         channel = %msg.channel,
-        author_id = %msg.author.id,
         author_name = %msg.author.name,
         content_len = msg.content.len(),
-        content_preview = %msg.content.chars().take(100).collect::<String>(),
-        message_id = ?msg.message_id,
-        priority = ?msg.priority,
         "Received incoming message"
     );
 
     // Validate authentication
     if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
-        tracing::warn!(
-            status = %status,
-            has_auth_header = headers.get(AUTHORIZATION).is_some(),
-            "Authentication failed for incoming message"
-        );
         return Err(status);
     }
-    tracing::debug!("Authentication passed");
 
-    // Build inbox path based on adapter
-    let inbox_path = if msg.adapter == "discord" {
-        build_discord_path(
-            &state.config.workspace,
-            msg.guild_id.as_deref(),
-            msg.guild_name.as_deref(),
-            &msg.channel,
-            msg.channel_name.as_deref().unwrap_or("unknown"),
-        )
-    } else {
-        // Generic path for other adapters - sanitize to prevent directory traversal
-        state.config.workspace
-            .join("inbox")
-            .join(sanitize_name(&msg.adapter))
-            .join(format!("{}.txt", sanitize_name(&msg.channel)))
-    };
+    // Generate snowflake ID
+    let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
+    let snowflake_str = snowflake.to_string();
 
-    // Format and write inbox line
-    let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let message_id = msg.message_id.as_deref().unwrap_or("unknown");
-    let line = format_inbox_line(
-        &timestamp,
-        message_id,
-        &msg.author.name,
-        &msg.author.id,
-        &msg.content,
+    // Build channel log entry
+    let entry = crate::channels::MessageEntry::incoming(
+        snowflake_str.clone(),
+        msg.author.name.clone(),
+        msg.author.id.clone(),
+        msg.content.clone(),
+        msg.adapter.clone(),
+        msg.message_id.clone(),
     );
 
-    if let Err(e) = append_line(&inbox_path, &line) {
-        tracing::error!(error = %e, path = %inbox_path.display(), "Failed to write to inbox");
+    // Append to channel log
+    let channels_dir = state.config.workspace.join("channels");
+    let log = crate::channels::ChannelLog::open(&channels_dir, &msg.adapter, &msg.channel);
+
+    if let Err(e) = log.append_entry(&entry).await {
+        tracing::error!(error = %e, "Failed to write to channel log");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    tracing::debug!(path = %inbox_path.display(), "Message written to inbox");
+    // Only push notification after successful write
+    let channel_key = format!("{}_{}", msg.adapter, msg.channel);
+    state.message_queue.push(crate::queue::ChannelNotification {
+        channel: channel_key.clone(),
+        snowflake_id: snowflake_str,
+    });
 
-    tracing::info!(
-        channel = %msg.channel,
-        author = %msg.author.name,
-        inbox_path = %inbox_path.display(),
-        "Message delivered to inbox"
-    );
+    tracing::info!(channel = %channel_key, "Message delivered to channel log");
 
     Ok(Json(serde_json::json!({
         "status": "delivered",
-        "inbox_path": inbox_path.to_string_lossy()
+        "channel": channel_key,
     })))
 }
 
