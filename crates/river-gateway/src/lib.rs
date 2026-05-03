@@ -10,6 +10,7 @@ pub mod state;
 pub mod server;
 pub mod api;
 pub mod model;
+pub mod channels;
 pub mod queue;
 pub mod memory;
 pub mod redis;
