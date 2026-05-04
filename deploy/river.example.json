@@ -1,0 +1,57 @@
+{
+  "port": 5000,
+
+  "models": {
+    "claude-sonnet": {
+      "provider": "anthropic",
+      "endpoint": "https://api.anthropic.com/v1",
+      "name": "claude-sonnet-4-20250514",
+      "api_key_file": "/run/secrets/anthropic_key",
+      "context_limit": 200000
+    },
+    "nomic-embed": {
+      "provider": "ollama",
+      "endpoint": "http://localhost:11434/v1",
+      "name": "nomic-embed-text",
+      "dimensions": 768
+    }
+  },
+
+  "agents": {
+    "iris": {
+      "workspace": "$HOME/stream",
+      "data_dir": "/var/lib/river/iris",
+      "port": 3000,
+      "model": "claude-sonnet",
+      "spectator_model": "claude-sonnet",
+      "embedding_model": "nomic-embed",
+      "context": {
+        "limit": 200000,
+        "compaction_threshold": 0.80,
+        "fill_target": 0.40,
+        "min_messages": 20
+      },
+      "redis_url": "redis://127.0.0.1:6379",
+      "auth_token_file": "/run/secrets/gateway_token",
+      "log": {
+        "level": "info"
+      },
+      "adapters": [
+        {
+          "type": "discord",
+          "port": 8081,
+          "token_file": "/run/secrets/discord_token",
+          "guild_id": "$DISCORD_GUILD_ID",
+          "channels": []
+        }
+      ]
+    }
+  },
+
+  "resources": {
+    "reserve_vram_mb": 500,
+    "reserve_ram_mb": 2000,
+    "llama_server_path": "llama-server",
+    "port_range": "8100-8200"
+  }
+}

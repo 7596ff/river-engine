@@ -346,6 +346,39 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_example_config() {
+        // Set required env vars for expansion
+        unsafe { std::env::set_var("DISCORD_GUILD_ID", "999888777") };
+
+        let raw = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy/river.example.json")
+        ).unwrap();
+        let expanded = crate::env::expand_vars(&raw).unwrap();
+        let config: RiverConfig = serde_json::from_str(&expanded).unwrap();
+
+        assert_eq!(config.port, 5000);
+        assert_eq!(config.models.len(), 2);
+        assert!(config.models.contains_key("claude-sonnet"));
+        assert!(config.models["nomic-embed"].is_embedding());
+        assert_eq!(config.agents.len(), 1);
+        assert!(config.agents.contains_key("iris"));
+
+        let iris = &config.agents["iris"];
+        assert_eq!(iris.port, 3000);
+        assert_eq!(iris.context.limit, 200000);
+        assert_eq!(iris.context.compaction_threshold, 0.80);
+        assert_eq!(iris.adapters.len(), 1);
+        assert_eq!(iris.adapters[0].adapter_type, "discord");
+        assert_eq!(iris.adapters[0].guild_id.as_deref(), Some("999888777"));
+
+        // Validate
+        let errors = crate::validate::validate(&config);
+        assert!(errors.is_empty(), "Validation errors: {:?}", errors);
+
+        unsafe { std::env::remove_var("DISCORD_GUILD_ID") };
+    }
+
+    #[test]
     fn test_parse_discord_adapter() {
         let json = r#"{
             "type": "discord",
