@@ -1118,6 +1118,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::broadcast;
 
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
 /// A child process definition
 #[derive(Debug, Clone)]
 pub struct ChildSpec {
@@ -1179,7 +1182,7 @@ fn forward_output(label: String, child: &mut Child) {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::info!(target: "child", "[{}] {}", label, line);
+                tracing::info!("[{}] {}", label, line);
             }
         });
     }
@@ -1190,9 +1193,39 @@ fn forward_output(label: String, child: &mut Child) {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::warn!(target: "child", "[{}] {}", label, line);
+                tracing::warn!("[{}] {}", label, line);
             }
         });
+    }
+}
+
+/// Send SIGTERM, wait up to 10 seconds, then SIGKILL if still running.
+async fn graceful_shutdown(child: &mut Child, label: &str) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // Send SIGTERM
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill().await;
+        return;
+    }
+
+    // Wait up to 10 seconds for graceful exit
+    match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+        Ok(Ok(status)) => {
+            tracing::info!(label = %label, status = %status, "Child exited gracefully");
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(label = %label, error = %e, "Error waiting for child");
+        }
+        Err(_) => {
+            tracing::warn!(label = %label, "Child did not exit in 10s, sending SIGKILL");
+            let _ = child.kill().await;
+        }
     }
 }
 
@@ -1256,8 +1289,8 @@ pub async fn supervise(spec: ChildSpec, mut shutdown_rx: broadcast::Receiver<()>
                 }
             }
             _ = shutdown_rx.recv() => {
-                tracing::info!(label = %spec.label, "Shutdown signal received, killing child");
-                let _ = child.kill().await;
+                tracing::info!(label = %spec.label, "Shutdown signal received, sending SIGTERM");
+                graceful_shutdown(&mut child, &spec.label).await;
                 return;
             }
         }
@@ -1406,19 +1439,114 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
         "Config loaded"
     );
 
-    // 4. Start orchestrator HTTP server (reuse existing setup)
-    // ... (build OrchestratorState from config, create router, bind)
+    // 4. Build OrchestratorState from config
+    //
+    // Bridge RiverConfig → OrchestratorConfig + LocalModel/ExternalModel lists.
+    // The config file is the sole source of truth in --config mode.
+    use river_orchestrator::config_file::RiverConfig;
+    use river_orchestrator::cli_builder::ResolvedModel;
+    use river_orchestrator::{OrchestratorConfig, OrchestratorState};
+    use river_orchestrator::process::ProcessConfig;
+    use river_orchestrator::resources::ResourceConfig;
+    use river_orchestrator::external::ExternalModel;
 
-    // 5-6. For each agent, check birth and resolve models
+    // Parse port range from config string
+    let (port_start, port_end) = parse_port_range(&config.resources.port_range);
+
+    let orch_config = OrchestratorConfig {
+        port: config.port,
+        health_threshold_seconds: 120,  // default, not exposed in config
+        model_dirs: vec![],             // not used in config mode — models are explicit
+        external_models_config: None,   // not used in config mode
+        idle_timeout_seconds: 900,      // default, not exposed in config
+        llama_server_path: config.resources.llama_server_path.clone(),
+        port_range_start: port_start,
+        port_range_end: port_end,
+        reserve_vram_mb: config.resources.reserve_vram_mb,
+        reserve_ram_mb: config.resources.reserve_ram_mb,
+    };
+
+    let resource_config = ResourceConfig {
+        reserve_vram_bytes: config.resources.reserve_vram_mb * 1024 * 1024,
+        reserve_ram_bytes: config.resources.reserve_ram_mb * 1024 * 1024,
+    };
+
+    let process_config = ProcessConfig {
+        llama_server_path: config.resources.llama_server_path.clone(),
+        port_range_start: port_start,
+        port_range_end: port_end,
+        default_ctx_size: 8192,
+        health_check_timeout: Duration::from_secs(30),
+    };
+
+    // Build local and external model lists from config
+    let mut local_models = Vec::new();
+    let mut external_models = Vec::new();
+
+    for (model_id, model) in &config.models {
+        if model.is_gguf() {
+            if let Some(ref path) = model.path {
+                // Parse GGUF metadata to create a LocalModel entry
+                match river_orchestrator::discovery::gguf::parse_gguf(path) {
+                    Ok(metadata) => {
+                        local_models.push(river_orchestrator::discovery::LocalModel {
+                            id: model_id.clone(),
+                            path: path.clone(),
+                            metadata,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(model = %model_id, error = %e, "Failed to parse GGUF file");
+                    }
+                }
+            }
+        } else if !model.is_embedding() {
+            if let Some(ref endpoint) = model.endpoint {
+                external_models.push(ExternalModel {
+                    id: model_id.clone(),
+                    provider: model.provider.clone(),
+                    litellm_model: model.name.clone().unwrap_or_default(),
+                    api_base: endpoint.clone(),
+                });
+            }
+        }
+    }
+
+    let state = std::sync::Arc::new(OrchestratorState::new(
+        orch_config, local_models, external_models, resource_config, process_config,
+    ));
+
+    // Start orchestrator HTTP server
+    let app = river_orchestrator::api::create_router(state.clone());
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Orchestrator listening on {}", addr);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    // 5-6. Resolve models — for GGUF, wait for health before spawning gateways
     let mut resolved_models = std::collections::HashMap::new();
     for (model_id, model) in &config.models {
         if model.is_gguf() {
-            // Request model load, wait for health (120s timeout)
-            // Use existing state.request_model() which blocks until healthy
-            tracing::info!(model = %model_id, "Loading GGUF model...");
-            // ... model loading via orchestrator state ...
+            tracing::info!(model = %model_id, "Loading GGUF model (waiting for health)...");
+            match state.request_model(model_id, 120).await {
+                Ok(river_orchestrator::state::ModelRequestResponse::Ready { endpoint, .. }) => {
+                    resolved_models.insert(model_id.clone(), ResolvedModel {
+                        endpoint,
+                        name: model.name.clone(),
+                    });
+                    tracing::info!(model = %model_id, "GGUF model ready");
+                }
+                Ok(river_orchestrator::state::ModelRequestResponse::Loading { .. }) => {
+                    tracing::error!(model = %model_id, "GGUF model still loading after 120s, skipping");
+                }
+                Err(e) => {
+                    tracing::error!(model = %model_id, error = %e, "Failed to load GGUF model");
+                }
+            }
         } else if let Some(ref endpoint) = model.endpoint {
-            resolved_models.insert(model_id.clone(), river_orchestrator::cli_builder::ResolvedModel {
+            resolved_models.insert(model_id.clone(), ResolvedModel {
                 endpoint: endpoint.clone(),
                 name: model.name.clone(),
             });
@@ -1507,12 +1635,13 @@ In `main()`, after parsing args, add:
 
 This goes before the existing direct-CLI startup path.
 
-- [ ] **Step 4: Add `futures` dependency**
+- [ ] **Step 4: Add dependencies**
 
-Add to `crates/river-orchestrator/Cargo.toml`:
+Add to `crates/river-orchestrator/Cargo.toml` under `[dependencies]`:
 
 ```toml
 futures = "0.3"
+libc = "0.2"
 ```
 
 - [ ] **Step 5: Run compilation check**
