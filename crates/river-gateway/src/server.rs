@@ -52,6 +52,12 @@ pub struct ServerConfig {
     pub orchestrator_url: Option<String>,
     pub auth_token_file: Option<PathBuf>,
     pub context_limit: u32,
+    /// Compaction threshold (fraction of context limit)
+    pub compaction_threshold: f64,
+    /// Post-compaction fill target (fraction of context limit)
+    pub fill_target: f64,
+    /// Minimum messages kept in context
+    pub min_messages: usize,
     /// Communication adapters: (name, outbound_url, read_url)
     pub adapters: Vec<(String, String, Option<String>)>,
     /// Spectator model URL (defaults to same as agent)
@@ -356,7 +362,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         workspace: agent_workspace.clone(),
         context_config: crate::agent::ContextConfig {
             limit: agent_context_limit as usize,
-            ..crate::agent::ContextConfig::default()
+            compaction_threshold: config.compaction_threshold,
+            fill_target: config.fill_target,
+            min_messages: config.min_messages,
         },
         max_tool_calls: 50,
         heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),

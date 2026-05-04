@@ -56,6 +56,18 @@ struct Args {
     #[arg(long, default_value = "131072")]
     context_limit: u32,
 
+    /// Compaction threshold (fraction of context limit, e.g., 0.80)
+    #[arg(long, default_value = "0.80")]
+    compaction_threshold: f64,
+
+    /// Post-compaction fill target (fraction of context limit, e.g., 0.40)
+    #[arg(long, default_value = "0.40")]
+    fill_target: f64,
+
+    /// Minimum messages always kept in context
+    #[arg(long, default_value = "20")]
+    min_messages: u32,
+
     /// Communication adapter configuration (can be repeated)
     /// Format: name:outbound_url[:read_url]
     /// Example: --adapter discord:http://localhost:8081/outbound:http://localhost:8081/read
@@ -243,6 +255,9 @@ async fn main() -> anyhow::Result<()> {
         orchestrator_url: args.orchestrator_url,
         auth_token_file: args.auth_token_file,
         context_limit: args.context_limit,
+        compaction_threshold: args.compaction_threshold,
+        fill_target: args.fill_target,
+        min_messages: args.min_messages as usize,
         adapters: adapter_configs,
         spectator_model_url: args.spectator_model_url,
         spectator_model_name: args.spectator_model_name,
