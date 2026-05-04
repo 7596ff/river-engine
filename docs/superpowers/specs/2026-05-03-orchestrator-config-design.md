@@ -49,6 +49,11 @@ river-orchestrator --config river.json [--env-file river.env]
         "fill_target": 0.40,
         "min_messages": 20
       },
+      "redis_url": "redis://127.0.0.1:6379",
+      "auth_token": "$GATEWAY_AUTH_TOKEN",
+      "log": {
+        "level": "info"
+      },
       "adapters": [
         {
           "type": "discord",
@@ -94,6 +99,13 @@ A named map of agents. Each agent becomes one `river-gateway` process. Fields:
   - `compaction_threshold` — fraction of limit that triggers compaction (default: 0.80)
   - `fill_target` — post-compaction fill target as fraction of limit (default: 0.40)
   - `min_messages` — minimum messages always kept in context (default: 20)
+- `redis_url` — Redis connection URL, enables working/medium-term memory (optional)
+- `auth_token` — bearer token for gateway API authentication (optional). The orchestrator writes this to a temp file and passes `--auth-token-file` to the gateway, keeping secrets out of `/proc/cmdline`.
+- `log` — logging configuration (all fields optional):
+  - `level` — log level string (default: `"info"`)
+  - `dir` — log file directory (default: `{data_dir}/logs/`)
+  - `file` — explicit log file path, overrides `dir` (optional)
+  - `json_stdout` — emit JSON logs to stdout (default: false)
 - `adapters` — list of adapter configurations (see below)
 
 ### agents.\<name\>.adapters
@@ -151,9 +163,10 @@ Expansion happens on the raw string, not on parsed JSON values. This means `$VAR
 5. For each agent:
    a. Check `data_dir` for `river.db` with a valid birth memory
    b. If no birth: log an error with the exact command to run (`river-gateway birth --data-dir <path> --name <name>`), skip this agent
-   c. Resolve the agent's model to an endpoint URL (for external models this is immediate; for GGUF models the orchestrator loads the model first)
-   d. Spawn `river-gateway` with CLI args translated from config
-   e. Spawn each adapter with CLI args translated from config
+   c. Resolve the agent's model to an endpoint URL. For external models this is immediate. For GGUF models, the orchestrator starts the llama-server process and **waits for its health check to pass** before proceeding. Timeout after 120 seconds — if the model fails to become healthy, log an error and skip the agent.
+   d. If `auth_token` is set, write it to a temp file (`{data_dir}/auth.token`)
+   e. Spawn `river-gateway` with CLI args translated from config
+   f. Spawn each adapter with CLI args translated from config
 6. If no agents could start, exit with error
 
 ### Gateway CLI translation
@@ -174,7 +187,11 @@ river-gateway \
   [--embedding-url <resolved endpoint>] \
   [--spectator-model-url <resolved endpoint>] \
   [--spectator-model-name <model name>] \
-  [--auth-token-file <generated>]
+  [--redis-url redis://127.0.0.1:6379] \
+  [--auth-token-file <generated tmpfile>] \
+  [--log-level info] \
+  [--log-dir /var/lib/river/iris/logs/] \
+  [--log-file <explicit path>]
 ```
 
 Context window shape parameters (`compaction_threshold`, `fill_target`, `min_messages`) are not currently accepted as CLI args by the gateway. The implementation plan will need to add these as CLI args to the gateway, or the orchestrator writes a small config fragment the gateway reads. Recommendation: add CLI args to the gateway — it's simpler and keeps the gateway independently runnable.
@@ -210,7 +227,7 @@ On SIGTERM or SIGINT:
 ## What Changes
 
 - **`river-orchestrator`** — new `--config` and `--env-file` CLI args, config parsing module, process spawner, child monitor. The existing CLI args become a fallback mode (direct CLI usage without config file still works).
-- **`river-gateway`** — add CLI args for context window shape parameters (`--compaction-threshold`, `--fill-target`, `--min-messages`). No other changes.
+- **`river-gateway`** — add CLI args for context window shape parameters (`--compaction-threshold`, `--fill-target`, `--min-messages`). Logging and redis args already exist. No other changes.
 - **`river-discord`** — no changes.
 
 ## Out of Scope
