@@ -26,3 +26,4 @@ reqwest.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
+tempfile = "3.10"
