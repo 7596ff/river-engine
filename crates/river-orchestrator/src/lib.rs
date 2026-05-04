@@ -14,6 +14,7 @@ pub mod config_file;
 pub mod env;
 pub mod validate;
 pub mod state;
+pub mod supervisor;
 
 pub use config::OrchestratorConfig;
 pub use state::OrchestratorState;

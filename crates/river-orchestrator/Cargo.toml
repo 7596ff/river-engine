@@ -23,6 +23,8 @@ chrono.workspace = true
 anyhow.workspace = true
 which = "7.0"
 reqwest.workspace = true
+libc = "0.2"
+futures = "0.3"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
