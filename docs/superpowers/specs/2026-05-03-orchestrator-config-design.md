@@ -19,7 +19,7 @@ river-orchestrator --config river.json [--env-file river.env]
       "provider": "anthropic",
       "endpoint": "https://api.anthropic.com/v1",
       "name": "claude-sonnet-4-20250514",
-      "api_key": "$ANTHROPIC_API_KEY",
+      "api_key_file": "/run/secrets/anthropic_key",
       "context_limit": 200000
     },
     "local-qwen": {
@@ -50,7 +50,7 @@ river-orchestrator --config river.json [--env-file river.env]
         "min_messages": 20
       },
       "redis_url": "redis://127.0.0.1:6379",
-      "auth_token": "$GATEWAY_AUTH_TOKEN",
+      "auth_token_file": "/run/secrets/gateway_token",
       "log": {
         "level": "info"
       },
@@ -59,7 +59,7 @@ river-orchestrator --config river.json [--env-file river.env]
           "type": "discord",
           "bin": "river-discord",
           "port": 8081,
-          "token": "$DISCORD_TOKEN",
+          "token_file": "/run/secrets/discord_token",
           "guild_id": "$DISCORD_GUILD_ID",
           "channels": ["general", "bot"]
         }
@@ -80,7 +80,7 @@ river-orchestrator --config river.json [--env-file river.env]
 
 A named map of model backends. Each key is a model ID referenced by agents. Three provider types:
 
-- **External API** (`provider: "anthropic"`, `"openai"`, `"ollama"`, etc.) — has `endpoint`, `name`, optional `api_key`. The orchestrator passes the endpoint URL to the gateway as `--model-url`. The orchestrator does not proxy requests — agents talk directly to the model endpoint.
+- **External API** (`provider: "anthropic"`, `"openai"`, `"ollama"`, etc.) — has `endpoint`, `name`, optional `api_key_file` (path to file containing the API key). The orchestrator passes the endpoint URL to the gateway as `--model-url`. The orchestrator does not proxy requests — agents talk directly to the model endpoint.
 - **Local GGUF** (`provider: "gguf"`) — has `path` to the GGUF file. The orchestrator manages loading/unloading via llama-server. When a gateway needs this model, the orchestrator ensures it's loaded and returns the local llama-server endpoint.
 - **Embedding** — any model with a `dimensions` field is an embedding model. Referenced by `embedding_model` in agent config. Passed to the gateway as `--embedding-url`.
 
@@ -100,7 +100,7 @@ A named map of agents. Each agent becomes one `river-gateway` process. Fields:
   - `fill_target` — post-compaction fill target as fraction of limit (default: 0.40)
   - `min_messages` — minimum messages always kept in context (default: 20)
 - `redis_url` — Redis connection URL, enables working/medium-term memory (optional)
-- `auth_token` — bearer token for gateway API authentication (optional). The orchestrator writes this to a temp file and passes `--auth-token-file` to the gateway, keeping secrets out of `/proc/cmdline`.
+- `auth_token_file` — path to file containing bearer token for gateway API authentication (optional). Passed directly as `--auth-token-file` to the gateway.
 - `log` — logging configuration (all fields optional):
   - `level` — log level string (default: `"info"`)
   - `dir` — log file directory (default: `{data_dir}/logs/`)
@@ -118,7 +118,7 @@ Each adapter entry describes a process the orchestrator spawns to connect the ag
 - Remaining fields are adapter-specific and passed as CLI args
 
 For `type: "discord"`:
-- `token` — Discord bot token (required)
+- `token_file` — path to file containing Discord bot token (required)
 - `guild_id` — Discord guild/server ID (required)
 - `channels` — list of channel names to listen in (optional)
 
@@ -139,10 +139,11 @@ The `--env-file` flag loads a key-value file into the process environment before
 
 ```
 # Comments and blank lines ignored
-ANTHROPIC_API_KEY=sk-ant-...
-DISCORD_TOKEN=...
 DISCORD_GUILD_ID=1234567890
+HOME=/home/cassie
 ```
+
+Note: secrets (API keys, tokens) are never placed in env vars or the config file. They are read from files at runtime via `*_file` fields (e.g., `api_key_file`, `token_file`, `auth_token_file`). Env var expansion is for non-secret values like paths and IDs.
 
 **Existing environment wins.** If a variable is already set in the process environment, the env file value is ignored. This matches systemd `EnvironmentFile=` semantics and means you can override env file defaults by exporting variables in your shell.
 
@@ -164,9 +165,8 @@ Expansion happens on the raw string, not on parsed JSON values. This means `$VAR
    a. Check `data_dir` for `river.db` with a valid birth memory
    b. If no birth: log an error with the exact command to run (`river-gateway birth --data-dir <path> --name <name>`), skip this agent
    c. Resolve the agent's model to an endpoint URL. For external models this is immediate. For GGUF models, the orchestrator starts the llama-server process and **waits for its health check to pass** before proceeding. Timeout after 120 seconds — if the model fails to become healthy, log an error and skip the agent.
-   d. If `auth_token` is set, write it to a temp file (`{data_dir}/auth.token`)
-   e. Spawn `river-gateway` with CLI args translated from config
-   f. Spawn each adapter with CLI args translated from config
+   d. Spawn `river-gateway` with CLI args translated from config
+   e. Spawn each adapter with CLI args translated from config
 6. If no agents could start, exit with error
 
 ### Gateway CLI translation
@@ -188,7 +188,7 @@ river-gateway \
   [--spectator-model-url <resolved endpoint>] \
   [--spectator-model-name <model name>] \
   [--redis-url redis://127.0.0.1:6379] \
-  [--auth-token-file <generated tmpfile>] \
+  [--auth-token-file <path from config>] \
   [--log-level info] \
   [--log-dir /var/lib/river/iris/logs/] \
   [--log-file <explicit path>]
@@ -202,7 +202,7 @@ For `type: "discord"`:
 
 ```
 river-discord \
-  --token <token> \
+  --token-file <token_file path> \
   --gateway-url http://127.0.0.1:<agent_port> \
   --guild-id <guild_id> \
   --listen-port <adapter_port> \
