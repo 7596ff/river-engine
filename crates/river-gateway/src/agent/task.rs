@@ -87,9 +87,9 @@ impl AgentTask {
         flash_queue: Arc<FlashQueue>,
         db: Arc<Mutex<Database>>,
         snowflake_gen: Arc<SnowflakeGenerator>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         // Build system prompt synchronously
-        let system_prompt = Self::build_system_prompt_sync(&config.workspace);
+        let system_prompt = Self::build_system_prompt_sync(&config.workspace)?;
 
         let channel = "default";
 
@@ -104,7 +104,7 @@ impl AgentTask {
             )
         };
 
-        Self {
+        Ok(Self {
             config,
             bus,
             message_queue,
@@ -118,7 +118,7 @@ impl AgentTask {
             pending_channel_switch: None,
             context,
             last_estimated_prompt_tokens: 0,
-        }
+        })
     }
 
     /// Main run loop — called by coordinator via spawn_task
@@ -186,7 +186,8 @@ impl AgentTask {
             let channel_name = new_channel.display_name().to_string();
             self.channel_context = Some(new_channel);
 
-            let system_prompt = self.build_system_prompt().await;
+            let system_prompt = self.build_system_prompt().await
+                .expect("Identity files missing during channel switch");
             let db_guard = self.db.lock().expect("DB lock poisoned");
             self.context = PersistentContext::build(
                 self.config.context_config.clone(),
@@ -277,7 +278,8 @@ impl AgentTask {
 
         // ========== CHECK COMPACTION ==========
         if self.context.needs_compaction() {
-            let system_prompt = self.build_system_prompt().await;
+            let system_prompt = self.build_system_prompt().await
+                .expect("Identity files missing during compaction");
             let db_guard = self.db.lock().expect("DB lock poisoned");
             self.context.compact(
                 system_prompt,
@@ -534,49 +536,43 @@ impl AgentTask {
     }
 
     /// Build system prompt from workspace files (async version)
-    async fn build_system_prompt(&self) -> String {
+    async fn build_system_prompt(&self) -> anyhow::Result<String> {
         let mut parts = Vec::new();
 
-        // Load identity files from actor subdirectory
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
-            let path = self.config.workspace.join("actor").join(filename);
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                parts.push(content);
-            }
+            let path = self.config.workspace.join(filename);
+            let content = tokio::fs::read_to_string(&path).await
+                .map_err(|e| anyhow::anyhow!(
+                    "Required identity file missing: {:?} ({})", path, e
+                ))?;
+            parts.push(content);
         }
 
-        // Add current time with timezone from preferences
         let prefs = Preferences::load(&self.config.workspace);
         let time_str = format_current_time(prefs.timezone());
         parts.push(format!("Current time: {}", time_str));
 
-        if parts.is_empty() {
-            "You are an AI assistant.".to_string()
-        } else {
-            parts.join("\n\n---\n\n")
-        }
+        Ok(parts.join("\n\n---\n\n"))
     }
 
     /// Build system prompt synchronously (for use in new())
-    fn build_system_prompt_sync(workspace: &Path) -> String {
+    fn build_system_prompt_sync(workspace: &Path) -> anyhow::Result<String> {
         let mut parts = Vec::new();
 
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
-            let path = workspace.join("actor").join(filename);
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                parts.push(content);
-            }
+            let path = workspace.join(filename);
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!(
+                    "Required identity file missing: {:?} ({})", path, e
+                ))?;
+            parts.push(content);
         }
 
         let prefs = Preferences::load(workspace);
         let time_str = format_current_time(prefs.timezone());
         parts.push(format!("Current time: {}", time_str));
 
-        if parts.is_empty() {
-            "You are an AI assistant.".to_string()
-        } else {
-            parts.join("\n\n---\n\n")
-        }
+        Ok(parts.join("\n\n---\n\n"))
     }
 
     /// Persist conversation messages from the current turn to the database.
@@ -697,6 +693,13 @@ mod tests {
         }
     }
 
+    /// Write required identity files to a temp workspace
+    fn write_identity_files(workspace: &TempDir) {
+        std::fs::write(workspace.path().join("AGENTS.md"), "# Agent Protocol").unwrap();
+        std::fs::write(workspace.path().join("IDENTITY.md"), "I am a test agent.").unwrap();
+        std::fs::write(workspace.path().join("RULES.md"), "Be helpful.").unwrap();
+    }
+
     #[test]
     fn test_agent_task_config_default() {
         let config = AgentTaskConfig::default();
@@ -708,6 +711,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_task_emits_events() {
         let temp = TempDir::new().unwrap();
+        write_identity_files(&temp);
         let config = test_config(&temp);
         let coord = Coordinator::new();
         let bus = coord.bus().clone();
@@ -734,7 +738,7 @@ mod tests {
             flash_queue,
             db,
             sg,
-        );
+        ).unwrap();
 
         task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
             channel: "test".into(),
@@ -749,6 +753,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_task_channel_switch() {
         let temp = TempDir::new().unwrap();
+        write_identity_files(&temp);
         let config = test_config(&temp);
         let coord = Coordinator::new();
         let bus = coord.bus().clone();
@@ -773,7 +778,7 @@ mod tests {
             flash_queue,
             db,
             sg,
-        );
+        ).unwrap();
 
         assert!(task.channel_context().is_none());
 
@@ -795,7 +800,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_system_prompt_default() {
+    async fn test_build_system_prompt_missing_files() {
         let temp = TempDir::new().unwrap();
         let config = test_config(&temp);
         let coord = Coordinator::new();
@@ -811,7 +816,7 @@ mod tests {
         ).unwrap();
 
         let (db, sg) = test_db(&temp);
-        let task = AgentTask::new(
+        let result = AgentTask::new(
             config,
             bus,
             message_queue,
@@ -822,15 +827,17 @@ mod tests {
             sg,
         );
 
-        let prompt = task.build_system_prompt().await;
-        assert!(prompt.contains("Current time:") || prompt.contains("You are an AI assistant"));
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("AGENTS.md"), "Error should mention AGENTS.md: {}", err);
     }
 
     #[tokio::test]
     async fn test_build_system_prompt_with_identity() {
         let temp = TempDir::new().unwrap();
-        std::fs::create_dir_all(temp.path().join("actor")).unwrap();
-        std::fs::write(temp.path().join("actor/IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
+        std::fs::write(temp.path().join("AGENTS.md"), "# Agent Protocol").unwrap();
+        std::fs::write(temp.path().join("IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
+        std::fs::write(temp.path().join("RULES.md"), "Be helpful.").unwrap();
 
         let config = test_config(&temp);
         let coord = Coordinator::new();
@@ -855,10 +862,12 @@ mod tests {
             flash_queue,
             db,
             sg,
-        );
+        ).unwrap();
 
-        let prompt = task.build_system_prompt().await;
+        let prompt = task.build_system_prompt().await.unwrap();
         assert!(prompt.contains("I am River"));
+        assert!(prompt.contains("Agent Protocol"));
+        assert!(prompt.contains("Be helpful"));
         assert!(prompt.contains("Current time:"));
     }
 

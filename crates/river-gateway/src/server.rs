@@ -380,7 +380,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         flash_queue.clone(),
         db_arc.clone(),
         snowflake_gen.clone(),
-    );
+    )?;
 
     coordinator.spawn_task("agent", |_| agent_task.run());
 
