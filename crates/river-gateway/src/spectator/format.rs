@@ -7,14 +7,20 @@ use river_db::{Message, Move};
 /// Output format:
 /// ```text
 /// [user] What is X?
-/// [assistant] X is Y.
-/// [assistant/tool_call] {"name":"read","arguments":"{}"}
+/// [agent] X is Y.
+/// [agent/tool_call] {"name":"read","arguments":"{}"}
 /// [tool] Contents of file...
 /// ```
+///
+/// Note: "assistant" role is displayed as "agent" in transcripts.
+/// The internal role stays "assistant" for API compatibility.
 pub fn format_transcript(messages: &[Message]) -> String {
     let mut lines = Vec::new();
     for msg in messages {
-        let role = msg.role.as_str();
+        let role = match msg.role {
+            river_db::MessageRole::Assistant => "agent",
+            other => other.as_str(),
+        };
         if let Some(ref content) = msg.content {
             lines.push(format!("[{}] {}", role, content));
         }
@@ -50,7 +56,7 @@ pub fn fallback_summary(messages: &[Message]) -> String {
     for msg in messages {
         match msg.role {
             river_db::MessageRole::User => parts.push("User message"),
-            river_db::MessageRole::Assistant => parts.push("assistant response"),
+            river_db::MessageRole::Assistant => parts.push("agent response"),
             river_db::MessageRole::Tool => {
                 if let Some(ref name) = msg.name {
                     if !tool_names.contains(name) {
@@ -106,7 +112,7 @@ mod tests {
         ];
         let result = format_transcript(&messages);
         assert!(result.contains("[user] What is X?"));
-        assert!(result.contains("[assistant] X is Y."));
+        assert!(result.contains("[agent] X is Y."));
     }
 
     #[test]
@@ -146,7 +152,7 @@ mod tests {
             tool_msg,
         ];
         let result = fallback_summary(&messages);
-        assert_eq!(result, "User message -> assistant response with tools: read");
+        assert_eq!(result, "User message -> agent response with tools: read");
     }
 
     #[test]
