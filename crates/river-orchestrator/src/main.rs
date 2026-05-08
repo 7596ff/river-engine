@@ -316,6 +316,12 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
     let mut handles = Vec::new();
     let mut started_agents = 0u32;
 
+    // Resolve sibling binaries relative to the orchestrator's own binary
+    let bin_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
     for (name, agent) in &config.agents {
         // Check birth
         let db_path = agent.data_dir.join("river.db");
@@ -334,7 +340,7 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
         );
         let gateway_spec = river_orchestrator::supervisor::ChildSpec {
             label: format!("{}/gateway", name),
-            bin: PathBuf::from("river-gateway"),
+            bin: bin_dir.join("river-gateway"),
             args: gateway_args,
         };
         let rx = shutdown_tx.subscribe();
@@ -349,9 +355,14 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
                     continue;
                 }
             };
+            let adapter_bin = if adapter.bin_path().is_absolute() {
+                adapter.bin_path()
+            } else {
+                bin_dir.join(adapter.bin_path())
+            };
             let adapter_spec = river_orchestrator::supervisor::ChildSpec {
                 label: format!("{}/{}", name, adapter.adapter_type),
-                bin: adapter.bin_path(),
+                bin: adapter_bin,
                 args: adapter_args,
             };
             let rx = shutdown_tx.subscribe();
