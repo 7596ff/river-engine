@@ -296,8 +296,24 @@ async fn register_adapter(
         "Registering adapter"
     );
 
-    let response = state.adapter_registry.register(request.adapter).await;
-    Ok(Json(response))
+    // Insert into the tool adapter registry so send_message can find it
+    let adapter_config = crate::tools::AdapterConfig {
+        name: request.adapter.name.clone(),
+        outbound_url: format!("{}/send", request.adapter.url),
+        read_url: Some(format!("{}/read", request.adapter.url)),
+        features: request.adapter.features.clone(),
+    };
+    {
+        let mut reg = state.adapter_registry.write().await;
+        reg.register(adapter_config);
+    }
+
+    tracing::info!(adapter = %request.adapter.name, "Adapter registered");
+
+    Ok(Json(RegisterResponse {
+        accepted: true,
+        error: None,
+    }))
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 //! Shared application state
 
-use crate::adapters::AdapterRegistry;
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
@@ -31,8 +30,8 @@ pub struct AppState {
     pub metrics: Arc<RwLock<AgentMetrics>>,
     /// Health policy for self-healing
     pub policy: Arc<RwLock<HealthPolicy>>,
-    /// Registry of connected adapters
-    pub adapter_registry: Arc<AdapterRegistry>,
+    /// Registry of connected adapters (used by both HTTP registration and tools)
+    pub adapter_registry: Arc<RwLock<crate::tools::adapters::AdapterRegistry>>,
 }
 
 /// Gateway configuration (runtime)
@@ -71,7 +70,6 @@ impl AppState {
         policy: Arc<RwLock<HealthPolicy>>,
     ) -> Self {
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(config.agent_birth));
-        // Note: Metrics tracking is handled at the loop/handler level
         let executor = ToolExecutor::new(registry);
 
         Self {
@@ -86,7 +84,7 @@ impl AppState {
             subagent_manager,
             metrics,
             policy,
-            adapter_registry: Arc::new(AdapterRegistry::new()),
+            adapter_registry: Arc::new(RwLock::new(crate::tools::adapters::AdapterRegistry::new())),
         }
     }
 }

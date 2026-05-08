@@ -273,7 +273,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     )));
 
     // Create app state
-    let state = Arc::new(AppState::new(
+    let mut app_state = AppState::new(
         gateway_config,
         db_arc.clone(),
         registry,
@@ -284,7 +284,10 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         subagent_manager,
         metrics,
         policy,
-    ));
+    );
+    // Share the same adapter registry between tools and HTTP registration
+    app_state.adapter_registry = adapter_registry.clone();
+    let state = Arc::new(app_state);
 
     // Extract config values needed for agent before state takes ownership
     let agent_workspace = state.config.workspace.clone();
