@@ -178,36 +178,22 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     registry.register(Box::new(GrepTool::new(&config.workspace)));
     registry.register(Box::new(BashTool::new(&config.workspace)));
 
-    // Register subagent tools
-    registry.register(Box::new(SpawnSubagentTool::new(
-        subagent_manager.clone(),
-        config.workspace.clone(),
-        gateway_config.model_url.clone(),
-        gateway_config.model_name.clone(),
-    )));
-    registry.register(Box::new(ListSubagentsTool::new(subagent_manager.clone())));
-    registry.register(Box::new(SubagentStatusTool::new(subagent_manager.clone())));
-    registry.register(Box::new(StopSubagentTool::new(subagent_manager.clone())));
-    registry.register(Box::new(InternalSendTool::new(subagent_manager.clone())));
-    registry.register(Box::new(InternalReceiveTool::new(subagent_manager.clone())));
-    registry.register(Box::new(WaitForSubagentTool::new(subagent_manager.clone())));
-    tracing::info!("Registered subagent tools (7 tools)");
+    // NOTE: Subagent, web, logging, and scheduling tools are disabled for now.
+    // With 27+ tools, small local models (hermes3:8b, gemma4:e2b) get confused
+    // and call the wrong tool — e.g. internal_send instead of speak. Stripping
+    // down to core tools until we have either smarter models or tool filtering.
+    //
+    // Disabled tools:
+    //   subagent: spawn_subagent, list_subagents, subagent_status, stop_subagent,
+    //             internal_send, internal_receive, wait_for_subagent
+    //   web: webfetch, websearch
+    //   logging: log_read
+    //   scheduling: schedule_heartbeat, rotate_context
 
-    // Register web tools
-    registry.register(Box::new(WebFetchTool::new(&config.workspace)));
-    registry.register(Box::new(WebSearchTool::new()));
-    tracing::info!("Registered web tools (webfetch, websearch)");
-
-    // Register logging tools
-    registry.register(Box::new(LogReadTool::new(Some(config.agent_name.clone()))));
-    tracing::info!("Registered logging tools (log_read)");
-
-    // Create and register scheduling tools
+    // Keep heartbeat scheduler alive even though the tool isn't registered —
+    // the built-in heartbeat timer still needs it
     let heartbeat_scheduler = Arc::new(HeartbeatScheduler::new(gateway_config.heartbeat_minutes));
     let context_rotation = Arc::new(ContextRotation::new());
-    registry.register(Box::new(ScheduleHeartbeatTool::new(heartbeat_scheduler.clone())));
-    registry.register(Box::new(RotateContextTool::new(context_rotation.clone())));
-    tracing::info!("Registered scheduling tools (schedule_heartbeat, rotate_context)");
 
     // Create and register communication tools with configured adapters
     let adapter_registry = Arc::new(RwLock::new(AdapterRegistry::new()));
@@ -237,55 +223,23 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }
     }
 
+    // NOTE: speak requires a shared channel_context (not yet wired up).
+    // Using send_message instead — it takes explicit adapter+channel args.
+    // list_adapters, read_channel, sync_conversation disabled to reduce tool count.
     registry.register(Box::new(SendMessageTool::new(
         adapter_registry.clone(),
         config.workspace.clone(),
         snowflake_gen.clone(),
     )));
-    registry.register(Box::new(ListAdaptersTool::new(adapter_registry.clone())));
-    registry.register(Box::new(ReadChannelTool::new(adapter_registry.clone())));
-    registry.register(Box::new(SyncConversationTool::new(
-        adapter_registry.clone(),
-        config.workspace.clone(),
-        snowflake_gen.clone(),
-    )));
-    tracing::info!("Registered communication tools (send_message, list_adapters, read_channel, sync_conversation)");
+    tracing::info!("Registered communication tools (send_message)");
 
-    // Create and register model management tools (only if orchestrator is configured)
-    if let Some(ref orchestrator_url) = config.orchestrator_url {
-        let model_config = ModelManagerConfig {
-            orchestrator_url: orchestrator_url.clone(),
-            timeout: Duration::from_secs(120),
-        };
-        let model_state = Arc::new(RwLock::new(ModelManagerState::default()));
-        registry.register(Box::new(RequestModelTool::new(model_config.clone(), model_state.clone())));
-        registry.register(Box::new(ReleaseModelTool::new(model_config, model_state.clone())));
-        registry.register(Box::new(SwitchModelTool::new(model_state)));
-        tracing::info!("Registered model management tools (request_model, release_model, switch_model)");
-    }
-
-    // Register memory tools if embedding client is available
-    if let Some(ref embed_client) = embedding_client {
-        let embed_arc = Arc::new(embed_client.clone());
-        registry.register(Box::new(EmbedTool::new(
-            db_arc.clone(),
-            embed_arc.clone(),
-            snowflake_gen.clone(),
-        )));
-        registry.register(Box::new(MemorySearchTool::new(db_arc.clone(), embed_arc.clone())));
-        registry.register(Box::new(MemoryDeleteTool::new(db_arc.clone())));
-        registry.register(Box::new(MemoryDeleteBySourceTool::new(db_arc.clone())));
-        tracing::info!("Registered memory tools (embed, memory_search, memory_delete, memory_delete_by_source)");
-    }
-
-    // Register Redis tools if client is available
-    if let Some(ref redis) = redis_client {
-        let redis_arc = Arc::new(redis.clone());
-        use crate::redis::*;
-        registry.register(Box::new(MediumTermSetTool::new(redis_arc.clone())));
-        registry.register(Box::new(MediumTermGetTool::new(redis_arc.clone())));
-        tracing::info!("Registered Redis tools");
-    }
+    // NOTE: Model management, memory, and Redis tools disabled to reduce tool count.
+    // Re-enable when using larger models that can handle 27+ tools reliably.
+    //
+    // Disabled:
+    //   model mgmt: request_model, release_model, switch_model
+    //   memory: embed, memory_search, memory_delete, memory_delete_by_source
+    //   redis: medium_term_set, medium_term_get
 
     tracing::info!("Registered {} tools total", registry.names().len());
 
