@@ -116,7 +116,7 @@ impl ModelClient {
 
         let mut req = self
             .http
-            .post(format!("{}/v1/chat/completions", self.url))
+            .post(format!("{}/chat/completions", self.url))
             .json(&request);
 
         if let Some(ref api_key) = self.api_key {
@@ -185,7 +185,7 @@ impl ModelClient {
 
         let mut req = self
             .http
-            .post(format!("{}/v1/messages", self.url))
+            .post(format!("{}/messages", self.url))
             .header("content-type", "application/json")
             .header("anthropic-version", "2023-06-01")
             .json(&request);
