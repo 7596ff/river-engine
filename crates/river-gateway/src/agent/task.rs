@@ -258,6 +258,28 @@ impl AgentTask {
             }
         }
 
+        // Auto-set channel context from first incoming message if not yet set
+        if self.channel_context.is_none() {
+            if let Some((channel_key, _)) = all_new_messages.first() {
+                let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
+                if parts.len() == 2 {
+                    let ctx = ChannelContext {
+                        path: PathBuf::from(format!("channels/{}_{}.jsonl", parts[0], parts[1])),
+                        adapter: parts[0].to_string(),
+                        channel_id: parts[1].to_string(),
+                        channel_name: None,
+                        guild_id: None,
+                    };
+                    tracing::info!(
+                        adapter = %ctx.adapter,
+                        channel = %ctx.channel_id,
+                        "Auto-set channel context from first incoming message"
+                    );
+                    self.channel_context = Some(ctx);
+                }
+            }
+        }
+
         // Add messages to context
         for (channel, msg) in &all_new_messages {
             let author = msg.author.as_deref().unwrap_or("unknown");
