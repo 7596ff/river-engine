@@ -337,6 +337,8 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         flash_queue.clone(),
         db_arc.clone(),
         snowflake_gen.clone(),
+        None, // home_channel_writer — wired in Task 12
+        agent_name.clone(),
     )?;
 
     coordinator.spawn_task("agent", |_| agent_task.run());

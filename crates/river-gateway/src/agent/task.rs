@@ -6,6 +6,8 @@
 
 use crate::agent::channel::ChannelContext;
 use crate::agent::context::{PersistentContext, ContextConfig, ContextMessage};
+use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry};
+use crate::channels::writer::HomeChannelWriter;
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
 use crate::preferences::{Preferences, format_current_time};
@@ -82,6 +84,10 @@ pub struct AgentTask {
     context: PersistentContext,
     /// Last estimated prompt tokens (for calibration)
     last_estimated_prompt_tokens: usize,
+    /// Home channel writer (if configured)
+    home_channel_writer: Option<HomeChannelWriter>,
+    /// Agent name (for home channel paths)
+    agent_name: String,
 }
 
 impl AgentTask {
@@ -94,6 +100,8 @@ impl AgentTask {
         flash_queue: Arc<FlashQueue>,
         db: Arc<Mutex<Database>>,
         snowflake_gen: Arc<SnowflakeGenerator>,
+        home_channel_writer: Option<HomeChannelWriter>,
+        agent_name: String,
     ) -> anyhow::Result<Self> {
         // Build system prompt synchronously
         let system_prompt = Self::build_system_prompt_sync(&config.workspace)?;
@@ -125,6 +133,8 @@ impl AgentTask {
             pending_channel_switch: None,
             context,
             last_estimated_prompt_tokens: 0,
+            home_channel_writer,
+            agent_name,
         })
     }
 
@@ -397,6 +407,17 @@ impl AgentTask {
             messages.push(assistant_msg.clone());
             self.context.append(ContextMessage::new(assistant_msg, self.turn_count));
 
+            // Write assistant text to home channel
+            if let Some(ref writer) = self.home_channel_writer {
+                if let Some(ref content) = response.content {
+                    let entry = MessageEntry::agent(
+                        self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                        content.clone(), "home".to_string(), None,
+                    );
+                    writer.write(HomeChannelEntry::Message(entry)).await;
+                }
+            }
+
             // If no tool calls, we're done
             if response.tool_calls.is_empty() {
                 if let Some(ref content) = response.content {
@@ -408,14 +429,49 @@ impl AgentTask {
                 break;
             }
 
+            // Write tool calls to home channel
+            if let Some(ref writer) = self.home_channel_writer {
+                for tc in &response.tool_calls {
+                    let entry = ToolEntry::call(
+                        self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                        tc.function.name.clone(),
+                        serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
+                        tc.id.clone(),
+                    );
+                    writer.write(HomeChannelEntry::Tool(entry)).await;
+                }
+            }
+
             // ========== ACT: Execute tool calls ==========
             let tool_results = self.execute_tool_calls(&response.tool_calls, &mut stats).await;
 
-            // Add tool results to conversation
+            // Add tool results to conversation and write to home channel
             for result in &tool_results {
                 let tool_msg = ChatMessage::tool(&result.tool_call_id, &result.result);
                 messages.push(tool_msg.clone());
                 self.context.append(ContextMessage::new(tool_msg, self.turn_count));
+
+                // Write tool result to home channel
+                if let Some(ref writer) = self.home_channel_writer {
+                    let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
+                    let entry = if result.result.len() > 4096 {
+                        let results_dir = self.config.workspace.join("channels").join("home")
+                            .join(&self.agent_name).join("tool-results");
+                        tokio::fs::create_dir_all(&results_dir).await.ok();
+                        let file_path = results_dir.join(format!("{}.txt", snowflake));
+                        tokio::fs::write(&file_path, &result.result).await.ok();
+                        ToolEntry::result_file(
+                            snowflake, result.tool_name.clone(),
+                            file_path.to_string_lossy().to_string(), result.tool_call_id.clone(),
+                        )
+                    } else {
+                        ToolEntry::result(
+                            snowflake, result.tool_name.clone(),
+                            result.result.clone(), result.tool_call_id.clone(),
+                        )
+                    };
+                    writer.write(HomeChannelEntry::Tool(entry)).await;
+                }
             }
 
             // Check for notifications that arrived during tool execution
@@ -771,6 +827,8 @@ mod tests {
             flash_queue,
             db,
             sg,
+            None,
+            "test-agent".to_string(),
         ).unwrap();
 
         task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
@@ -811,6 +869,8 @@ mod tests {
             flash_queue,
             db,
             sg,
+            None,
+            "test-agent".to_string(),
         ).unwrap();
 
         assert!(task.channel_context().is_none());
@@ -858,6 +918,8 @@ mod tests {
             flash_queue,
             db,
             sg,
+            None,
+            "test-agent".to_string(),
         );
 
         assert!(result.is_err());
@@ -895,6 +957,8 @@ mod tests {
             flash_queue,
             db,
             sg,
+            None,
+            "test-agent".to_string(),
         ).unwrap();
 
         let prompt = task.build_system_prompt().await.unwrap();
