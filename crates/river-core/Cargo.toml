@@ -10,5 +10,6 @@ description = "Core types and utilities for River Engine"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
