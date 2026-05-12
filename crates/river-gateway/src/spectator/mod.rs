@@ -5,7 +5,6 @@
 //! Moves stored in channels/home/{agent}/moves.jsonl.
 
 pub mod format;
-pub mod handlers;
 pub mod moves;
 pub mod prompt;
 
