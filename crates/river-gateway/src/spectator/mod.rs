@@ -6,6 +6,7 @@
 //!
 //! Moves are stored as files at channels/home/{agent}/moves/{start}-{end}.md
 
+pub mod format;
 pub mod handlers;
 pub mod prompt;
 
