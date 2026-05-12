@@ -3,5 +3,5 @@
 pub mod entry;
 pub mod log;
 
-pub use entry::{ChannelEntry, MessageEntry, CursorEntry};
+pub use entry::{ChannelEntry, MessageEntry, CursorEntry, HomeChannelEntry, ToolEntry, HeartbeatEntry};
 pub use log::ChannelLog;
