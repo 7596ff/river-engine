@@ -1,10 +1,10 @@
 # Home Channel — Design Spec
 
-The home channel replaces the agent's invisible thinking with a visible, inspectable, append-only log. Every model response, tool call, incoming message, and heartbeat lives in one channel. The model context is a derived compressed view of this log.
+The home channel replaces the agent's invisible thinking with a visible, inspectable, append-only log. Every model response, tool call, incoming message, and heartbeat lives in one channel. The model context is a derived view of this log plus spectator moves.
 
 ## Home Channel
 
-Every agent has a home channel at `channels/home/{agent_name}.jsonl`. This is the single source of truth for the agent's entire stream of consciousness.
+Every agent has a home channel at `channels/home/{agent_name}.jsonl`. This is the single source of truth for the agent's entire stream of consciousness. The log is strictly append-only — it is never modified after entries are written.
 
 ### Entry Types
 
@@ -20,23 +20,29 @@ Every agent has a home channel at `channels/home/{agent_name}.jsonl`. This is th
 - `result` — the tool result, OR a file path if the result exceeds a size threshold
 - `tool_call_id` — the model's tool call ID for threading
 
-Large tool results get written to a file (e.g. `channels/home/{agent_name}/tool-results/{id}.txt`) and the entry contains a link instead of the full content.
+Large tool results get written to a file (e.g. `channels/home/{agent_name}/tool-results/{id}.txt`) and the entry contains a link instead of the full content. Tool result files are cleaned up when the entries they belong to are superseded by a spectator move — the move summary replaces the need for the raw file.
 
 **CursorEntry** (existing): read-up-to markers, unchanged.
 
 **HeartbeatEntry** (new):
 - Heartbeat wake events
-- Written to the home channel, triggering a turn like any other entry
+- Only written to the home channel if the heartbeat actually produces a turn (the agent has something to do). No-op heartbeats are transient and don't persist.
 
-### Per-Adapter Logs Remain
+### Per-Adapter Logs
 
-`channels/{adapter}/{channel}.jsonl` still tracks what happened on each platform. User messages are written to both the adapter log and the home channel. The adapter log is the record of what happened in a place. The home channel is where the agent thinks about it.
+`channels/{adapter}/{channel}.jsonl` still tracks what happened on each platform. These are secondary projections — the home channel is written first (write-ahead), adapter logs are written second. If the adapter log write fails, the home channel entry still exists.
+
+Adapter logs exist for easy per-platform context retrieval. The home channel is where the agent thinks.
+
+### Log Writer
+
+All writes to the home channel go through a single serialized writer task in the gateway. This ensures ordering and prevents interleaved entries from concurrent sources (agent task, HTTP handlers, heartbeat timer).
 
 ## Turn Cycle
 
 ### Trigger
 
-Any write to the home channel triggers a turn notification. This includes user messages (from adapters), bystander messages (direct posts), system messages, and heartbeats. One notification mechanism.
+Any write to the home channel triggers a turn notification. This includes user messages (from adapters), bystander messages (direct posts), and system messages. Heartbeats trigger a turn check but only persist an entry if the agent actually acts.
 
 ### Batching
 
@@ -44,7 +50,7 @@ Incoming messages don't interrupt mid-turn. They queue up and get injected after
 
 Turn sequence:
 1. Wake (notification from home channel)
-2. Build context from home channel (compressed/derived view)
+2. Build context from home channel + moves (derived view)
 3. Model completion call
 4. Write assistant response to home channel
 5. If tool calls:
@@ -53,7 +59,7 @@ Turn sequence:
    c. Write tool result entry to home channel (large results → file link)
    d. Append any batched messages that arrived during execution
    e. Go to 3
-6. If no tool calls: turn complete
+6. If no tool calls: check for batched messages that arrived during the model call. If any exist, append them and go to 3. Otherwise, turn complete.
 
 ### No More Channel Switching
 
@@ -63,7 +69,17 @@ The agent knows where messages came from by their `[user:adapter:channel_id/chan
 
 ## Context Building
 
-The model context is a derived view of the home channel log. `PersistentContext` is replaced by a context builder that reads the home channel and produces model messages.
+The model context is a derived view of the home channel log. It is built ephemerally on each turn — the home channel is never modified. `PersistentContext` is replaced by a context builder that reads the home channel and spectator moves to produce model messages.
+
+### How context is built
+
+1. Read spectator moves (compressed summaries of older history)
+2. Find the most recent move's coverage — it summarizes entries up to turn N
+3. Read home channel entries after turn N (the "live" tail)
+4. Map entries to model messages (see table below)
+5. The model sees: moves (compressed past) + recent entries (full resolution present)
+
+The home channel log itself is never modified. "Compression" is ephemeral — the context builder just reads moves instead of old entries. The log retains everything. The agent sees a sliding window: compressed history from moves, full-resolution recent entries from the log tail.
 
 ### Mapping entries to model messages
 
@@ -77,11 +93,11 @@ The model context is a derived view of the home channel log. `PersistentContext`
 | `ToolEntry` (result) | tool result message |
 | `HeartbeatEntry` | system message noting the wake |
 
-### Compression
+### Spectator and Moves
 
-Rolling compression on the home channel. Old entries get compressed in place — a summary replacing the original content, marked as compressed. The context builder reads backward from the head: full-resolution entries for recent history, compressed entries for older history.
+The spectator operates as before — it observes the home channel and produces moves/moments. Moves summarize ranges of turns. The context builder uses moves to represent compressed history, reading the raw log only for entries after the most recent move.
 
-The spectator drives compression as before — it observes the home channel and produces moves/moments. The compaction is how you read the log, not a separate operation.
+This means the spectator is the compressor. It reads the home channel tail, writes move files, and the next context build uses those moves instead of the raw entries they summarize.
 
 ## Bystander Interface
 
@@ -96,7 +112,9 @@ Request body:
 }
 ```
 
-No adapter registration. No author identity. Bystander messages are anonymous by design. This is the architectural hook for the spectator/bystander split — a separate agent or process can observe and comment on the agent's work.
+No adapter registration. No author identity in the entry. Authentication is required (bearer token) — "anonymous" means the entry has no author field, not that the caller is unauthenticated. This is deferred to the auth spec but noted here as a requirement.
+
+This is the architectural hook for the spectator/bystander split — a separate agent or process can observe and comment on the agent's work.
 
 ## What Gets Removed
 
@@ -106,28 +124,34 @@ No adapter registration. No author identity. Bystander messages are anonymous by
 - `ChannelSwitched` event from coordinator events
 - `PersistentContext` (replaced by home channel context builder)
 - Per-channel context building
+- SQL database for message storage (`river_db` message tables) — the home channel replaces this
+- Database message persistence in `persist_turn_messages`
 
 ## What Gets Added
 
 - `ToolEntry` — new entry type in `channels/entry.rs`
 - `HeartbeatEntry` — new entry type in `channels/entry.rs`
 - Home channel log — `channels/home/{agent_name}.jsonl`, created at agent birth
-- Home channel context builder — reads home channel, maps entries to model messages, applies compression
+- Home channel context builder — reads home channel + moves, maps entries to model messages
+- Log writer actor — single serialized writer for all home channel writes, ensures ordering
 - Bystander endpoint — `POST /home/{agent_name}/message`
-- Home channel writes on: every model response, every tool call/result, every incoming user message, every heartbeat
+- Home channel writes on: every model response, every tool call/result, every incoming user message
 - Message batching — queue incoming home channel messages, inject after tool results before next completion
+- Final batch check — always check for batched messages before settling, even if no tool calls occurred
 
 ## What Gets Modified
 
-- `AgentTask` — turn cycle writes to home channel, context built from home channel, no channel switching
-- `handle_incoming` in `routes.rs` — also writes tagged `[user]` entry to home channel
-- Heartbeat handler — writes to home channel instead of just waking the agent
-- Spectator — reads from home channel instead of `PersistentContext`
+- `AgentTask` — turn cycle writes to home channel, context built from home channel + moves, no channel switching
+- `handle_incoming` in `routes.rs` — writes to home channel first (write-ahead), then adapter log
+- Heartbeat handler — only writes to home channel if it produces an actual turn
+- Spectator — reads from home channel instead of `PersistentContext`, moves serve as compression
 
-## Follow-Up (separate spec)
+## Deferred (separate specs)
 
-- **TUI as home channel viewer** — the TUI becomes a log viewer that tails the home channel and posts to the bystander endpoint. Not an adapter. Much simpler architecture.
+- **TUI as home channel viewer** — the TUI becomes a log viewer that tails the home channel and posts to the bystander endpoint. Not an adapter.
+- **Authentication** — bearer token for bystander endpoint and all gateway endpoints.
+- **Target/focus hinting** — deterministic way to track which adapter/channel the agent should respond to, without relying on model-side tag parsing.
 
 ## Scope
 
-This spec covers the gateway changes only. The TUI rewrite is a follow-up spec. Adapter code (discord, adapter crate) is not modified — adapters still register and receive outbound messages via `send_message` as before.
+This spec covers the gateway changes only. The TUI rewrite, auth system, and focus hinting are follow-up specs. Adapter code (discord, adapter crate) is not modified — adapters still register and receive outbound messages via `send_message` as before.
