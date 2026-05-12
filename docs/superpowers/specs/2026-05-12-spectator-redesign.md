@@ -2,7 +2,7 @@
 
 ## Overview
 
-The spectator is an event-driven task that produces narrative move summaries by reading the home channel. It replaces the current per-turn model (one LLM call per TurnComplete, one move per turn) with a periodic sweep model (time-gated, reading the home channel directly, producing one or more moves per sweep based on arcs of work).
+The spectator is an event-driven task that produces narrative move summaries by reading the home channel. It replaces the current per-turn model (one LLM call per TurnComplete, one move per turn) with a periodic sweep model (time-gated, reading the home channel directly, producing one move per sweep).
 
 ## Architecture
 
@@ -13,12 +13,14 @@ The spectator listens for `TurnComplete` events on the coordinator bus. On each 
 3. If entries exceed the token budget, take only the earliest entries that fit — the spectator will catch up in subsequent sweeps
 4. Read the last 10 moves from `moves.jsonl` for narrative continuity
 5. Send to LLM: spectator identity (system), recent moves + new transcript + instruction (user)
-6. Parse JSONL response — one JSON object per line, each is a move
-7. Append each move to `moves.jsonl`
-8. Write a system message to the home channel: `[spectator] N moves written covering entries {start}-{end}`
+6. LLM returns a plain text narrative summary covering all topics in the entries
+7. Write one move to `moves.jsonl` with the snowflake range the spectator already knows (first entry ID to last entry ID) and the LLM's summary
+8. Write a system message to the home channel: `[spectator] move written covering entries {start}-{end}`
 9. Clean up tool result files in the covered snowflake range
 10. Emit `MovesUpdated` on the bus
 11. Check if there are more unseen entries beyond the cursor — if so, immediately sweep again (no time gate for catch-up sweeps)
+
+**One sweep, one move.** The spectator owns segmentation (what entries go into this sweep). The LLM owns narration (what to say about them). The LLM does not choose boundaries, produce structured output, or decide how many moves to write. It gets a chunk of entries and writes a summary that covers everything.
 
 The spectator processes one sweep at a time. Events received during a sweep buffer in the channel and are processed when the sweep completes.
 
@@ -31,26 +33,27 @@ Moves are stored in a single append-only JSONL file at `channels/home/{agent}/mo
 Each line is one move:
 
 ```json
-{"start":"185930001","end":"185930042","summary":"The agent configured the nix flake and resolved a build dependency issue."}
-{"start":"185930043","end":"185930099","summary":"The user asked about authentication. The agent explored the existing auth module and proposed a token-based approach."}
+{"start":"185930001","end":"185930042","summary":"The agent configured the nix flake and resolved a build dependency issue. Then the user asked about authentication and the agent explored the existing auth module, identifying a race condition in the token refresh logic."}
 ```
 
 Fields:
-- `start`: snowflake ID of the first home channel entry covered by this move
-- `end`: snowflake ID of the last home channel entry covered by this move
-- `summary`: narrative summary of what happened in this arc
+- `start`: snowflake ID of the first home channel entry in this sweep
+- `end`: snowflake ID of the last home channel entry in this sweep
+- `summary`: narrative summary covering all topics in the sweep (no length limit)
 
-No rotation for now. The file grows slowly (a few entries per sweep) and the context builder only reads the tail.
+The `start` and `end` are assigned by the spectator from the entries it read, not by the LLM. No rotation for now. The file grows slowly (one entry per sweep) and the context builder only reads the tail.
 
-## LLM Prompt
+## LLM Interaction
 
 **System message:** Spectator identity loaded from `spectator/identity.md`.
 
 **User message:** Three sections:
 
 1. **Recent moves** — the last 10 move summaries, providing narrative continuity so the LLM maintains voice and avoids repetition
-2. **New entries** — home channel entries since the last move's end snowflake, formatted with visible snowflake IDs (see Entry Formatting below)
-3. **Instruction** — asking the LLM to segment the entries into narrative moves and output one JSON object per line with `start`, `end`, and `summary` fields
+2. **New entries** — home channel entries formatted with visible snowflake IDs (see Entry Formatting below)
+3. **Instruction** — asking the LLM to write a narrative summary that covers all topics in the entries. No length limit. No structured output format. Plain text.
+
+**LLM output:** Plain text. The spectator uses the full response as the move's `summary` field. No parsing required beyond extracting the response content.
 
 **Prompt file:** `spectator/on-sweep.md` — replaces `on-turn-complete.md`. Contains the instruction template with `{{recent_moves}}` and `{{entries}}` placeholders.
 
@@ -69,8 +72,6 @@ Home channel entries are formatted for the LLM with tiered detail levels. The ag
 | Heartbeat | filtered out |
 | Cursor | filtered out |
 
-The full tool result content is in the home channel for anyone who needs it. The spectator only needs to know which tools were called and that the agent saw the results — the agent's subsequent messages carry the semantic meaning.
-
 ## Token Budget
 
 Each sweep has a token budget of 16384 tokens for the entries section. The spectator formats entries from the cursor forward, estimating tokens as it goes, and stops when the budget is reached. If entries exceed the budget, only the earliest entries that fit are included. The cursor advances to the last included entry. On the next sweep (which fires immediately for catch-up), the spectator picks up where it left off.
@@ -78,7 +79,7 @@ Each sweep has a token budget of 16384 tokens for the entries section. The spect
 This handles:
 - **First sweep on an old agent:** processes history in chunks, oldest first, multiple sweeps until caught up
 - **LLM failure backlog:** recovers in bounded chunks rather than one enormous prompt
-- **Normal operation:** most sweeps are well under budget (5 minutes of activity is typically a few hundred tokens of formatted entries)
+- **Normal operation:** most sweeps are well under budget
 
 ## Context Builder Changes
 
@@ -94,7 +95,7 @@ The context builder feeds these summaries as system messages to the model, same 
 
 The spectator tracks its own cursor — the `end` snowflake of the last move it wrote. On startup, it reads `moves.jsonl`, finds the last entry's `end` field, and uses that as the starting point. If the file is empty or missing, it starts from the beginning of the home channel.
 
-The cursor only advances to the `end` of the last successfully written move. If a sweep produces 5 moves but the 3rd fails to parse, moves 1 and 2 are written and the cursor advances to move 2's `end`. The entries for moves 3-5 are re-read on the next sweep.
+Since each sweep produces exactly one move, cursor advancement is straightforward: after writing the move, the cursor becomes the `end` snowflake of that move (which is the last entry the spectator read).
 
 This replaces the `first_snowflake`/`last_snowflake` fields on the `TurnComplete` event, which can be removed.
 
@@ -103,20 +104,18 @@ This replaces the `first_snowflake`/`last_snowflake` fields on the `TurnComplete
 The spectator writes a system message to the home channel after each successful sweep:
 
 ```
-[spectator] 2 moves written covering entries 185930001-185930099
+[spectator] move written covering entries 185930001-185930042
 ```
 
-This is visible to both the agent (in the home channel tail) and operators (in the JSONL file). Uses the existing `MessageEntry` with role `"system"` and adapter `"home"`. The spectator also logs sweep activity via tracing (sweep started, entries read, LLM called, moves written, errors).
+This is visible to both the agent (in the home channel tail) and operators (in the JSONL file). Uses the existing `MessageEntry` with role `"system"` and adapter `"home"`. The spectator also logs sweep activity via tracing (sweep started, entries read, LLM called, move written, errors).
 
 ## Failure Mode
 
 If the LLM call fails, nothing is written. The spectator logs the error and continues listening. The next successful sweep covers a larger window — all entries since the last successful move, up to the token budget. No mechanical fallbacks. Moves are narrative or nothing.
 
-If a JSONL response line fails to parse, skip that line, log a warning, and continue parsing the remaining lines. The cursor advances only to the last successfully written move.
-
 ## Cleanup
 
-After writing moves, the spectator cleans up tool result files in the covered snowflake range. The context builder already handles missing tool result files gracefully (`[tool result file missing: {path}]`). The spectator only sweeps after TurnComplete (settle gate), so the agent is between turns during cleanup.
+After writing a move, the spectator cleans up tool result files in the covered snowflake range. The context builder already handles missing tool result files gracefully (`[tool result file missing: {path}]`). The spectator only sweeps after TurnComplete (settle gate), so the agent is between turns during cleanup.
 
 ## Configuration
 
@@ -137,14 +136,14 @@ After writing moves, the spectator cleans up tool result files in the covered sn
 - `on-turn-complete.md` prompt file (replaced by `on-sweep.md`)
 - `moves/` directory of `.md` files (replaced by `moves.jsonl`)
 - `moments_dir` from SpectatorConfig (moments deferred — separate concern)
-- `tool_result_truncate` config (replaced by tiered formatting — tool results show name + byte count only)
+- JSONL parsing of LLM output (LLM returns plain text)
+- Segmentation logic (spectator owns boundaries, not LLM)
 
 **Added:**
 - `on-sweep.md` prompt file with `{{recent_moves}}` and `{{entries}}` placeholders
 - Entry formatting function with tiered detail (full text for messages, name-only for tools)
 - Token-budgeted entry selection (16384 token cap per sweep)
-- JSONL move parsing (response line → `{start, end, summary}`)
-- Cursor tracking (last successfully written move's end snowflake)
+- Cursor tracking (last move's end snowflake)
 - Time-gating logic (check elapsed time on each TurnComplete)
 - Catch-up loop (immediate re-sweep if more unseen entries exist)
 - Spectator system messages written to home channel for observability
