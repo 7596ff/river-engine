@@ -6,6 +6,7 @@
 
 pub mod channel;
 pub mod context;
+pub mod home_context;
 pub mod task;
 pub mod tools;
 
