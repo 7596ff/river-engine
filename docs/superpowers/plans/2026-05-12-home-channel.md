@@ -4,9 +4,11 @@
 
 **Goal:** Replace the agent's invisible internal context with a visible, append-only home channel log that becomes the single source of truth for all agent activity.
 
-**Architecture:** The home channel is an append-only JSONL log at `channels/home/{agent_name}.jsonl`. All agent output, tool calls, incoming messages, and heartbeats are written to it through a serialized log writer actor. The model context is built ephemerally by reading the log tail plus spectator moves. Per-adapter channel logs remain as secondary projections. SQL message storage is eliminated.
+**Architecture:** The home channel is an append-only JSONL log at `channels/home/{agent_name}.jsonl`. All agent output, tool calls, incoming messages, and heartbeats are written to it through a serialized log writer actor. The model context is built ephemerally by reading the log tail plus spectator moves (stored as files, not SQL). Per-adapter channel logs remain as secondary projections. SQL message storage is eliminated.
 
 **Tech Stack:** Rust, tokio (async), serde/serde_json (serialization), JSONL (storage)
+
+**Serde strategy:** The home channel uses `#[serde(tag = "type")]` for entry discrimination, NOT `#[serde(untagged)]`. This is a new file format at a new path (`channels/home/`), so no migration of existing JSONL files is needed.
 
 ---
 
@@ -54,70 +56,80 @@ pub struct HeartbeatEntry {
 }
 ```
 
-- [ ] **Step 2: Extend ChannelEntry enum**
+- [ ] **Step 2: Create HomeChannelEntry enum with tagged serde**
+
+The home channel uses a *separate* enum from `ChannelEntry` (which stays `untagged` for backward compatibility with existing adapter logs):
 
 ```rust
-pub enum ChannelEntry {
+/// Entry in a home channel log — uses tagged serde for unambiguous deserialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum HomeChannelEntry {
+    #[serde(rename = "message")]
     Message(MessageEntry),
+    #[serde(rename = "cursor")]
     Cursor(CursorEntry),
+    #[serde(rename = "tool")]
     Tool(ToolEntry),
+    #[serde(rename = "heartbeat")]
     Heartbeat(HeartbeatEntry),
 }
-```
 
-Update `is_agent()` and `id()` methods on `ChannelEntry` to handle the new variants:
-
-```rust
-impl ChannelEntry {
-    pub fn is_agent(&self) -> bool {
-        match self {
-            ChannelEntry::Message(m) => m.is_agent(),
-            ChannelEntry::Cursor(_) => true,
-            ChannelEntry::Tool(_) => true,
-            ChannelEntry::Heartbeat(_) => false,
-        }
-    }
-
+impl HomeChannelEntry {
     pub fn id(&self) -> &str {
         match self {
-            ChannelEntry::Message(m) => &m.id,
-            ChannelEntry::Cursor(c) => &c.id,
-            ChannelEntry::Tool(t) => &t.id,
-            ChannelEntry::Heartbeat(h) => &h.id,
+            HomeChannelEntry::Message(m) => &m.id,
+            HomeChannelEntry::Cursor(c) => &c.id,
+            HomeChannelEntry::Tool(t) => &t.id,
+            HomeChannelEntry::Heartbeat(h) => &h.id,
         }
     }
 }
 ```
 
-- [ ] **Step 3: Extend MessageEntry with new roles**
+- [ ] **Step 3: Add source fields to MessageEntry**
 
-Add `bystander` and `system` as valid role values. Add convenience constructors:
+Add optional source fields for tracking where user messages came from. The content field stays clean — the context builder formats the tag:
+
+```rust
+// Add to MessageEntry struct:
+/// Source adapter (for user messages routed through home channel)
+#[serde(skip_serializing_if = "Option::is_none")]
+pub source_adapter: Option<String>,
+/// Source channel ID
+#[serde(skip_serializing_if = "Option::is_none")]
+pub source_channel_id: Option<String>,
+/// Source channel name
+#[serde(skip_serializing_if = "Option::is_none")]
+pub source_channel_name: Option<String>,
+```
+
+- [ ] **Step 4: Add constructors for new roles and types**
 
 ```rust
 impl MessageEntry {
-    /// Create a user message tagged with adapter source
-    pub fn user(
+    /// Create a user message with source tracking (for home channel)
+    pub fn user_home(
         id: String,
-        adapter: String,
-        channel_id: String,
-        channel_name: Option<String>,
         author: String,
         author_id: String,
         content: String,
+        source_adapter: String,
+        source_channel_id: String,
+        source_channel_name: Option<String>,
         msg_id: Option<String>,
     ) -> Self {
-        let tag = match channel_name {
-            Some(ref name) => format!("[user:{}:{}/{}] {}", adapter, channel_id, name, content),
-            None => format!("[user:{}:{}] {}", adapter, channel_id, content),
-        };
         Self {
             id,
             role: "user".to_string(),
             author: Some(author),
             author_id: Some(author_id),
-            content: tag,
-            adapter,
+            content,
+            adapter: "home".to_string(),
             msg_id,
+            source_adapter: Some(source_adapter),
+            source_channel_id: Some(source_channel_id),
+            source_channel_name,
         }
     }
 
@@ -131,11 +143,14 @@ impl MessageEntry {
             content,
             adapter: "home".to_string(),
             msg_id: None,
+            source_adapter: None,
+            source_channel_id: None,
+            source_channel_name: None,
         }
     }
 
     /// Create a system message
-    pub fn system(id: String, content: String) -> Self {
+    pub fn system_msg(id: String, content: String) -> Self {
         Self {
             id,
             role: "system".to_string(),
@@ -144,76 +159,57 @@ impl MessageEntry {
             content,
             adapter: "home".to_string(),
             msg_id: None,
+            source_adapter: None,
+            source_channel_id: None,
+            source_channel_name: None,
         }
     }
 }
-```
 
-- [ ] **Step 4: Add ToolEntry constructors**
-
-```rust
 impl ToolEntry {
     pub fn call(id: String, tool_name: String, arguments: serde_json::Value, tool_call_id: String) -> Self {
         Self {
-            id,
-            kind: "tool_call".to_string(),
-            tool_name,
-            arguments: Some(arguments),
-            result: None,
-            result_file: None,
-            tool_call_id,
+            id, kind: "tool_call".to_string(), tool_name,
+            arguments: Some(arguments), result: None, result_file: None, tool_call_id,
         }
     }
 
-    pub fn result(id: String, tool_name: String, result: String, tool_call_id: String) -> Self {
+    pub fn result(id: String, tool_name: String, content: String, tool_call_id: String) -> Self {
         Self {
-            id,
-            kind: "tool_result".to_string(),
-            tool_name,
-            arguments: None,
-            result: Some(result),
-            result_file: None,
-            tool_call_id,
+            id, kind: "tool_result".to_string(), tool_name,
+            arguments: None, result: Some(content), result_file: None, tool_call_id,
         }
     }
 
     pub fn result_file(id: String, tool_name: String, file_path: String, tool_call_id: String) -> Self {
         Self {
-            id,
-            kind: "tool_result".to_string(),
-            tool_name,
-            arguments: None,
-            result: None,
-            result_file: Some(file_path),
-            tool_call_id,
+            id, kind: "tool_result".to_string(), tool_name,
+            arguments: None, result: None, result_file: Some(file_path), tool_call_id,
         }
     }
 }
 
 impl HeartbeatEntry {
     pub fn new(id: String, timestamp: String) -> Self {
-        Self {
-            id,
-            kind: "heartbeat".to_string(),
-            timestamp,
-        }
+        Self { id, kind: "heartbeat".to_string(), timestamp }
     }
 }
 ```
 
-- [ ] **Step 5: Write tests for new entry types**
+- [ ] **Step 5: Update existing MessageEntry constructors**
 
-Add tests for serialization/deserialization of `ToolEntry`, `HeartbeatEntry`, `MessageEntry::user`, `MessageEntry::bystander`, `MessageEntry::system`, and updated `ChannelEntry::is_agent`/`id` methods.
+Add default `None` values for the new source fields to `incoming()` and `agent()` constructors so existing code compiles.
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 6: Write tests**
+
+Test serialization/deserialization of all new types. Verify `#[serde(tag = "type")]` round-trips correctly. Verify `HomeChannelEntry::id()`.
+
+- [ ] **Step 7: Run tests and commit**
 
 Run: `cargo test -p river-gateway -- channels::entry`
-Expected: All tests pass.
-
-- [ ] **Step 7: Commit**
 
 ```bash
-git add -A && git commit -m "feat(channels): add ToolEntry, HeartbeatEntry, user/bystander/system message roles"
+git add -A && git commit -m "feat(channels): add HomeChannelEntry with tagged serde, ToolEntry, HeartbeatEntry, source fields"
 ```
 
 ---
@@ -228,32 +224,24 @@ git add -A && git commit -m "feat(channels): add ToolEntry, HeartbeatEntry, user
 
 ```rust
 //! Home channel log writer — serialized writes for ordering guarantees
-//!
-//! All writes to the home channel go through this actor. It owns the file
-//! handle and ensures entries are ordered and never interleaved.
 
-use super::entry::ChannelEntry;
+use super::entry::HomeChannelEntry;
 use super::log::ChannelLog;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-/// Message to the log writer
 pub enum LogWriteRequest {
-    /// Append an entry to the home channel
-    Append(ChannelEntry),
-    /// Shutdown the writer
+    Append(HomeChannelEntry),
     Shutdown,
 }
 
-/// Handle for sending writes to the log writer actor
 #[derive(Clone)]
 pub struct HomeChannelWriter {
     tx: mpsc::Sender<LogWriteRequest>,
 }
 
 impl HomeChannelWriter {
-    /// Spawn the log writer actor, returns a handle for sending writes
     pub fn spawn(home_channel_path: PathBuf) -> Self {
         let (tx, mut rx) = mpsc::channel::<LogWriteRequest>(1024);
 
@@ -279,14 +267,12 @@ impl HomeChannelWriter {
         Self { tx }
     }
 
-    /// Write an entry to the home channel
-    pub async fn write(&self, entry: ChannelEntry) {
+    pub async fn write(&self, entry: HomeChannelEntry) {
         if let Err(e) = self.tx.send(LogWriteRequest::Append(entry)).await {
             error!(error = %e, "Failed to send to home channel writer");
         }
     }
 
-    /// Shutdown the writer
     pub async fn shutdown(&self) {
         let _ = self.tx.send(LogWriteRequest::Shutdown).await;
     }
@@ -297,16 +283,9 @@ impl HomeChannelWriter {
 
 Add `pub mod writer;` to `crates/river-gateway/src/channels/mod.rs`.
 
-- [ ] **Step 3: Write tests**
-
-Test that the writer serializes writes correctly and entries appear in order.
-
-- [ ] **Step 4: Run tests**
+- [ ] **Step 3: Write tests and commit**
 
 Run: `cargo test -p river-gateway -- channels::writer`
-Expected: All tests pass.
-
-- [ ] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "feat(channels): add HomeChannelWriter actor for serialized writes"
@@ -322,32 +301,24 @@ git add -A && git commit -m "feat(channels): add HomeChannelWriter actor for ser
 
 - [ ] **Step 1: Create the context builder**
 
+The context builder reads the home channel log + move files and produces model messages. It must correctly reconstruct tool call assistant messages:
+
 ```rust
 //! Home channel context builder — derives model context from home channel + moves
-//!
-//! Reads the home channel log, finds the most recent move's coverage,
-//! and builds model messages from moves (compressed past) + log tail (live present).
 
-use crate::channels::entry::{ChannelEntry, MessageEntry, ToolEntry, HeartbeatEntry};
+use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry};
 use crate::channels::log::ChannelLog;
-use crate::model::ChatMessage;
+use crate::model::{ChatMessage, ToolCallRequest, FunctionCall};
 use std::path::{Path, PathBuf};
 
-/// Configuration for context building
-#[derive(Debug, Clone)]
 pub struct HomeContextConfig {
-    /// Maximum tokens for the context window
     pub limit: usize,
-    /// Maximum entries to read from the log tail
     pub max_tail_entries: usize,
 }
 
 impl Default for HomeContextConfig {
     fn default() -> Self {
-        Self {
-            limit: 128_000,
-            max_tail_entries: 200,
-        }
+        Self { limit: 128_000, max_tail_entries: 200 }
     }
 }
 
@@ -358,52 +329,72 @@ pub async fn build_context(
     config: &HomeContextConfig,
 ) -> std::io::Result<Vec<ChatMessage>> {
     let log = ChannelLog::from_path(home_channel_path.to_path_buf());
-    let entries = log.read_all().await?;
+    let all_entries = log.read_all_home().await?;
 
     let mut messages = Vec::new();
 
-    // Add moves as compressed history (system messages)
+    // Moves as compressed history
     for mov in moves {
         messages.push(ChatMessage::system(mov.clone()));
     }
 
-    // Read tail entries after the most recent move
-    // For now, take the last max_tail_entries entries
-    let tail_start = entries.len().saturating_sub(config.max_tail_entries);
-    let tail = &entries[tail_start..];
+    // Tail entries
+    let tail_start = all_entries.len().saturating_sub(config.max_tail_entries);
+    let tail = &all_entries[tail_start..];
 
-    // Map entries to model messages
-    for entry in tail {
-        match entry {
-            ChannelEntry::Message(m) => {
+    // Process tail — need to group tool calls with their assistant message
+    let mut i = 0;
+    while i < tail.len() {
+        match &tail[i] {
+            HomeChannelEntry::Message(m) => {
                 match m.role.as_str() {
-                    "agent" => messages.push(ChatMessage::assistant(
-                        Some(m.content.clone()), None,
-                    )),
-                    "user" | "bystander" => messages.push(ChatMessage::user(
-                        m.content.clone(),
-                    )),
-                    "system" => messages.push(ChatMessage::system(
-                        m.content.clone(),
-                    )),
-                    _ => {} // skip unknown roles
+                    "agent" => messages.push(ChatMessage::assistant(Some(m.content.clone()), None)),
+                    "user" => {
+                        // Format tag from source fields
+                        let tagged = format_user_tag(m);
+                        messages.push(ChatMessage::user(tagged));
+                    }
+                    "bystander" => {
+                        let tagged = format!("[bystander] {}", m.content);
+                        messages.push(ChatMessage::user(tagged));
+                    }
+                    "system" => messages.push(ChatMessage::system(m.content.clone())),
+                    _ => {}
                 }
             }
-            ChannelEntry::Tool(t) => {
+            HomeChannelEntry::Tool(t) => {
                 match t.kind.as_str() {
                     "tool_call" => {
-                        // Reconstruct as assistant message with tool_use
-                        // (simplified — full implementation maps to ToolCallRequest)
+                        // Collect consecutive tool calls into one assistant message
+                        let mut tool_calls = Vec::new();
+                        while i < tail.len() {
+                            if let HomeChannelEntry::Tool(tc) = &tail[i] {
+                                if tc.kind == "tool_call" {
+                                    tool_calls.push(ToolCallRequest {
+                                        id: tc.tool_call_id.clone(),
+                                        function: FunctionCall {
+                                            name: tc.tool_name.clone(),
+                                            arguments: tc.arguments
+                                                .as_ref()
+                                                .map(|a| serde_json::to_string(a).unwrap_or_default())
+                                                .unwrap_or_default(),
+                                        },
+                                    });
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        messages.push(ChatMessage::assistant(None, Some(tool_calls)));
+                        continue; // don't increment i again
                     }
                     "tool_result" => {
                         let content = if let Some(ref result) = t.result {
                             result.clone()
                         } else if let Some(ref file) = t.result_file {
-                            // Read from file
-                            match tokio::fs::read_to_string(file).await {
-                                Ok(c) => c,
-                                Err(_) => format!("[tool result file missing: {}]", file),
-                            }
+                            tokio::fs::read_to_string(file).await
+                                .unwrap_or_else(|_| format!("[tool result file missing: {}]", file))
                         } else {
                             "[empty tool result]".to_string()
                         };
@@ -412,34 +403,76 @@ pub async fn build_context(
                     _ => {}
                 }
             }
-            ChannelEntry::Heartbeat(_) => {
+            HomeChannelEntry::Heartbeat(_) => {
                 messages.push(ChatMessage::system("[heartbeat]".to_string()));
             }
-            ChannelEntry::Cursor(_) => {} // skip cursors
+            HomeChannelEntry::Cursor(_) => {}
         }
+        i += 1;
     }
 
     Ok(messages)
 }
+
+/// Format a user message with source adapter/channel tag
+fn format_user_tag(m: &MessageEntry) -> String {
+    let author = m.author.as_deref().unwrap_or("unknown");
+    match (&m.source_adapter, &m.source_channel_id, &m.source_channel_name) {
+        (Some(adapter), Some(ch_id), Some(ch_name)) => {
+            format!("[user:{}:{}/{}] {}: {}", adapter, ch_id, ch_name, author, m.content)
+        }
+        (Some(adapter), Some(ch_id), None) => {
+            format!("[user:{}:{}] {}: {}", adapter, ch_id, author, m.content)
+        }
+        _ => format!("{}: {}", author, m.content),
+    }
+}
 ```
 
-- [ ] **Step 2: Add to agent module**
+- [ ] **Step 2: Add `read_all_home` to ChannelLog**
+
+The home channel reader deserializes `HomeChannelEntry` (tagged) instead of `ChannelEntry` (untagged):
+
+```rust
+// In channels/log.rs:
+pub async fn read_all_home(&self) -> std::io::Result<Vec<HomeChannelEntry>> {
+    if !self.path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = tokio::fs::File::open(&self.path).await?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut entries = Vec::new();
+    let mut line_num = 0usize;
+
+    while let Some(line) = lines.next_line().await? {
+        line_num += 1;
+        if line.trim().is_empty() { continue; }
+        match serde_json::from_str::<HomeChannelEntry>(&line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                tracing::warn!(line_num, error = %e, path = %self.path.display(), "Skipping malformed home channel line");
+            }
+        }
+    }
+    Ok(entries)
+}
+```
+
+- [ ] **Step 3: Add to agent module**
 
 Add `pub mod home_context;` to `crates/river-gateway/src/agent/mod.rs`.
 
-- [ ] **Step 3: Write tests**
+- [ ] **Step 4: Write tests**
 
-Test context building from a home channel with various entry types. Verify moves appear as system messages before the tail entries.
+Test context building with a home channel containing messages, tool calls (consecutive), tool results, bystander messages, heartbeats. Verify tool calls are grouped into single assistant messages. Verify user messages are tagged correctly from source fields.
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 5: Run tests and commit**
 
 Run: `cargo test -p river-gateway -- agent::home_context`
-Expected: All tests pass.
-
-- [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "feat(agent): add home channel context builder"
+git add -A && git commit -m "feat(agent): add home channel context builder with full tool call mapping"
 ```
 
 ---
@@ -448,13 +481,21 @@ git add -A && git commit -m "feat(agent): add home channel context builder"
 
 **Files:**
 - Modify: `crates/river-gateway/src/api/routes.rs`
+- Modify: `crates/river-gateway/src/state.rs`
 
-- [ ] **Step 1: Add bystander message handler**
+- [ ] **Step 1: Add `home_channel_writer` to AppState**
 
-Add a new route and handler:
+Add to `AppState`:
 
 ```rust
-/// Bystander message request
+pub home_channel_writer: crate::channels::writer::HomeChannelWriter,
+```
+
+Update `AppState::new` to accept and store it.
+
+- [ ] **Step 2: Add bystander handler and route**
+
+```rust
 #[derive(Deserialize)]
 struct BystanderMessage {
     content: String,
@@ -465,23 +506,19 @@ async fn handle_bystander(
     headers: HeaderMap,
     Json(msg): Json<BystanderMessage>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Validate authentication
     if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
         return Err(status);
     }
 
     let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
     let entry = crate::channels::entry::MessageEntry::bystander(
-        snowflake.to_string(),
-        msg.content,
+        snowflake.to_string(), msg.content,
     );
 
-    // Write to home channel via the writer actor
     state.home_channel_writer.write(
-        crate::channels::entry::ChannelEntry::Message(entry)
+        crate::channels::entry::HomeChannelEntry::Message(entry)
     ).await;
 
-    // Notify the message queue
     state.message_queue.push(crate::queue::ChannelNotification {
         channel: "home".to_string(),
         snowflake_id: snowflake.to_string(),
@@ -491,34 +528,9 @@ async fn handle_bystander(
 }
 ```
 
-- [ ] **Step 2: Register the route**
+Register: `.route("/home/:agent_name/message", post(handle_bystander))`
 
-In the router builder, add:
-
-```rust
-.route("/home/:agent_name/message", post(handle_bystander))
-```
-
-- [ ] **Step 3: Add `home_channel_writer` to AppState**
-
-Modify `crates/river-gateway/src/state.rs` to add:
-
-```rust
-pub home_channel_writer: crate::channels::writer::HomeChannelWriter,
-```
-
-And update `AppState::new` to accept and store it.
-
-- [ ] **Step 4: Write tests**
-
-Test the bystander endpoint: valid request writes to home channel, auth required.
-
-- [ ] **Step 5: Run tests**
-
-Run: `cargo test -p river-gateway -- api::routes`
-Expected: All tests pass.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Write tests and commit**
 
 ```bash
 git add -A && git commit -m "feat(api): add bystander endpoint POST /home/:agent_name/message"
@@ -526,37 +538,68 @@ git add -A && git commit -m "feat(api): add bystander endpoint POST /home/:agent
 
 ---
 
-### Task 5: Wire Home Channel into Turn Cycle
+### Task 5: Refactor Tool Execution to Preserve Tool Names
 
 **Files:**
 - Modify: `crates/river-gateway/src/agent/task.rs`
 
-This is the largest task. It modifies the turn cycle to write all output to the home channel and build context from it.
+Before wiring the home channel into the turn cycle, we need tool execution to return the tool name alongside the result.
+
+- [ ] **Step 1: Create ToolResult struct**
+
+Add at the top of `task.rs` (or in a shared types module):
+
+```rust
+/// Result of a tool execution, preserving tool name for logging
+pub struct ToolExecResult {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub result: String,
+}
+```
+
+- [ ] **Step 2: Update `execute_tool_calls` return type**
+
+Change from `Vec<(String, String)>` to `Vec<ToolExecResult>`. Thread the tool name through from `ToolCallRequest::function::name`.
+
+- [ ] **Step 3: Update all call sites**
+
+Update the loop that adds tool results to the conversation to use `ToolExecResult` fields.
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+git add -A && git commit -m "refactor(agent): ToolExecResult preserves tool name through execution"
+```
+
+---
+
+### Task 6: Wire Home Channel into Turn Cycle
+
+**Files:**
+- Modify: `crates/river-gateway/src/agent/task.rs`
 
 - [ ] **Step 1: Add HomeChannelWriter to AgentTask**
 
-Add a `home_channel_writer: HomeChannelWriter` field to `AgentTask`. Pass it in from server setup.
+Add field, pass from server setup.
 
 - [ ] **Step 2: Write assistant responses to home channel**
 
-After line 391 (where assistant response is added to context), also write to home channel:
+After assistant response is added to context:
 
 ```rust
-// Write to home channel
 if let Some(ref content) = response.content {
     let entry = MessageEntry::agent(
         self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
-        content.clone(),
-        "home".to_string(),
-        None,
+        content.clone(), "home".to_string(), None,
     );
-    self.home_channel_writer.write(ChannelEntry::Message(entry)).await;
+    self.home_channel_writer.write(HomeChannelEntry::Message(entry)).await;
 }
 ```
 
 - [ ] **Step 3: Write tool calls to home channel**
 
-Before tool execution, write the tool call entry:
+Before execution, using the now-available tool name:
 
 ```rust
 for tc in &response.tool_calls {
@@ -566,109 +609,112 @@ for tc in &response.tool_calls {
         serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
         tc.id.clone(),
     );
-    self.home_channel_writer.write(ChannelEntry::Tool(entry)).await;
+    self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
 }
 ```
 
 - [ ] **Step 4: Write tool results to home channel**
 
-After tool execution, write each result. For large results (>4096 bytes), write to a file:
+Using `ToolExecResult` for the tool name. Large results (>4096 bytes) written to files:
 
 ```rust
-for (tool_call_id, result_text) in &tool_results {
+for result in &tool_results {
     let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
-
-    let entry = if result_text.len() > 4096 {
-        // Write to file
-        let results_dir = self.config.workspace
-            .join("channels/home")
-            .join(&self.agent_name)
-            .join("tool-results");
+    let entry = if result.result.len() > 4096 {
+        let results_dir = self.config.workspace.join("channels/home").join(&self.agent_name).join("tool-results");
         tokio::fs::create_dir_all(&results_dir).await.ok();
         let file_path = results_dir.join(format!("{}.txt", snowflake));
-        tokio::fs::write(&file_path, result_text).await.ok();
-        ToolEntry::result_file(
-            snowflake,
-            "unknown".to_string(), // tool name not available here — needs threading
-            file_path.to_string_lossy().to_string(),
-            tool_call_id.clone(),
-        )
+        tokio::fs::write(&file_path, &result.result).await.ok();
+        ToolEntry::result_file(snowflake, result.tool_name.clone(), file_path.to_string_lossy().to_string(), result.tool_call_id.clone())
     } else {
-        ToolEntry::result(
-            snowflake,
-            "unknown".to_string(),
-            result_text.clone(),
-            tool_call_id.clone(),
-        )
+        ToolEntry::result(snowflake, result.tool_name.clone(), result.result.clone(), result.tool_call_id.clone())
     };
-    self.home_channel_writer.write(ChannelEntry::Tool(entry)).await;
+    self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
 }
 ```
 
 - [ ] **Step 5: Add final batch check**
 
-After the turn loop ends (no tool calls), check for batched messages:
+After the turn loop (no tool calls), check for messages that arrived during the model call:
 
 ```rust
-// Step 6: Final batch check — even if no tool calls
 let final_batch = self.message_queue.drain();
 if !final_batch.is_empty() {
-    // Inject as system message and continue the turn
-    // ... (append to messages, go to step 3)
+    // Inject as system message, loop back to model completion
 }
 ```
 
-- [ ] **Step 6: Remove channel switching**
-
-Remove `channel_context`, `pending_channel_switch`, `ChannelContext` imports, and all channel switching logic from `AgentTask`.
-
-- [ ] **Step 7: Run tests**
-
-Run: `cargo test -p river-gateway -- agent::task`
-Expected: All existing tests pass (some may need updating for removed channel context).
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Run tests and commit**
 
 ```bash
-git add -A && git commit -m "feat(agent): wire home channel into turn cycle, remove channel switching"
+git add -A && git commit -m "feat(agent): write all output to home channel during turn cycle"
 ```
 
 ---
 
-### Task 6: Wire Incoming Messages to Home Channel
+### Task 7: Switch Context Source from PersistentContext to Home Channel
+
+**Files:**
+- Modify: `crates/river-gateway/src/agent/task.rs`
+
+This is the actual switchover — the moment the agent starts reading its context from the home channel instead of `PersistentContext`.
+
+- [ ] **Step 1: Replace context building**
+
+In the turn cycle, replace:
+```rust
+let messages = self.context.build_messages(&system_prompt);
+```
+with:
+```rust
+let moves = self.load_moves().await;
+let messages_from_home = home_context::build_context(
+    &self.home_channel_path, &moves, &self.home_context_config,
+).await?;
+let mut messages = vec![ChatMessage::system(system_prompt)];
+messages.extend(messages_from_home);
+```
+
+- [ ] **Step 2: Remove PersistentContext from AgentTask**
+
+Remove the `context: PersistentContext` field. Remove all `self.context.append(...)` calls — these are replaced by the home channel writes from Task 6. Remove `persist_turn_messages` calls (SQL write).
+
+- [ ] **Step 3: Remove context.rs**
+
+Delete `crates/river-gateway/src/agent/context.rs` and remove `pub mod context;` from `agent/mod.rs`. Fix all compilation errors.
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+git add -A && git commit -m "feat(agent): switch context source to home channel, remove PersistentContext"
+```
+
+---
+
+### Task 8: Wire Incoming Messages to Home Channel
 
 **Files:**
 - Modify: `crates/river-gateway/src/api/routes.rs`
 
 - [ ] **Step 1: Write incoming messages to home channel (write-ahead)**
 
-In `handle_incoming`, before writing to the adapter channel log, write a tagged user entry to the home channel:
+In `handle_incoming`, before the adapter channel log write:
 
 ```rust
-// Write-ahead: home channel first
-let home_entry = MessageEntry::user(
+let home_entry = MessageEntry::user_home(
     snowflake_str.clone(),
-    msg.adapter.clone(),
-    msg.channel.clone(),
-    msg.channel_name.clone(),
     msg.author.name.clone(),
     msg.author.id.clone(),
     msg.content.clone(),
+    msg.adapter.clone(),
+    msg.channel.clone(),
+    msg.channel_name.clone(),
     msg.message_id.clone(),
 );
-state.home_channel_writer.write(ChannelEntry::Message(home_entry)).await;
-
-// Then adapter channel log (secondary)
-let adapter_entry = MessageEntry::incoming(/* ... existing code ... */);
-let log = ChannelLog::open(&channels_dir, &msg.adapter, &msg.channel);
-if let Err(e) = log.append_entry(&adapter_entry).await {
-    tracing::warn!(error = %e, "Failed to write adapter channel log (secondary)");
-}
+state.home_channel_writer.write(HomeChannelEntry::Message(home_entry)).await;
 ```
 
-- [ ] **Step 2: Update notification to use "home" channel key**
-
-Change the message queue notification:
+- [ ] **Step 2: Update notification channel key**
 
 ```rust
 state.message_queue.push(crate::queue::ChannelNotification {
@@ -677,12 +723,7 @@ state.message_queue.push(crate::queue::ChannelNotification {
 });
 ```
 
-- [ ] **Step 3: Run tests**
-
-Run: `cargo test -p river-gateway -- api::routes`
-Expected: Tests pass (update test fixtures for new notification channel key).
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Run tests and commit**
 
 ```bash
 git add -A && git commit -m "feat(api): write incoming messages to home channel (write-ahead)"
@@ -690,7 +731,7 @@ git add -A && git commit -m "feat(api): write incoming messages to home channel 
 
 ---
 
-### Task 7: Remove ChannelContext and ChannelSwitched Event
+### Task 9: Remove ChannelContext and ChannelSwitched
 
 **Files:**
 - Delete: `crates/river-gateway/src/agent/channel.rs`
@@ -699,78 +740,76 @@ git add -A && git commit -m "feat(api): write incoming messages to home channel 
 
 - [ ] **Step 1: Remove channel.rs**
 
-Delete the file and remove `pub mod channel;` from `agent/mod.rs`.
+Delete the file. Remove `pub mod channel;` from `agent/mod.rs`.
 
-- [ ] **Step 2: Remove ChannelSwitched from events**
+- [ ] **Step 2: Remove ChannelSwitched from AgentEvent**
 
-Remove the `ChannelSwitched` variant from `AgentEvent` in `coordinator/events.rs`.
+Remove the variant from `coordinator/events.rs`.
 
 - [ ] **Step 3: Fix all compilation errors**
 
-Remove all references to `ChannelContext`, `ChannelSwitched`, `pending_channel_switch` throughout the codebase.
+Specific files that will break:
+- `agent/task.rs` — remove `channel_context`, `pending_channel_switch` fields and all switching logic
+- `server.rs` — remove any ChannelContext construction
+- Any spectator handler that references channel switches
 
-- [ ] **Step 4: Run full test suite**
+- [ ] **Step 4: Run full test suite and commit**
 
 Run: `cargo test -p river-gateway`
-Expected: All tests pass.
-
-- [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "refactor: remove ChannelContext, ChannelSwitched, channel switching logic"
+git add -A && git commit -m "refactor: remove ChannelContext, ChannelSwitched, channel switching"
 ```
 
 ---
 
-### Task 8: Update Spectator to Read Home Channel
+### Task 10: Update Spectator — File-Based Moves with Snowflake Ranges
 
 **Files:**
 - Modify: `crates/river-gateway/src/spectator/handlers.rs`
 - Modify: `crates/river-gateway/src/spectator/format.rs`
+- Create: moves directory at `channels/home/{agent_name}/moves/`
 
-- [ ] **Step 1: Update spectator to read home channel for transcript**
+- [ ] **Step 1: Move storage from SQL to files**
 
-The spectator's `on_turn_complete` handler builds a transcript from the turn. Update it to read from the home channel log instead of `PersistentContext`. The spectator reads the entries for the current turn (by snowflake range) and formats them into a transcript.
+Moves are written to `channels/home/{agent_name}/moves/{snowflake_start}-{snowflake_end}.md`. Each move file contains the summary text. The filename encodes the snowflake range it covers.
 
-- [ ] **Step 2: Update move format to include snowflake range**
+- [ ] **Step 2: Update spectator transcript to read home channel**
 
-Moves should include the snowflake range they cover so the context builder knows where the move's coverage ends.
+The spectator's `on_turn_complete` reads the home channel entries for the current turn (by snowflake range) and formats them into a transcript.
 
-- [ ] **Step 3: Run tests**
+- [ ] **Step 3: Add `load_moves` method to AgentTask**
 
-Run: `cargo test -p river-gateway -- spectator`
-Expected: All tests pass.
+Read all move files from the moves directory, sorted by snowflake range, return as `Vec<String>`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Run tests and commit**
 
 ```bash
-git add -A && git commit -m "feat(spectator): read home channel for transcript, snowflake ranges in moves"
+git add -A && git commit -m "feat(spectator): file-based moves with snowflake ranges, read home channel"
 ```
 
 ---
 
-### Task 9: Tool Result File Cleanup
+### Task 11: Tool Result File Cleanup
 
 **Files:**
 - Modify: `crates/river-gateway/src/channels/writer.rs`
 
-- [ ] **Step 1: Add cleanup method to HomeChannelWriter**
+- [ ] **Step 1: Add cleanup to log writer**
 
-When notified that a move has been written covering a snowflake range, the writer deletes any tool result files referenced by entries in that range:
+When notified of a new move, the writer reads entries in the covered snowflake range, finds `ToolEntry` entries with `result_file`, and deletes the files:
 
 ```rust
 impl HomeChannelWriter {
-    /// Clean up tool result files for entries covered by a move
-    pub async fn cleanup_tool_results(&self, covered_snowflake_ids: &[String]) {
-        // Send a cleanup request through the channel
-        // The writer task reads entries, finds tool result files, deletes them
+    pub async fn cleanup_tool_results(&self, move_start: &str, move_end: &str, home_channel_path: &Path) {
+        // Read entries in range, find tool result files, delete them
     }
 }
 ```
 
 - [ ] **Step 2: Wire into spectator move completion**
 
-After the spectator writes a move, notify the writer to clean up.
+After the spectator writes a move file, send cleanup request to writer.
 
 - [ ] **Step 3: Commit**
 
@@ -780,13 +819,13 @@ git add -A && git commit -m "feat(channels): tool result file cleanup on move su
 
 ---
 
-### Task 10: Server Wiring
+### Task 12: Server Wiring
 
 **Files:**
 - Modify: `crates/river-gateway/src/server.rs`
 - Modify: `crates/river-gateway/src/state.rs`
 
-- [ ] **Step 1: Create HomeChannelWriter on server startup**
+- [ ] **Step 1: Create HomeChannelWriter on startup**
 
 ```rust
 let home_channel_path = config.workspace
@@ -795,30 +834,32 @@ let home_channel_path = config.workspace
 let home_channel_writer = HomeChannelWriter::spawn(home_channel_path);
 ```
 
-- [ ] **Step 2: Pass writer to AppState and AgentTask**
-
-Update `AppState` to hold the writer. Pass it to `AgentTask` during construction.
+- [ ] **Step 2: Pass to AppState and AgentTask**
 
 - [ ] **Step 3: Create home channel directory on birth**
 
-During agent birth, create `channels/home/{agent_name}/` and the initial JSONL file.
+Create `channels/home/{agent_name}/` and `channels/home/{agent_name}/moves/` and `channels/home/{agent_name}/tool-results/`.
 
-- [ ] **Step 4: Run full test suite**
+- [ ] **Step 4: Remove SQL message persistence**
+
+Remove `persist_turn_messages` and related DB calls for message storage. The `Database` may still be needed for other purposes (config, etc.) — only remove message-specific tables.
+
+- [ ] **Step 5: Run full test suite**
 
 Run: `cargo test -p river-gateway`
-Expected: All tests pass.
 
-- [ ] **Step 5: Integration smoke test**
+- [ ] **Step 6: Integration smoke test**
 
-Start the gateway with an agent. Verify:
-- Home channel JSONL file is created
-- Agent responses appear in the log
-- Tool calls/results appear in the log
-- Incoming messages appear tagged
+Start the gateway. Verify:
+- Home channel JSONL created with tagged serde entries
+- Agent responses, tool calls (with names), tool results appear
+- Incoming messages appear with source tags
 - Bystander endpoint works
+- Context is built from home channel + moves
+- No SQL message writes
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add -A && git commit -m "feat(server): wire HomeChannelWriter into server startup and state"
+git add -A && git commit -m "feat(server): wire HomeChannelWriter, remove SQL message persistence"
 ```
