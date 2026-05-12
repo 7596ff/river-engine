@@ -240,7 +240,24 @@ async fn handle_incoming(
     let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
     let snowflake_str = snowflake.to_string();
 
-    // Build channel log entry
+    // Write to home channel first (write-ahead)
+    if let Some(ref writer) = state.home_channel_writer {
+        let home_entry = crate::channels::entry::MessageEntry::user_home(
+            snowflake_str.clone(),
+            msg.author.name.clone(),
+            msg.author.id.clone(),
+            msg.content.clone(),
+            msg.adapter.clone(),
+            msg.channel.clone(),
+            msg.channel_name.clone(),
+            msg.message_id.clone(),
+        );
+        writer.write(
+            crate::channels::entry::HomeChannelEntry::Message(home_entry)
+        ).await;
+    }
+
+    // Build channel log entry (secondary projection)
     let entry = crate::channels::MessageEntry::incoming(
         snowflake_str.clone(),
         msg.author.name.clone(),
@@ -250,7 +267,7 @@ async fn handle_incoming(
         msg.message_id.clone(),
     );
 
-    // Append to channel log
+    // Append to adapter channel log
     let channels_dir = state.config.workspace.join("channels");
     let log = crate::channels::ChannelLog::open(&channels_dir, &msg.adapter, &msg.channel);
 
@@ -259,8 +276,12 @@ async fn handle_incoming(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    // Only push notification after successful write
-    let channel_key = format!("{}_{}", msg.adapter, msg.channel);
+    // Push notification — use "home" channel key when home channel is active
+    let channel_key = if state.home_channel_writer.is_some() {
+        "home".to_string()
+    } else {
+        format!("{}_{}", msg.adapter, msg.channel)
+    };
     state.message_queue.push(crate::queue::ChannelNotification {
         channel: channel_key.clone(),
         snowflake_id: snowflake_str,
