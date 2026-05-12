@@ -8,6 +8,7 @@
 
 pub mod format;
 pub mod handlers;
+pub mod moves;
 pub mod prompt;
 
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
