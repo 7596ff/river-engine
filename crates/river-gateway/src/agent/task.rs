@@ -57,6 +57,13 @@ pub struct TurnStats {
     pub prompt_tokens: u64,
 }
 
+/// Result of a tool execution, preserving tool name for logging
+pub struct ToolExecResult {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub result: String,
+}
+
 /// The agent task — runs as a peer task in the coordinator
 pub struct AgentTask {
     config: AgentTaskConfig,
@@ -406,7 +413,7 @@ impl AgentTask {
 
             // Add tool results to conversation
             for result in &tool_results {
-                let tool_msg = ChatMessage::tool(&result.0, &result.1);
+                let tool_msg = ChatMessage::tool(&result.tool_call_id, &result.result);
                 messages.push(tool_msg.clone());
                 self.context.append(ContextMessage::new(tool_msg, self.turn_count));
             }
@@ -496,7 +503,7 @@ impl AgentTask {
         &self,
         tool_calls: &[ToolCallRequest],
         stats: &mut TurnStats,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<ToolExecResult> {
         let mut results = Vec::new();
 
         for tc in tool_calls {
@@ -551,7 +558,11 @@ impl AgentTask {
                 "Tool executed"
             );
 
-            results.push((tc.id.clone(), output));
+            results.push(ToolExecResult {
+                tool_call_id: tc.id.clone(),
+                tool_name: tc.function.name.clone(),
+                result: output,
+            });
         }
 
         results
