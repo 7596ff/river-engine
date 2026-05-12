@@ -4,7 +4,7 @@ use crate::agents::AgentStatus;
 use crate::state::{LocalModelStatus, ModelRequestResponse, OrchestratorState};
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     routing::{get, post},
     Json, Router,
 };
@@ -154,6 +154,20 @@ pub fn create_router(state: Arc<OrchestratorState>) -> Router {
         .with_state(state)
 }
 
+/// Validate bearer token from Authorization header
+fn validate_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
+    let auth_header = headers
+        .get(AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if river_core::validate_bearer(auth_header, expected_token) {
+        Ok(())
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
 async fn health_check(State(state): State<Arc<OrchestratorState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
@@ -164,22 +178,28 @@ async fn health_check(State(state): State<Arc<OrchestratorState>>) -> Json<Healt
 
 async fn handle_heartbeat(
     State(state): State<Arc<OrchestratorState>>,
+    headers: HeaderMap,
     Json(req): Json<HeartbeatRequest>,
-) -> Json<HeartbeatResponse> {
+) -> Result<Json<HeartbeatResponse>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     tracing::debug!("Heartbeat from {} at {}", req.agent, req.gateway_url);
     state.heartbeat(req.agent, req.gateway_url).await;
-    Json(HeartbeatResponse { acknowledged: true })
+    Ok(Json(HeartbeatResponse { acknowledged: true }))
 }
 
 async fn agents_status(
     State(state): State<Arc<OrchestratorState>>,
-) -> Json<Vec<AgentStatus>> {
-    Json(state.agent_statuses().await)
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentStatus>>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
+    Ok(Json(state.agent_statuses().await))
 }
 
 async fn models_available(
     State(state): State<Arc<OrchestratorState>>,
-) -> Json<ModelsAvailableResponse> {
+    headers: HeaderMap,
+) -> Result<Json<ModelsAvailableResponse>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     let local_models = state.local_models.read().await;
 
     let local: Vec<LocalModelApiResponse> = local_models
@@ -254,18 +274,29 @@ async fn models_available(
         })
         .collect();
 
-    Json(ModelsAvailableResponse {
+    Ok(Json(ModelsAvailableResponse {
         local,
         external,
         resources: ResourcesApiResponse { devices, loaded_models },
         llama_server_available: state.llama_server_available(),
-    })
+    }))
 }
 
 async fn model_request(
     State(state): State<Arc<OrchestratorState>>,
+    headers: HeaderMap,
     Json(req): Json<ModelRequest>,
 ) -> Result<Json<ModelRequestApiResponse>, (StatusCode, Json<ModelRequestApiResponse>)> {
+    if let Err(_) = validate_auth(&headers, &state.auth_token) {
+        return Err((StatusCode::UNAUTHORIZED, Json(ModelRequestApiResponse {
+            status: "error".to_string(),
+            model: req.model,
+            endpoint: None,
+            device: None,
+            warning: None,
+            error: Some("Unauthorized".to_string()),
+        })));
+    }
     match state.request_model(&req.model, req.timeout_seconds).await {
         Ok(ModelRequestResponse::Ready { endpoint, device, warning }) => {
             Ok(Json(ModelRequestApiResponse {
@@ -305,15 +336,19 @@ async fn model_request(
 
 async fn model_release(
     State(state): State<Arc<OrchestratorState>>,
+    headers: HeaderMap,
     Json(req): Json<ModelReleaseRequest>,
-) -> Json<ModelReleaseResponse> {
+) -> Result<Json<ModelReleaseResponse>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     let acknowledged = state.release_model(&req.model).await;
-    Json(ModelReleaseResponse { acknowledged })
+    Ok(Json(ModelReleaseResponse { acknowledged }))
 }
 
 async fn resources(
     State(state): State<Arc<OrchestratorState>>,
-) -> Json<ResourcesApiResponse> {
+    headers: HeaderMap,
+) -> Result<Json<ResourcesApiResponse>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     let device_resources = state.resource_tracker.get_all_resources().await;
     let devices: Vec<DeviceApiResponse> = device_resources
         .iter()
@@ -347,7 +382,7 @@ async fn resources(
         })
         .collect();
 
-    Json(ResourcesApiResponse { devices, loaded_models })
+    Ok(Json(ResourcesApiResponse { devices, loaded_models }))
 }
 
 fn format_parameters(params: u64) -> String {
@@ -377,6 +412,7 @@ mod tests {
             vec![],
             ResourceConfig::default(),
             ProcessConfig::default(),
+            "test-token".to_string(),
         ))
     }
 
@@ -408,6 +444,7 @@ mod tests {
                     .method("POST")
                     .uri("/heartbeat")
                     .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap(),
             )
@@ -423,7 +460,13 @@ mod tests {
         let app = create_router(test_state());
 
         let response = app
-            .oneshot(Request::builder().uri("/models/available").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/models/available")
+                    .header("authorization", "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap()
+            )
             .await
             .unwrap();
 
@@ -435,7 +478,13 @@ mod tests {
         let app = create_router(test_state());
 
         let response = app
-            .oneshot(Request::builder().uri("/resources").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/resources")
+                    .header("authorization", "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap()
+            )
             .await
             .unwrap();
 

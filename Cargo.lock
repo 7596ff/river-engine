@@ -2166,6 +2166,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "dotenvy",
  "futures",
  "libc",
  "reqwest",

@@ -41,6 +41,7 @@ pub struct OrchestratorState {
     pub external_models: Vec<ExternalModel>,
     pub resource_tracker: Arc<ResourceTracker>,
     pub process_manager: Arc<ProcessManager>,
+    pub auth_token: String,
 }
 
 impl OrchestratorState {
@@ -51,6 +52,7 @@ impl OrchestratorState {
         external_models: Vec<ExternalModel>,
         resource_config: ResourceConfig,
         process_config: ProcessConfig,
+        auth_token: String,
     ) -> Self {
         let local_entries: HashMap<String, LocalModelEntry> = local_models
             .into_iter()
@@ -72,6 +74,7 @@ impl OrchestratorState {
             external_models,
             resource_tracker: Arc::new(ResourceTracker::new(resource_config)),
             process_manager: Arc::new(ProcessManager::new(process_config)),
+            auth_token,
         }
     }
 
@@ -398,6 +401,7 @@ mod tests {
             vec![],
             ResourceConfig::default(),
             ProcessConfig::default(),
+            "test-token".to_string(),
         )
     }
 

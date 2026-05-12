@@ -21,10 +21,11 @@ async fn test_full_workflow() {
         vec![],
         ResourceConfig::default(),
         ProcessConfig::default(),
+        "test-token".to_string(),
     ));
     let app = create_router(state.clone());
 
-    // 1. Check health (no agents yet)
+    // 1. Check health (no agents yet) — no auth needed
     let response = app
         .clone()
         .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -44,6 +45,7 @@ async fn test_full_workflow() {
                 .method("POST")
                 .uri("/heartbeat")
                 .header("content-type", "application/json")
+                .header("authorization", "Bearer test-token")
                 .body(Body::from(serde_json::to_string(&heartbeat).unwrap()))
                 .unwrap(),
         )
@@ -57,6 +59,7 @@ async fn test_full_workflow() {
         .oneshot(
             Request::builder()
                 .uri("/agents/status")
+                .header("authorization", "Bearer test-token")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -73,6 +76,7 @@ async fn test_full_workflow() {
         .oneshot(
             Request::builder()
                 .uri("/models/available")
+                .header("authorization", "Bearer test-token")
                 .body(Body::empty())
                 .unwrap(),
         )

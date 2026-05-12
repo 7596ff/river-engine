@@ -75,6 +75,7 @@ fn parse_port_range(s: &str) -> (u16, u16) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
@@ -83,6 +84,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(config_path) = args.config {
         return run_from_config(config_path, args.env_file).await;
     }
+
+    let auth_token = river_core::require_auth_token()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     tracing::info!("Starting River Orchestrator");
     tracing::info!("Port: {}", args.port);
@@ -138,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         external_models,
         resource_config,
         process_config,
+        auth_token,
     ));
 
     // Spawn background loops
@@ -260,8 +265,10 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
         }
     }
 
+    let config_auth_token = river_core::require_auth_token()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let state = Arc::new(OrchestratorState::new(
-        orch_config, local_models, external_models, resource_config, process_config,
+        orch_config, local_models, external_models, resource_config, process_config, config_auth_token,
     ));
 
     // Start orchestrator HTTP server

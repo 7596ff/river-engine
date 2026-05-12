@@ -21,6 +21,7 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
+dotenvy.workspace = true
 which = "7.0"
 reqwest.workspace = true
 libc = "0.2"
