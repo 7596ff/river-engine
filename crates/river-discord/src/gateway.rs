@@ -35,13 +35,8 @@ pub struct GatewayClient {
 }
 
 impl GatewayClient {
-    /// Create a new gateway client
-    pub fn new(base_url: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
+    /// Create a new gateway client with a pre-configured HTTP client (includes auth headers)
+    pub fn new(client: Client, base_url: String) -> Self {
         Self { client, base_url }
     }
 
@@ -148,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_gateway_client_creation() {
-        let client = GatewayClient::new("http://localhost:3000".to_string());
+        let client = GatewayClient::new(Client::new(), "http://localhost:3000".to_string());
         assert_eq!(client.base_url, "http://localhost:3000");
     }
 

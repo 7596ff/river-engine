@@ -16,10 +16,15 @@ use twilight_gateway::Event;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
     let config = DiscordConfig::from_args(args)?;
+
+    let auth_token = river_core::require_auth_token()
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let authed_client = river_core::build_authed_client(&auth_token);
 
     tracing::info!("Starting River Discord Adapter");
 
@@ -31,8 +36,8 @@ async fn main() -> anyhow::Result<()> {
     .await;
     tracing::info!("Loaded channel state");
 
-    // Create gateway client
-    let gateway_client = Arc::new(GatewayClient::new(config.gateway_url.clone()));
+    // Create gateway client (with auth)
+    let gateway_client = Arc::new(GatewayClient::new(authed_client.clone(), config.gateway_url.clone()));
 
     // Create Discord client
     let mut discord = DiscordClient::new(&config.token, config.guild_id).await?;
@@ -48,8 +53,8 @@ async fn main() -> anyhow::Result<()> {
     // Create event handler
     let event_handler = EventHandler::new(channels.clone(), gateway_client.clone());
 
-    // Create HTTP server state
-    let http_state = AppState::new(channels.clone(), config.listen_port);
+    // Create HTTP server state (with auth)
+    let http_state = AppState::new(channels.clone(), config.listen_port, auth_token);
 
     // Set up Discord sender for outbound messages
     http_state.set_discord(discord.sender()).await;
@@ -65,12 +70,13 @@ async fn main() -> anyhow::Result<()> {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Self-register with gateway (non-blocking, non-fatal)
+    // Self-register with gateway (non-blocking, non-fatal, with auth)
     let adapter_info = discord_adapter_info(config.listen_port, Some(application_id.to_string()));
     let gateway_url = config.gateway_url.clone();
+    let reg_client = authed_client.clone();
     tokio::spawn(async move {
         for attempt in 1..=3 {
-            match register_with_gateway(&gateway_url, adapter_info.clone()).await {
+            match register_with_gateway(&reg_client, &gateway_url, adapter_info.clone()).await {
                 Ok(()) => {
                     tracing::info!("Registered with gateway on attempt {}", attempt);
                     return;

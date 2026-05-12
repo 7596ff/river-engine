@@ -27,10 +27,10 @@ pub fn discord_adapter_info(port: u16, bot_id: Option<String>) -> AdapterInfo {
 
 /// Register this adapter with the gateway
 pub async fn register_with_gateway(
+    client: &reqwest::Client,
     gateway_url: &str,
     info: AdapterInfo,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
     let url = format!("{}/adapters/register", gateway_url);
 
     let response: RegisterResponse = client

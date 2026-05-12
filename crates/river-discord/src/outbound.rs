@@ -164,10 +164,11 @@ pub struct AppState {
     pub gateway_reachable: std::sync::atomic::AtomicBool,
     pub port: u16,
     pub bot_id: RwLock<Option<String>>,
+    pub auth_token: String,
 }
 
 impl AppState {
-    pub fn new(channels: Arc<ChannelState>, port: u16) -> Arc<Self> {
+    pub fn new(channels: Arc<ChannelState>, port: u16, auth_token: String) -> Arc<Self> {
         Arc::new(Self {
             channels,
             discord: Arc::new(RwLock::new(None)),
@@ -175,6 +176,7 @@ impl AppState {
             gateway_reachable: std::sync::atomic::AtomicBool::new(false),
             port,
             bot_id: RwLock::new(None),
+            auth_token,
         })
     }
 
@@ -212,9 +214,27 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn capabilities(State(state): State<Arc<AppState>>) -> Json<river_adapter::AdapterInfo> {
+/// Validate bearer token from Authorization header
+fn validate_auth(headers: &axum::http::HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
+    let auth_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if river_core::validate_bearer(auth_header, expected_token) {
+        Ok(())
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+async fn capabilities(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<river_adapter::AdapterInfo>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     let bot_id = state.bot_id.read().await.clone();
-    Json(discord_adapter_info(state.port, bot_id))
+    Ok(Json(discord_adapter_info(state.port, bot_id)))
 }
 
 async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
@@ -247,8 +267,14 @@ async fn health_check(State(state): State<Arc<AppState>>) -> Json<HealthResponse
 
 async fn handle_send(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<DiscordSendRequest>,
 ) -> Result<Json<SendResponse>, (StatusCode, Json<SendResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
+            success: false, message_id: None, error: Some("Unauthorized".into()),
+        })));
+    }
     // Validate request
     if let Err(e) = req.validate() {
         return Err((
@@ -401,8 +427,14 @@ async fn handle_send(
 /// Handle typing indicator request
 async fn handle_typing(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<TypingRequest>,
 ) -> Result<Json<TypingResponse>, (StatusCode, Json<TypingResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(TypingResponse {
+            success: false, error: Some("Unauthorized".into()),
+        })));
+    }
     // Get Discord sender
     let discord_guard = state.discord.read().await;
     let Some(ref discord) = *discord_guard else {
@@ -447,17 +479,27 @@ async fn handle_typing(
     }))
 }
 
-async fn list_channels(State(state): State<Arc<AppState>>) -> Json<ListChannelsResponse> {
+async fn list_channels(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<ListChannelsResponse>, StatusCode> {
+    validate_auth(&headers, &state.auth_token)?;
     let channels = state.channels.list().await;
-    Json(ListChannelsResponse {
+    Ok(Json(ListChannelsResponse {
         channels: channels.into_iter().map(|c| c.to_string()).collect(),
-    })
+    }))
 }
 
 async fn add_channel(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<AddChannelRequest>,
 ) -> Result<Json<ChannelResponse>, (StatusCode, Json<ChannelResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(ChannelResponse {
+            success: false, error: Some("Unauthorized".into()),
+        })));
+    }
     let channel_id: u64 = req.channel_id.parse().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -479,8 +521,14 @@ async fn add_channel(
 
 async fn remove_channel(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<ChannelResponse>, (StatusCode, Json<ChannelResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(ChannelResponse {
+            success: false, error: Some("Unauthorized".into()),
+        })));
+    }
     let channel_id: u64 = id.parse().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -511,8 +559,14 @@ async fn remove_channel(
 
 async fn handle_read(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<ReadQuery>,
 ) -> Result<Json<Vec<ReadMessage>>, (StatusCode, Json<SendResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
+            success: false, message_id: None, error: Some("Unauthorized".into()),
+        })));
+    }
     let discord_guard = state.discord.read().await;
     let Some(ref discord) = *discord_guard else {
         return Err((
@@ -595,9 +649,15 @@ fn read_message_to_event(msg: ReadMessage, channel: &str) -> river_adapter::Inco
 
 async fn history(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(channel): Path<String>,
     Query(params): Query<HistoryParams>,
 ) -> Result<Json<Vec<river_adapter::IncomingEvent>>, (StatusCode, Json<SendResponse>)> {
+    if validate_auth(&headers, &state.auth_token).is_err() {
+        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
+            success: false, message_id: None, error: Some("Unauthorized".into()),
+        })));
+    }
     let discord_guard = state.discord.read().await;
     let Some(ref discord) = *discord_guard else {
         return Err((
@@ -730,7 +790,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![1, 2, 3], None);
-        let state = AppState::new(channels, 3001);
+        let state = AppState::new(channels, 3001, "test-token".to_string());
         state.set_discord_connected(true);
         state.set_gateway_reachable(true);
 
@@ -750,13 +810,14 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![111, 222], None);
-        let state = AppState::new(channels, 3001);
+        let state = AppState::new(channels, 3001, "test-token".to_string());
 
         let app = create_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/channels")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -773,7 +834,7 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels.clone(), 3001);
+        let state = AppState::new(channels.clone(), 3001, "test-token".to_string());
 
         let app = create_router(state);
         let response = app
@@ -782,6 +843,7 @@ mod tests {
                     .method("POST")
                     .uri("/channels")
                     .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::from(r#"{"channel_id": "999"}"#))
                     .unwrap(),
             )
@@ -838,13 +900,14 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![111], None);
-        let state = AppState::new(channels, 3001);
+        let state = AppState::new(channels, 3001, "test-token".to_string());
 
         let app = create_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/read?channel=111")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -861,13 +924,14 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels, 3001);
+        let state = AppState::new(channels, 3001, "test-token".to_string());
 
         let app = create_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/read?channel=invalid")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -885,13 +949,14 @@ mod tests {
         use tower::ServiceExt;
 
         let channels = ChannelState::new(vec![], None);
-        let state = AppState::new(channels, 3001);
+        let state = AppState::new(channels, 3001, "test-token".to_string());
 
         let app = create_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .uri("/read?channel=111&before=invalid")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
