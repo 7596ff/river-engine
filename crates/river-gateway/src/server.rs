@@ -348,13 +348,21 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         spectator_dir: config.workspace.join("spectator"),
         home_channel_path: config.workspace.join("channels/home").join(format!("{}.jsonl", agent_name)),
         moves_path: config.workspace.join("channels/home").join(&agent_name).join("moves.jsonl"),
-        model_timeout: Duration::from_secs(60),
+        sweep_interval: Duration::from_secs(300),
+        sweep_token_budget: 16384,
+        moves_tail: 10,
     };
+
+    let spectator_home_writer = state.home_channel_writer.as_ref()
+        .expect("Home channel writer must be configured")
+        .clone();
 
     let spectator_task = SpectatorTask::new(
         spectator_config,
         coordinator.bus().clone(),
         spectator_model,
+        spectator_home_writer,
+        snowflake_gen.clone(),
     );
 
     coordinator.spawn_task("spectator", |_| spectator_task.run());
