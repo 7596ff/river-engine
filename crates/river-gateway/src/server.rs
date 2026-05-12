@@ -234,19 +234,34 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     let message_queue = Arc::new(MessageQueue::new());
 
-    // Load auth token if configured
-    let auth_token = if let Some(ref token_file) = config.auth_token_file {
-        let token = tokio::fs::read_to_string(token_file)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read auth token file: {}", e))?
-            .trim()
-            .to_string();
-        tracing::info!("Loaded auth token from {:?}", token_file);
-        Some(token)
-    } else {
-        tracing::warn!("No auth token configured - API endpoints are unprotected");
-        None
+    // Load auth token: env var first, then --auth-token-file fallback
+    let auth_token = match river_core::require_auth_token() {
+        Ok(token) => {
+            tracing::info!("Auth token loaded from RIVER_AUTH_TOKEN");
+            token
+        }
+        Err(_) => {
+            if let Some(ref token_file) = config.auth_token_file {
+                let token = tokio::fs::read_to_string(token_file)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to read auth token file: {}", e))?
+                    .trim()
+                    .to_string();
+                if token.is_empty() {
+                    return Err(anyhow::anyhow!("Auth token file is empty"));
+                }
+                tracing::info!("Auth token loaded from {:?}", token_file);
+                token
+            } else {
+                return Err(anyhow::anyhow!(
+                    "No auth token configured. Set RIVER_AUTH_TOKEN in .env or pass --auth-token-file"
+                ));
+            }
+        }
     };
+
+    // Build authed HTTP client for outbound calls
+    let authed_http_client = river_core::build_authed_client(&auth_token);
 
     // Create metrics
     let metrics = Arc::new(RwLock::new(AgentMetrics::new(
@@ -281,6 +296,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         redis_client,
         message_queue.clone(),
         auth_token,
+        authed_http_client,
         subagent_manager,
         metrics,
         policy,

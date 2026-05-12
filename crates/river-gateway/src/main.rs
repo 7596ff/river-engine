@@ -167,6 +167,7 @@ fn birth_agent(data_dir: PathBuf, name: String) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     let args = Args::parse();
 
     // Handle birth subcommand

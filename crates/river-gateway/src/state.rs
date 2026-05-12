@@ -23,8 +23,10 @@ pub struct AppState {
     pub embedding_client: Option<Arc<EmbeddingClient>>,
     pub redis_client: Option<Arc<RedisClient>>,
     pub message_queue: Arc<MessageQueue>,
-    /// Bearer token for authentication (if configured)
-    pub auth_token: Option<String>,
+    /// Bearer token for authentication
+    pub auth_token: String,
+    /// Authed HTTP client for outbound calls (adapters, orchestrator)
+    pub http_client: reqwest::Client,
     /// Subagent manager
     pub subagent_manager: Arc<RwLock<SubagentManager>>,
     /// Shared metrics for observability
@@ -67,7 +69,8 @@ impl AppState {
         embedding_client: Option<EmbeddingClient>,
         redis_client: Option<RedisClient>,
         message_queue: Arc<MessageQueue>,
-        auth_token: Option<String>,
+        auth_token: String,
+        http_client: reqwest::Client,
         subagent_manager: Arc<RwLock<SubagentManager>>,
         metrics: Arc<RwLock<AgentMetrics>>,
         policy: Arc<RwLock<HealthPolicy>>,
@@ -84,6 +87,7 @@ impl AppState {
             message_queue,
             config,
             auth_token,
+            http_client,
             subagent_manager,
             metrics,
             policy,
@@ -141,7 +145,8 @@ mod tests {
             None,
             None,
             message_queue,
-            None,
+            "test-token".to_string(),
+            reqwest::Client::new(),
             subagent_manager,
             metrics,
             policy,

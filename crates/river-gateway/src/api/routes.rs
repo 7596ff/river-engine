@@ -15,23 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Validate bearer token from Authorization header
-fn validate_auth(headers: &HeaderMap, expected_token: Option<&str>) -> Result<(), StatusCode> {
-    let Some(expected) = expected_token else {
-        // No auth configured, allow all requests
-        return Ok(());
-    };
-
+fn validate_auth(headers: &HeaderMap, expected_token: &str) -> Result<(), StatusCode> {
     let auth_header = headers
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if !auth_header.starts_with("Bearer ") {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    let token = &auth_header[7..]; // Skip "Bearer "
-    if token == expected {
+    if river_core::validate_bearer(auth_header, expected_token) {
         Ok(())
     } else {
         Err(StatusCode::UNAUTHORIZED)
@@ -232,7 +222,7 @@ async fn handle_incoming(
     );
 
     // Validate authentication
-    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+    if let Err(status) = validate_auth(&headers, &state.auth_token) {
         return Err(status);
     }
 
@@ -302,7 +292,7 @@ async fn handle_bystander(
     Json(msg): Json<BystanderMessage>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Validate authentication
-    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+    if let Err(status) = validate_auth(&headers, &state.auth_token) {
         return Err(status);
     }
 
@@ -337,9 +327,13 @@ async fn handle_bystander(
 
 async fn list_tools(
     State(state): State<Arc<AppState>>,
-) -> Json<Vec<crate::tools::ToolSchema>> {
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::tools::ToolSchema>>, StatusCode> {
+    if let Err(status) = validate_auth(&headers, &state.auth_token) {
+        return Err(status);
+    }
     let executor = state.tool_executor.read().await;
-    Json(executor.schemas())
+    Ok(Json(executor.schemas()))
 }
 
 async fn register_adapter(
@@ -348,7 +342,7 @@ async fn register_adapter(
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
     // Validate authentication
-    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+    if let Err(status) = validate_auth(&headers, &state.auth_token) {
         tracing::warn!(
             adapter = %request.adapter.name,
             "Authentication failed for adapter registration"
@@ -432,7 +426,7 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/test"),
         )));
-        Arc::new(AppState::new(config, db, registry, None, None, message_queue, None, subagent_manager, metrics, policy))
+        Arc::new(AppState::new(config, db, registry, None, None, message_queue, "test-token".to_string(), reqwest::Client::new(), subagent_manager, metrics, policy))
     }
 
     #[tokio::test]
@@ -454,7 +448,13 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/tools").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/tools")
+                    .header("authorization", "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap()
+            )
             .await
             .unwrap();
 
@@ -483,6 +483,7 @@ mod tests {
                     .method("POST")
                     .uri("/incoming")
                     .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap()
             )
@@ -492,42 +493,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    fn test_state_with_auth(token: &str) -> Arc<AppState> {
-        let agent_birth = AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
-        let config = GatewayConfig {
-            workspace: PathBuf::from("/tmp/test"),
-            data_dir: PathBuf::from("/tmp/test"),
-            port: 3000,
-            model_url: "http://localhost:8080".to_string(),
-            model_name: "test".to_string(),
-            context_limit: 65536,
-            heartbeat_minutes: 45,
-            agent_birth,
-            agent_name: "test-agent".to_string(),
-            embedding: None,
-            redis: None,
-        };
-
-        let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
-        let registry = ToolRegistry::new();
-        let message_queue = Arc::new(MessageQueue::new());
-        let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
-        let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen)));
-        let metrics = Arc::new(RwLock::new(AgentMetrics::new(
-            "test-agent".to_string(),
-            Utc::now(),
-            65536,
-        )));
-        let policy = Arc::new(RwLock::new(HealthPolicy::new(
-            "test-agent".to_string(),
-            PathBuf::from("/tmp/test"),
-        )));
-        Arc::new(AppState::new(config, db, registry, None, None, message_queue, Some(token.to_string()), subagent_manager, metrics, policy))
-    }
-
     #[tokio::test]
-    async fn test_incoming_requires_auth_when_configured() {
-        let state = test_state_with_auth("secret-token");
+    async fn test_incoming_requires_auth() {
+        let state = test_state();
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -557,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_accepts_valid_token() {
-        let state = test_state_with_auth("secret-token");
+        let state = test_state();
         let app = create_router(state);
 
         let body = serde_json::json!({
@@ -575,7 +543,7 @@ mod tests {
                     .method("POST")
                     .uri("/incoming")
                     .header("content-type", "application/json")
-                    .header("authorization", "Bearer secret-token")
+                    .header("authorization", "Bearer test-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap()
             )
@@ -587,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_rejects_invalid_token() {
-        let state = test_state_with_auth("secret-token");
+        let state = test_state();
         let app = create_router(state);
 
         let body = serde_json::json!({
