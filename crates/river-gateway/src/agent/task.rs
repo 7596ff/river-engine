@@ -480,24 +480,11 @@ impl AgentTask {
         let moves_path = self.config.workspace.join("channels").join("home")
             .join(&self.agent_name).join("moves.jsonl");
 
-        let content = match tokio::fs::read_to_string(&moves_path).await {
-            Ok(c) => c,
-            Err(_) => return Vec::new(), // File doesn't exist yet
-        };
-
-        let mut summaries = Vec::new();
-        for line in content.lines() {
-            if line.trim().is_empty() { continue; }
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(summary) = val.get("summary").and_then(|s| s.as_str()) {
-                    summaries.push(summary.to_string());
-                }
-            }
-        }
-
-        // Return last 10 (or configured tail)
-        let tail = summaries.len().saturating_sub(10);
-        summaries[tail..].to_vec()
+        crate::spectator::moves::read_moves_tail(&moves_path, 10)
+            .await
+            .into_iter()
+            .map(|m| m.summary)
+            .collect()
     }
 
     /// Get current turn count
