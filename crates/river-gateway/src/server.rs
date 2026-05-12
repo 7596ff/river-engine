@@ -272,6 +272,17 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         gateway_config.data_dir.clone(),
     )));
 
+    // Create home channel writer
+    let home_channel_path = config.workspace
+        .join("channels/home")
+        .join(format!("{}.jsonl", agent_name));
+    let home_channel_writer = crate::channels::writer::HomeChannelWriter::spawn(home_channel_path.clone());
+
+    // Create home channel directories
+    let home_dir = config.workspace.join("channels/home").join(&agent_name);
+    tokio::fs::create_dir_all(home_dir.join("moves")).await.ok();
+    tokio::fs::create_dir_all(home_dir.join("tool-results")).await.ok();
+
     // Create app state
     let mut app_state = AppState::new(
         gateway_config,
@@ -287,13 +298,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     );
     // Share the same adapter registry between tools and HTTP registration
     app_state.adapter_registry = adapter_registry.clone();
+    app_state.home_channel_writer = Some(home_channel_writer.clone());
     let state = Arc::new(app_state);
 
     // Extract config values needed for agent before state takes ownership
     let agent_workspace = state.config.workspace.clone();
     let agent_model_url = state.config.model_url.clone();
     let agent_model_name = state.config.model_name.clone();
-    let agent_context_limit = state.config.context_limit;
     let agent_heartbeat_minutes = state.config.heartbeat_minutes;
 
     // Coordinator-based agent (default)
@@ -317,12 +328,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     let agent_config = AgentTaskConfig {
         workspace: agent_workspace.clone(),
-        context_config: crate::agent::ContextConfig {
-            limit: agent_context_limit as usize,
-            compaction_threshold: config.compaction_threshold,
-            fill_target: config.fill_target,
-            min_messages: config.min_messages,
-        },
         max_tool_calls: 50,
         heartbeat_interval: Duration::from_secs(agent_heartbeat_minutes as u64 * 60),
         ..Default::default()
@@ -335,9 +340,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         agent_model_client,
         state.tool_executor.clone(),
         flash_queue.clone(),
-        db_arc.clone(),
         snowflake_gen.clone(),
-        None, // home_channel_writer — wired in Task 12
+        home_channel_writer, // moved, not cloned — app_state already has its clone
+        home_channel_path,
         agent_name.clone(),
     )?;
 

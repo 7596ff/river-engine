@@ -5,6 +5,7 @@ use crate::channels::log::ChannelLog;
 use crate::model::{ChatMessage, ToolCallRequest, FunctionCall};
 use std::path::Path;
 
+#[derive(Debug, Clone)]
 pub struct HomeContextConfig {
     pub max_tail_entries: usize,
 }

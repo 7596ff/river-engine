@@ -1,26 +1,23 @@
 //! Agent task — the acting self (I)
 //!
 //! Runs as a peer task in the coordinator, managing the wake/think/act/settle
-//! turn cycle. Uses a persistent context that accumulates messages and compacts
-//! via spectator cursor coordination.
+//! turn cycle. Context is built from the home channel — an append-only JSONL log.
 
 use crate::agent::channel::ChannelContext;
-use crate::agent::context::{PersistentContext, ContextConfig, ContextMessage};
-use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry};
+use crate::agent::home_context::{self, HomeContextConfig};
+use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry, HeartbeatEntry};
 use crate::channels::writer::HomeChannelWriter;
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
 use crate::preferences::{Preferences, format_current_time};
 use crate::model::{ChatMessage, ModelClient, ToolCallRequest};
 use crate::queue::MessageQueue;
-use crate::session::PRIMARY_SESSION_ID;
 use crate::tools::{ToolExecutor, ToolCall, ToolSchema};
 use chrono::Utc;
 use river_core::{SnowflakeGenerator, SnowflakeType};
-use river_db::{Database, Message, MessageRole};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Configuration for the agent task
@@ -28,24 +25,24 @@ use tokio::sync::RwLock;
 pub struct AgentTaskConfig {
     /// Workspace path for loading identity and context files
     pub workspace: PathBuf,
-    /// Context configuration
-    pub context_config: ContextConfig,
     /// Timeout for model calls
     pub model_timeout: Duration,
     /// Maximum tool calls per turn (safety limit)
     pub max_tool_calls: usize,
     /// Heartbeat interval (how often to wake if no messages)
     pub heartbeat_interval: Duration,
+    /// Home context configuration (tail limit, etc.)
+    pub home_context_config: HomeContextConfig,
 }
 
 impl Default for AgentTaskConfig {
     fn default() -> Self {
         Self {
             workspace: PathBuf::from("."),
-            context_config: ContextConfig::default(),
             model_timeout: Duration::from_secs(120),
             max_tool_calls: 50,
             heartbeat_interval: Duration::from_secs(45 * 60),
+            home_context_config: HomeContextConfig::default(),
         }
     }
 }
@@ -74,19 +71,16 @@ pub struct AgentTask {
     model_client: ModelClient,
     tool_executor: Arc<RwLock<ToolExecutor>>,
     flash_queue: Arc<FlashQueue>,
-    db: Arc<Mutex<Database>>,
     snowflake_gen: Arc<SnowflakeGenerator>,
     turn_count: u64,
     channel_context: Option<ChannelContext>,
     /// Pending channel switch (applied at start of next turn)
     pending_channel_switch: Option<ChannelContext>,
-    /// The persistent context object
-    context: PersistentContext,
-    /// Last estimated prompt tokens (for calibration)
-    last_estimated_prompt_tokens: usize,
-    /// Home channel writer (if configured)
-    home_channel_writer: Option<HomeChannelWriter>,
-    /// Agent name (for home channel paths)
+    /// Home channel writer
+    home_channel_writer: HomeChannelWriter,
+    /// Path to home channel JSONL
+    home_channel_path: PathBuf,
+    /// Agent name
     agent_name: String,
 }
 
@@ -98,26 +92,13 @@ impl AgentTask {
         model_client: ModelClient,
         tool_executor: Arc<RwLock<ToolExecutor>>,
         flash_queue: Arc<FlashQueue>,
-        db: Arc<Mutex<Database>>,
         snowflake_gen: Arc<SnowflakeGenerator>,
-        home_channel_writer: Option<HomeChannelWriter>,
+        home_channel_writer: HomeChannelWriter,
+        home_channel_path: PathBuf,
         agent_name: String,
     ) -> anyhow::Result<Self> {
-        // Build system prompt synchronously
-        let system_prompt = Self::build_system_prompt_sync(&config.workspace)?;
-
-        let channel = "default";
-
-        let context = {
-            let db_guard = db.lock().expect("DB lock poisoned");
-            PersistentContext::build(
-                config.context_config.clone(),
-                system_prompt,
-                &db_guard,
-                PRIMARY_SESSION_ID,
-                channel,
-            )
-        };
+        // Verify identity files exist
+        Self::build_system_prompt_sync(&config.workspace)?;
 
         Ok(Self {
             config,
@@ -126,14 +107,12 @@ impl AgentTask {
             model_client,
             tool_executor,
             flash_queue,
-            db,
             snowflake_gen,
             turn_count: 0,
             channel_context: None,
             pending_channel_switch: None,
-            context,
-            last_estimated_prompt_tokens: 0,
             home_channel_writer,
+            home_channel_path,
             agent_name,
         })
     }
@@ -198,32 +177,9 @@ impl AgentTask {
         self.turn_count += 1;
         let mut stats = TurnStats::default();
 
-        // ========== CHECK PENDING CHANNEL SWITCH ==========
-        if let Some(new_channel) = self.pending_channel_switch.take() {
-            let channel_name = new_channel.display_name().to_string();
-            self.channel_context = Some(new_channel);
-
-            let system_prompt = self.build_system_prompt().await
-                .expect("Identity files missing during channel switch");
-            let db_guard = self.db.lock().expect("DB lock poisoned");
-            self.context = PersistentContext::build(
-                self.config.context_config.clone(),
-                system_prompt,
-                &db_guard,
-                PRIMARY_SESSION_ID,
-                &channel_name,
-            );
-            drop(db_guard);
-
-            tracing::info!(channel = %channel_name, "Channel switch applied");
-        }
-
         // ========== WAKE ==========
         self.flash_queue.tick_turn().await;
-        let channel_name = self.channel_context
-            .as_ref()
-            .map(|c| c.display_name().to_string())
-            .unwrap_or_else(|| "default".to_string());
+        let channel_name = "home".to_string();
 
         self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
             channel: channel_name.clone(),
@@ -231,123 +187,48 @@ impl AgentTask {
             timestamp: Utc::now(),
         }));
 
+        // Drain notifications (so the queue is clear for mid-turn checks)
+        let _notifications = self.message_queue.drain();
+
+        // Write heartbeat to home channel if applicable
+        if is_heartbeat {
+            let hb = HeartbeatEntry::new(
+                self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                Utc::now().to_rfc3339(),
+            );
+            self.home_channel_writer.write(HomeChannelEntry::Heartbeat(hb)).await;
+        }
+
         tracing::info!(
             turn = self.turn_count,
-            channel = %channel_name,
             is_heartbeat = is_heartbeat,
             "Turn started"
         );
 
-        // Drain notifications and read channel logs
-        let notifications = self.message_queue.drain();
-        let channels_dir = self.config.workspace.join("channels");
-
-        // Deduplicate channels (multiple notifications for same channel).
-        // This set grows if mid-turn notifications arrive for new channels.
-        let mut seen_channels = std::collections::HashSet::new();
-        for notification in &notifications {
-            seen_channels.insert(notification.channel.clone());
-        }
-
-        // Read new messages from each channel
-        let mut all_new_messages = Vec::new();
-        for channel_key in &seen_channels {
-            // Parse adapter and channel_id from the key
-            let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
-            if parts.len() != 2 {
-                tracing::warn!(channel = %channel_key, "Invalid channel key format");
-                continue;
+        // ========== BUILD CONTEXT FROM HOME CHANNEL ==========
+        let system_prompt = match self.build_system_prompt().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to build system prompt");
+                return;
             }
-            let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
-            match log.read_since_cursor(50).await {
-                Ok(entries) => {
-                    for entry in entries {
-                        if let crate::channels::ChannelEntry::Message(msg) = entry {
-                            if !msg.is_agent() {
-                                all_new_messages.push((channel_key.clone(), msg));
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(channel = %channel_key, error = %e, "Failed to read channel log");
-                }
+        };
+
+        // Load moves from filesystem
+        let moves = self.load_moves().await;
+
+        let home_messages = match home_context::build_context(
+            &self.home_channel_path, &moves, &self.config.home_context_config,
+        ).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to build context from home channel");
+                return;
             }
-        }
+        };
 
-        // Auto-set channel context from first incoming message if not yet set
-        if self.channel_context.is_none() {
-            if let Some((channel_key, _)) = all_new_messages.first() {
-                let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
-                if parts.len() == 2 {
-                    let ctx = ChannelContext {
-                        path: PathBuf::from(format!("channels/{}_{}.jsonl", parts[0], parts[1])),
-                        adapter: parts[0].to_string(),
-                        channel_id: parts[1].to_string(),
-                        channel_name: None,
-                        guild_id: None,
-                    };
-                    tracing::info!(
-                        adapter = %ctx.adapter,
-                        channel = %ctx.channel_id,
-                        "Auto-set channel context from first incoming message"
-                    );
-                    self.channel_context = Some(ctx);
-                }
-            }
-        }
-
-        // Add messages to context
-        for (channel, msg) in &all_new_messages {
-            let author = msg.author.as_deref().unwrap_or("unknown");
-            let chat_msg = ChatMessage::user(format!(
-                "[{}] {}: {}",
-                channel, author, msg.content
-            ));
-            self.context.append(ContextMessage::new(chat_msg, self.turn_count));
-        }
-
-        // Add heartbeat trigger if applicable
-        if is_heartbeat && all_new_messages.is_empty() {
-            self.context.append(ContextMessage::new(
-                ChatMessage::user(":heartbeat:"),
-                self.turn_count,
-            ));
-        }
-
-        // ========== CHECK COMPACTION ==========
-        if self.context.needs_compaction() {
-            let system_prompt = self.build_system_prompt().await
-                .expect("Identity files missing during compaction");
-            let db_guard = self.db.lock().expect("DB lock poisoned");
-            self.context.compact(
-                system_prompt,
-                &db_guard,
-                PRIMARY_SESSION_ID,
-                &channel_name,
-                self.turn_count,
-            );
-            drop(db_guard);
-            tracing::info!(
-                turn = self.turn_count,
-                tokens = self.context.estimate_total_tokens(),
-                "Context compacted"
-            );
-        }
-
-        // Check context pressure
-        let total_tokens = self.context.estimate_total_tokens();
-        let context_percent = (total_tokens as f64 / self.config.context_config.limit as f64) * 100.0;
-        if context_percent >= 80.0 {
-            self.bus.publish(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
-                usage_percent: context_percent,
-                timestamp: Utc::now(),
-            }));
-            tracing::warn!(
-                usage_percent = format!("{:.1}", context_percent),
-                "Context pressure high"
-            );
-        }
+        let mut messages = vec![ChatMessage::system(system_prompt)];
+        messages.extend(home_messages);
 
         // Get tool schemas
         let tools: Vec<ToolSchema> = {
@@ -356,7 +237,6 @@ impl AgentTask {
         };
 
         // ========== THINK + ACT LOOP ==========
-        let mut messages = self.context.to_messages();
         let mut iteration = 0;
 
         loop {
@@ -370,9 +250,6 @@ impl AgentTask {
                 break;
             }
 
-            // Track estimated tokens before model call (for calibration)
-            self.last_estimated_prompt_tokens = self.context.estimate_total_tokens();
-
             // Call model
             let response = match self.model_client.complete(&messages, &tools).await {
                 Ok(resp) => resp,
@@ -381,12 +258,6 @@ impl AgentTask {
                     break;
                 }
             };
-
-            // Calibrate token estimation
-            self.context.update_calibration(
-                response.usage.prompt_tokens as u64,
-                self.last_estimated_prompt_tokens,
-            );
 
             stats.prompt_tokens = response.usage.prompt_tokens as u64;
 
@@ -399,23 +270,19 @@ impl AgentTask {
                 "Model response"
             );
 
-            // Add assistant response to conversation
+            // Add assistant response to local conversation and write to home channel
             let assistant_msg = ChatMessage::assistant(
                 response.content.clone(),
                 if response.tool_calls.is_empty() { None } else { Some(response.tool_calls.clone()) },
             );
-            messages.push(assistant_msg.clone());
-            self.context.append(ContextMessage::new(assistant_msg, self.turn_count));
+            messages.push(assistant_msg);
 
-            // Write assistant text to home channel
-            if let Some(ref writer) = self.home_channel_writer {
-                if let Some(ref content) = response.content {
-                    let entry = MessageEntry::agent(
-                        self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
-                        content.clone(), "home".to_string(), None,
-                    );
-                    writer.write(HomeChannelEntry::Message(entry)).await;
-                }
+            if let Some(ref content) = response.content {
+                let entry = MessageEntry::agent(
+                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                    content.clone(), "home".to_string(), None,
+                );
+                self.home_channel_writer.write(HomeChannelEntry::Message(entry)).await;
             }
 
             // If no tool calls, we're done
@@ -430,110 +297,60 @@ impl AgentTask {
             }
 
             // Write tool calls to home channel
-            if let Some(ref writer) = self.home_channel_writer {
-                for tc in &response.tool_calls {
-                    let entry = ToolEntry::call(
-                        self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
-                        tc.function.name.clone(),
-                        serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
-                        tc.id.clone(),
-                    );
-                    writer.write(HomeChannelEntry::Tool(entry)).await;
-                }
+            for tc in &response.tool_calls {
+                let entry = ToolEntry::call(
+                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                    tc.function.name.clone(),
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
+                    tc.id.clone(),
+                );
+                self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
             }
 
             // ========== ACT: Execute tool calls ==========
             let tool_results = self.execute_tool_calls(&response.tool_calls, &mut stats).await;
 
-            // Add tool results to conversation and write to home channel
+            // Add tool results to local conversation and write to home channel
             for result in &tool_results {
                 let tool_msg = ChatMessage::tool(&result.tool_call_id, &result.result);
-                messages.push(tool_msg.clone());
-                self.context.append(ContextMessage::new(tool_msg, self.turn_count));
+                messages.push(tool_msg);
 
-                // Write tool result to home channel
-                if let Some(ref writer) = self.home_channel_writer {
-                    let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
-                    let entry = if result.result.len() > 4096 {
-                        let results_dir = self.config.workspace.join("channels").join("home")
-                            .join(&self.agent_name).join("tool-results");
-                        tokio::fs::create_dir_all(&results_dir).await.ok();
-                        let file_path = results_dir.join(format!("{}.txt", snowflake));
-                        tokio::fs::write(&file_path, &result.result).await.ok();
-                        ToolEntry::result_file(
-                            snowflake, result.tool_name.clone(),
-                            file_path.to_string_lossy().to_string(), result.tool_call_id.clone(),
-                        )
-                    } else {
-                        ToolEntry::result(
-                            snowflake, result.tool_name.clone(),
-                            result.result.clone(), result.tool_call_id.clone(),
-                        )
-                    };
-                    writer.write(HomeChannelEntry::Tool(entry)).await;
-                }
+                let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
+                let entry = if result.result.len() > 4096 {
+                    let results_dir = self.config.workspace.join("channels").join("home")
+                        .join(&self.agent_name).join("tool-results");
+                    tokio::fs::create_dir_all(&results_dir).await.ok();
+                    let file_path = results_dir.join(format!("{}.txt", snowflake));
+                    tokio::fs::write(&file_path, &result.result).await.ok();
+                    ToolEntry::result_file(
+                        snowflake, result.tool_name.clone(),
+                        file_path.to_string_lossy().to_string(), result.tool_call_id.clone(),
+                    )
+                } else {
+                    ToolEntry::result(
+                        snowflake, result.tool_name.clone(),
+                        result.result.clone(), result.tool_call_id.clone(),
+                    )
+                };
+                self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
             }
 
-            // Check for notifications that arrived during tool execution
+            // Check for messages that arrived during tool execution (final batch check)
             let mid_turn_notifications = self.message_queue.drain();
             if !mid_turn_notifications.is_empty() {
-                // Deduplicate channels
-                let mut mid_channels = std::collections::HashSet::new();
-                for n in &mid_turn_notifications {
-                    mid_channels.insert(n.channel.clone());
-                }
-                // Read new messages from each notified channel
-                let mut mid_content = String::from("Messages received during tool execution:\n");
-                let mut has_mid_messages = false;
-                for ch in &mid_channels {
-                    let parts: Vec<&str> = ch.splitn(2, '_').collect();
-                    if parts.len() != 2 { continue; }
-                    let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
-                    if let Ok(entries) = log.read_since_cursor(50).await {
-                        for entry in entries {
-                            if let crate::channels::ChannelEntry::Message(msg) = entry {
-                                if !msg.is_agent() {
-                                    let author = msg.author.as_deref().unwrap_or("unknown");
-                                    mid_content.push_str(&format!(
-                                        "- [{}] {}: {}\n",
-                                        ch, author, msg.content
-                                    ));
-                                    has_mid_messages = true;
-                                }
-                            }
-                        }
-                    }
-                    // Track these channels for cursor writing at settle
-                    seen_channels.insert(ch.clone());
-                }
-                if has_mid_messages {
-                    let system_msg = ChatMessage::system(mid_content);
-                    messages.push(system_msg.clone());
-                    self.context.append(ContextMessage::new(system_msg, self.turn_count));
-                }
+                // Messages are already in the home channel via handle_incoming.
+                // Re-read context to pick them up, or inject a system note.
+                let system_msg = ChatMessage::system(
+                    "[New messages arrived during tool execution — they are in the home channel]".to_string()
+                );
+                messages.push(system_msg);
             }
         }
 
         // ========== SETTLE ==========
-        // Write cursor entries for channels we read
-        for channel_key in &seen_channels {
-            let parts: Vec<&str> = channel_key.splitn(2, '_').collect();
-            if parts.len() == 2 {
-                let log = crate::channels::ChannelLog::open(&channels_dir, parts[0], parts[1]);
-                let cursor_id = self.snowflake_gen.next_id(river_core::SnowflakeType::Message).to_string();
-                let cursor = crate::channels::CursorEntry::new(cursor_id);
-                if let Err(e) = log.append_entry(&cursor).await {
-                    tracing::warn!(channel = %channel_key, error = %e, "Failed to write cursor");
-                }
-            }
-        }
-
-        self.persist_turn_messages();
-
         let transcript_summary = format!(
-            "Turn {} completed: {} messages, {} tool calls ({} failed)",
+            "Turn {} completed: {} tool calls ({} failed)",
             self.turn_count,
-            all_new_messages.len(),
             stats.total_tool_calls,
             stats.failed_tool_calls
         );
@@ -664,90 +481,33 @@ impl AgentTask {
         Ok(parts.join("\n\n---\n\n"))
     }
 
-    /// Persist conversation messages from the current turn to the database.
-    /// Must be called before emitting TurnComplete (ordering guarantee).
-    fn persist_turn_messages(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+    /// Load move files from the moves directory, sorted by name
+    async fn load_moves(&self) -> Vec<String> {
+        let moves_dir = self.config.workspace.join("channels").join("home")
+            .join(&self.agent_name).join("moves");
+        let mut moves = Vec::new();
 
-        let db = match self.db.lock() {
-            Ok(db) => db,
-            Err(e) => {
-                tracing::error!(error = %e, "DB lock poisoned in persist_turn_messages");
-                return;
-            }
+        let mut entries = match tokio::fs::read_dir(&moves_dir).await {
+            Ok(e) => e,
+            Err(_) => return moves, // Directory doesn't exist yet
         };
 
-        // Persist messages from the persistent context
-        // TODO: Track a persistence cursor to avoid re-persisting old messages.
-        // For now this persists all non-system messages, which is the same
-        // behavior as the previous implementation.
-        let messages = self.context.to_messages();
-        let mut persisted = 0;
-        for chat_msg in &messages {
-            if chat_msg.role == "system" {
-                continue;
+        let mut paths = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "md") {
+                paths.push(path);
             }
+        }
+        paths.sort();
 
-            let role = match chat_msg.role.as_str() {
-                "user" => MessageRole::User,
-                "assistant" => MessageRole::Assistant,
-                "tool" => MessageRole::Tool,
-                _ => continue,
-            };
-
-            let tool_calls_json = chat_msg.tool_calls.as_ref().map(|tc| {
-                serde_json::to_string(tc).unwrap_or_default()
-            });
-
-            let msg = Message {
-                id: self.snowflake_gen.next_id(SnowflakeType::Message),
-                session_id: PRIMARY_SESSION_ID.to_string(),
-                role,
-                content: chat_msg.content.clone(),
-                tool_calls: tool_calls_json,
-                tool_call_id: chat_msg.tool_call_id.clone(),
-                name: chat_msg.name.clone(),
-                created_at: now,
-                metadata: None,
-                turn_number: self.turn_count,
-            };
-
-            if let Err(e) = db.insert_message(&msg) {
-                tracing::warn!(error = %e, "Failed to persist message");
-            } else {
-                persisted += 1;
+        for path in paths {
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                moves.push(content);
             }
         }
 
-        if persisted > 0 {
-            tracing::debug!(persisted = persisted, turn = self.turn_count, "Messages persisted");
-        }
-    }
-
-    /// Switch to a different channel (takes effect at next turn start)
-    pub fn set_channel_context(&mut self, context: ChannelContext) {
-        let old = self.channel_context
-            .as_ref()
-            .map(|c| c.display_name().to_string())
-            .unwrap_or_else(|| "unset".to_string());
-        let new = context.display_name().to_string();
-
-        self.bus.publish(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched {
-            from: old.clone(),
-            to: new.clone(),
-            timestamp: Utc::now(),
-        }));
-
-        tracing::info!(from = %old, to = %new, "Channel switch pending (applied at next turn)");
-        self.pending_channel_switch = Some(context);
-    }
-
-    /// Get current channel context
-    pub fn channel_context(&self) -> Option<&ChannelContext> {
-        self.channel_context.as_ref()
+        moves
     }
 
     /// Get current turn count
@@ -759,19 +519,14 @@ impl AgentTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::channel::ChannelContext;
+    use crate::channels::writer::HomeChannelWriter;
     use crate::coordinator::Coordinator;
     use crate::tools::ToolRegistry;
-    use river_db::init_db;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn test_db(temp: &TempDir) -> (Arc<Mutex<Database>>, Arc<SnowflakeGenerator>) {
-        let db = init_db(&temp.path().join("test.db")).unwrap();
-        let db_arc = Arc::new(Mutex::new(db));
+    fn test_sg() -> Arc<SnowflakeGenerator> {
         let birth = river_core::AgentBirth::new(2026, 4, 29, 12, 0, 0).unwrap();
-        let sg = Arc::new(SnowflakeGenerator::new(birth));
-        (db_arc, sg)
+        Arc::new(SnowflakeGenerator::new(birth))
     }
 
     fn test_config(workspace: &TempDir) -> AgentTaskConfig {
@@ -789,47 +544,47 @@ mod tests {
         std::fs::write(workspace.path().join("RULES.md"), "Be helpful.").unwrap();
     }
 
+    fn test_task(temp: &TempDir) -> AgentTask {
+        write_identity_files(temp);
+        let config = test_config(temp);
+        let coord = Coordinator::new();
+        let bus = coord.bus().clone();
+        let sg = test_sg();
+
+        let home_path = temp.path().join("channels/home/test-agent.jsonl");
+        let writer = HomeChannelWriter::spawn(home_path.clone());
+
+        AgentTask::new(
+            config,
+            bus,
+            Arc::new(MessageQueue::new()),
+            ModelClient::new(
+                "http://localhost:8080".to_string(),
+                "test-model".to_string(),
+                Duration::from_secs(30),
+            ).unwrap(),
+            Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
+            Arc::new(FlashQueue::new(10)),
+            sg,
+            writer,
+            home_path,
+            "test-agent".to_string(),
+        ).unwrap()
+    }
+
     #[test]
     fn test_agent_task_config_default() {
         let config = AgentTaskConfig::default();
         assert_eq!(config.max_tool_calls, 50);
         assert_eq!(config.heartbeat_interval, Duration::from_secs(45 * 60));
-        assert_eq!(config.context_config.limit, 128_000);
+        assert_eq!(config.home_context_config.max_tail_entries, 200);
     }
 
     #[tokio::test]
     async fn test_agent_task_emits_events() {
         let temp = TempDir::new().unwrap();
-        write_identity_files(&temp);
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-
-        let mut event_rx = bus.subscribe();
-
-        let message_queue = Arc::new(MessageQueue::new());
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
-
-        let model_client = ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap();
-
-        let (db, sg) = test_db(&temp);
-        let task = AgentTask::new(
-            config,
-            bus.clone(),
-            message_queue.clone(),
-            model_client,
-            tool_executor,
-            flash_queue,
-            db,
-            sg,
-            None,
-            "test-agent".to_string(),
-        ).unwrap();
+        let task = test_task(&temp);
+        let mut event_rx = task.bus.subscribe();
 
         task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
             channel: "test".into(),
@@ -842,84 +597,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_task_channel_switch() {
-        let temp = TempDir::new().unwrap();
-        write_identity_files(&temp);
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-        let mut event_rx = bus.subscribe();
-
-        let message_queue = Arc::new(MessageQueue::new());
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
-        let model_client = ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap();
-
-        let (db, sg) = test_db(&temp);
-        let mut task = AgentTask::new(
-            config,
-            bus,
-            message_queue,
-            model_client,
-            tool_executor,
-            flash_queue,
-            db,
-            sg,
-            None,
-            "test-agent".to_string(),
-        ).unwrap();
-
-        assert!(task.channel_context().is_none());
-
-        let ctx = ChannelContext {
-            path: PathBuf::from("conversations/discord/general.txt"),
-            adapter: "discord".to_string(),
-            channel_id: "123".to_string(),
-            channel_name: Some("general".to_string()),
-            guild_id: None,
-        };
-        task.set_channel_context(ctx);
-
-        // Channel switch is now deferred — channel_context is still None
-        assert!(task.channel_context().is_none());
-        assert!(task.pending_channel_switch.is_some());
-
-        let event = event_rx.try_recv();
-        assert!(matches!(event, Ok(CoordinatorEvent::Agent(AgentEvent::ChannelSwitched { .. }))));
-    }
-
-    #[tokio::test]
     async fn test_build_system_prompt_missing_files() {
         let temp = TempDir::new().unwrap();
         let config = test_config(&temp);
         let coord = Coordinator::new();
-        let bus = coord.bus().clone();
+        let sg = test_sg();
+        let home_path = temp.path().join("channels/home/test.jsonl");
+        let writer = HomeChannelWriter::spawn(home_path.clone());
 
-        let message_queue = Arc::new(MessageQueue::new());
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
-        let model_client = ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap();
-
-        let (db, sg) = test_db(&temp);
         let result = AgentTask::new(
             config,
-            bus,
-            message_queue,
-            model_client,
-            tool_executor,
-            flash_queue,
-            db,
+            coord.bus().clone(),
+            Arc::new(MessageQueue::new()),
+            ModelClient::new("http://localhost:8080".into(), "test".into(), Duration::from_secs(30)).unwrap(),
+            Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
+            Arc::new(FlashQueue::new(10)),
             sg,
-            None,
-            "test-agent".to_string(),
+            writer,
+            home_path,
+            "test".to_string(),
         );
 
         assert!(result.is_err());
@@ -930,39 +626,10 @@ mod tests {
     #[tokio::test]
     async fn test_build_system_prompt_with_identity() {
         let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("AGENTS.md"), "# Agent Protocol").unwrap();
-        std::fs::write(temp.path().join("IDENTITY.md"), "I am River, a helpful assistant.").unwrap();
-        std::fs::write(temp.path().join("RULES.md"), "Be helpful.").unwrap();
-
-        let config = test_config(&temp);
-        let coord = Coordinator::new();
-        let bus = coord.bus().clone();
-
-        let message_queue = Arc::new(MessageQueue::new());
-        let flash_queue = Arc::new(FlashQueue::new(10));
-        let tool_executor = Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new())));
-        let model_client = ModelClient::new(
-            "http://localhost:8080".to_string(),
-            "test-model".to_string(),
-            Duration::from_secs(30),
-        ).unwrap();
-
-        let (db, sg) = test_db(&temp);
-        let task = AgentTask::new(
-            config,
-            bus,
-            message_queue,
-            model_client,
-            tool_executor,
-            flash_queue,
-            db,
-            sg,
-            None,
-            "test-agent".to_string(),
-        ).unwrap();
+        let task = test_task(&temp);
 
         let prompt = task.build_system_prompt().await.unwrap();
-        assert!(prompt.contains("I am River"));
+        assert!(prompt.contains("test agent"));
         assert!(prompt.contains("Agent Protocol"));
         assert!(prompt.contains("Be helpful"));
         assert!(prompt.contains("Current time:"));
