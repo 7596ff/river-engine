@@ -116,6 +116,21 @@ impl ChannelLog {
         Ok(entries)
     }
 
+    /// Read home channel entries after a given snowflake ID.
+    /// Entries are compared lexicographically (bare hex snowflakes sort correctly).
+    pub async fn read_home_since(&self, after_id: &str) -> std::io::Result<Vec<HomeChannelEntry>> {
+        let all = self.read_all_home().await?;
+        Ok(all.into_iter().filter(|e| e.id() > after_id).collect())
+    }
+
+    /// Read home channel entries after a given snowflake ID, or all entries if None.
+    pub async fn read_home_since_opt(&self, after_id: Option<&str>) -> std::io::Result<Vec<HomeChannelEntry>> {
+        match after_id {
+            Some(id) => self.read_home_since(id).await,
+            None => self.read_all_home().await,
+        }
+    }
+
     /// Read new entries since the agent's last cursor position.
     ///
     /// Scans backward for the last role:agent entry, returns everything after it.
@@ -351,5 +366,48 @@ mod tests {
         let new = log.read_since_cursor(50).await.unwrap();
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].id(), "008");
+    }
+
+    #[tokio::test]
+    async fn test_read_home_since() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("home.jsonl");
+        let log = ChannelLog::from_path(path);
+
+        use super::super::entry::{HomeChannelEntry, MessageEntry};
+
+        for i in 0..5 {
+            let entry = HomeChannelEntry::Message(MessageEntry::agent(
+                format!("{:032x}", i), format!("msg {}", i), "home".into(), None,
+            ));
+            log.append_entry(&entry).await.unwrap();
+        }
+
+        // Read since entry 1 (should get entries 2, 3, 4)
+        let after_id = format!("{:032x}", 1);
+        let entries = log.read_home_since(&after_id).await.unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id(), format!("{:032x}", 2));
+        assert_eq!(entries[2].id(), format!("{:032x}", 4));
+    }
+
+    #[tokio::test]
+    async fn test_read_home_since_opt_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("home.jsonl");
+        let log = ChannelLog::from_path(path);
+
+        use super::super::entry::{HomeChannelEntry, MessageEntry};
+
+        for i in 0..3 {
+            let entry = HomeChannelEntry::Message(MessageEntry::agent(
+                format!("{:032x}", i), format!("msg {}", i), "home".into(), None,
+            ));
+            log.append_entry(&entry).await.unwrap();
+        }
+
+        // Read since None (should get all entries)
+        let entries = log.read_home_since_opt(None).await.unwrap();
+        assert_eq!(entries.len(), 3);
     }
 }
