@@ -6,7 +6,7 @@
 //! Uses tokio::fs for async I/O — this module is called from async contexts
 //! (agent task, HTTP handler) and must not block the executor.
 
-use super::entry::ChannelEntry;
+use super::entry::{ChannelEntry, HomeChannelEntry};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -89,6 +89,30 @@ impl ChannelLog {
             }
         }
 
+        Ok(entries)
+    }
+
+    /// Read all entries from a home channel log (tagged serde), skipping malformed lines
+    pub async fn read_all_home(&self) -> std::io::Result<Vec<HomeChannelEntry>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = tokio::fs::File::open(&self.path).await?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut entries = Vec::new();
+        let mut line_num = 0usize;
+
+        while let Some(line) = lines.next_line().await? {
+            line_num += 1;
+            if line.trim().is_empty() { continue; }
+            match serde_json::from_str::<HomeChannelEntry>(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    tracing::warn!(line_num, error = %e, path = %self.path.display(), "Skipping malformed home channel line");
+                }
+            }
+        }
         Ok(entries)
     }
 
