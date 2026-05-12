@@ -10,7 +10,7 @@ A `.env` file at the project root contains:
 RIVER_AUTH_TOKEN=<token>
 ```
 
-Every service reads `RIVER_AUTH_TOKEN` from the environment at startup. If the variable is missing or empty, the service refuses to start with a clear error message. No fallback, no "allow all if unconfigured."
+Every service calls `dotenvy::dotenv().ok()` at the top of `main()` to load the `.env` file into the process environment, then reads `RIVER_AUTH_TOKEN` via `std::env::var`. If the variable is missing or empty, the service exits with a clear error message (not a panic — a proper `Result` error through the service's existing error handling).
 
 A `.env.example` is checked into the repo:
 
@@ -20,35 +20,45 @@ RIVER_AUTH_TOKEN=your-secret-token-here
 
 The `.env` file itself is gitignored.
 
+**Dependency:** Each service crate (`river-gateway`, `river-orchestrator`, `river-discord`) adds `dotenvy` to its `Cargo.toml`. `river-core` does not depend on `dotenvy` — it only provides the auth validation logic using `std::env`.
+
+**CLI migration:** The gateway currently accepts `--auth-token-file`. This is kept as a fallback — if `RIVER_AUTH_TOKEN` is set in the environment, it takes precedence. If not, the gateway reads from `--auth-token-file` if provided. If neither is set, the service refuses to start. This avoids breaking existing deployments.
+
 ## Shared Auth Module
 
 `river-core` gets an `auth` module with two public functions:
 
 ```rust
-/// Read RIVER_AUTH_TOKEN from environment. Panics with a clear message if missing.
-pub fn require_auth_token() -> String
+/// Read RIVER_AUTH_TOKEN from environment.
+/// Returns Err if missing or empty.
+pub fn require_auth_token() -> Result<String, RiverError>
 
-/// Validate a bearer token value against the expected token.
-/// `auth_header` is the raw value of the Authorization header.
+/// Validate a bearer token from an Authorization header value.
+/// Uses constant-time comparison to prevent timing side-channels.
+/// `auth_header` is the raw value of the Authorization header (e.g. "Bearer abc123").
 /// Returns true if it matches "Bearer <expected>".
 pub fn validate_bearer(auth_header: &str, expected: &str) -> bool
 ```
 
 Each service extracts the `Authorization` header using its own HTTP framework (axum `HeaderMap`) and passes the raw header value to `validate_bearer`. This keeps `river-core` free of HTTP framework dependencies.
 
-The gateway's existing `validate_auth` function in `api/routes.rs` becomes a thin wrapper that extracts the header and calls `river_core::auth::validate_bearer`. The other services copy this same thin wrapper pattern.
+Each service implements a thin `validate_auth` wrapper that extracts the header and calls `river_core::auth::validate_bearer`. The gateway already has this pattern — the orchestrator and Discord adapter copy it.
+
+## State Changes
+
+Every service that holds auth state changes its token field from `Option<String>` to `String`:
+
+- **Gateway:** `AppState.auth_token` changes from `Option<String>` to `String`. The `AppState::new()` constructor changes accordingly. Test helpers that previously passed `None` for auth must pass a test token instead.
+- **Orchestrator:** `OrchestratorState` gains an `auth_token: String` field. Constructor updated. Test helpers updated.
+- **Discord adapter:** `AppState` gains an `auth_token: String` field. Constructor updated. Test helpers updated.
 
 ## Gateway Changes
 
-**Read token from env:** Replace `--auth-token-file` CLI arg and file-based loading with `river_core::auth::require_auth_token()` at startup. Store the token in `AppState`.
+**Read token:** Try `RIVER_AUTH_TOKEN` env var first, fall back to `--auth-token-file` if provided, error if neither.
 
-**Remove `auth_token_file`** from `ServerConfig` and CLI args. Remove the file-reading logic in `server.rs`.
+**Add auth to `GET /tools`:** The `list_tools` handler gains a `headers: HeaderMap` parameter and calls `validate_auth`.
 
-**Add auth to `GET /tools`:** Currently unprotected. Add `validate_bearer_token` check.
-
-**Make token required:** The existing `validate_auth` allowed all requests when no token was configured. The new `validate_bearer_token` always validates — there is no `Option<String>` path.
-
-**Endpoints after change:**
+**All endpoints after change:**
 
 | Endpoint | Auth |
 |---|---|
@@ -58,11 +68,17 @@ The gateway's existing `validate_auth` function in `api/routes.rs` becomes a thi
 | `GET /tools` | ✅ |
 | `POST /adapters/register` | ✅ |
 
+## Gateway → Adapter Auth (Outbound Calls)
+
+The gateway is a client of adapter endpoints — it calls `/send`, `/typing`, `/read` on adapters via `AdapterRegistry`. If adapters require auth, the gateway must send the bearer token on these outbound requests.
+
+The `AdapterRegistry` (or the HTTP client it uses for outbound calls) stores the auth token and includes `Authorization: Bearer <token>` on every request to adapter endpoints. This applies to `SendMessageTool`, `ReadChannelTool`, and any other tool that calls adapter HTTP endpoints.
+
 ## Orchestrator Changes
 
-**Read token from env:** Call `river_core::auth::require_auth_token()` at startup. Store in `OrchestratorState`.
+**Read token:** Call `dotenvy::dotenv().ok()` in `main()`, then `river_core::auth::require_auth_token()`. Store in `OrchestratorState`.
 
-**Add auth to all non-health endpoints:**
+**Add auth to all non-health endpoints.** Every handler gains a `headers: HeaderMap` parameter and calls `validate_auth`. Import `HeaderMap` and `AUTHORIZATION` from `axum::http`.
 
 | Endpoint | Auth |
 |---|---|
@@ -76,11 +92,13 @@ The gateway's existing `validate_auth` function in `api/routes.rs` becomes a thi
 
 ## Gateway → Orchestrator (Heartbeat Client)
 
-The `HeartbeatClient` reads the token from the environment and sends `Authorization: Bearer <token>` on every request to the orchestrator. The token is passed to `HeartbeatClient::new()` and stored alongside the other fields.
+The `HeartbeatClient` accepts an auth token in its constructor and includes `Authorization: Bearer <token>` on every request to the orchestrator.
+
+The heartbeat client currently swallows all HTTP errors (returns `Ok(())` on 401, 500, etc). This changes: 401 responses are logged at `error` level with a clear message ("orchestrator rejected heartbeat — auth token mismatch"), not silently swallowed as warnings. Other HTTP errors remain warnings.
 
 ## Discord Adapter Changes
 
-**Read token from env:** Call `river_core::auth::require_auth_token()` at startup. Store in `AppState`.
+**Read token:** Call `dotenvy::dotenv().ok()` in `main()`, then `river_core::auth::require_auth_token()`. Store in `AppState`.
 
 **Add auth to all non-health endpoints:**
 
@@ -92,6 +110,9 @@ The `HeartbeatClient` reads the token from the environment and sends `Authorizat
 | `POST /typing` | ✅ |
 | `GET /read` | ✅ |
 | `GET /channels` | ✅ |
+| `POST /channels` | ✅ |
+| `DELETE /channels/{id}` | ✅ |
+| `GET /history/{channel}` | ✅ |
 
 ## Out of Scope
 
