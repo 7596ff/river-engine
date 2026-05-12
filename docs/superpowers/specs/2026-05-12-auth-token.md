@@ -34,7 +34,6 @@ The `.env` file itself is gitignored.
 pub fn require_auth_token() -> Result<String, RiverError>
 
 /// Validate a bearer token from an Authorization header value.
-/// Uses constant-time comparison to prevent timing side-channels.
 /// `auth_header` is the raw value of the Authorization header (e.g. "Bearer abc123").
 /// Returns true if it matches "Bearer <expected>".
 pub fn validate_bearer(auth_header: &str, expected: &str) -> bool
@@ -70,9 +69,9 @@ Every service that holds auth state changes its token field from `Option<String>
 
 ## Gateway → Adapter Auth (Outbound Calls)
 
-The gateway is a client of adapter endpoints — it calls `/send`, `/typing`, `/read` on adapters via `AdapterRegistry`. If adapters require auth, the gateway must send the bearer token on these outbound requests.
+The gateway is a client of adapter endpoints — it calls `/send` on adapters via `AdapterRegistry::send_to_adapter`. If adapters require auth, the gateway must send the bearer token on these outbound requests.
 
-The `AdapterRegistry` (or the HTTP client it uses for outbound calls) stores the auth token and includes `Authorization: Bearer <token>` on every request to adapter endpoints. This applies to `SendMessageTool`, `ReadChannelTool`, and any other tool that calls adapter HTTP endpoints.
+The gateway builds a `reqwest::Client` with a default `Authorization: Bearer <token>` header (via `reqwest::ClientBuilder::default_headers`). This client is used for all outbound HTTP calls — to adapters and to the orchestrator. This replaces any inline `reqwest::Client::new()` calls in `send_to_adapter` and the heartbeat client.
 
 ## Orchestrator Changes
 
@@ -95,6 +94,12 @@ The `AdapterRegistry` (or the HTTP client it uses for outbound calls) stores the
 The `HeartbeatClient` accepts an auth token in its constructor and includes `Authorization: Bearer <token>` on every request to the orchestrator.
 
 The heartbeat client currently swallows all HTTP errors (returns `Ok(())` on 401, 500, etc). This changes: 401 responses are logged at `error` level with a clear message ("orchestrator rejected heartbeat — auth token mismatch"), not silently swallowed as warnings. Other HTTP errors remain warnings.
+
+## Adapter → Gateway Auth (Outbound Calls)
+
+Adapters are clients of the gateway — the Discord adapter calls `POST /adapters/register` to self-register and forwards incoming events to `POST /incoming` via `GatewayClient`. Both endpoints require auth after this change.
+
+The Discord adapter reads the auth token at startup and builds a `reqwest::Client` with a default `Authorization: Bearer <token>` header, same pattern as the gateway. This client is used for all outbound calls to the gateway — registration, event forwarding, and health checks.
 
 ## Discord Adapter Changes
 
