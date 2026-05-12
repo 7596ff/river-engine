@@ -2,9 +2,9 @@
 
 use super::entry::HomeChannelEntry;
 use super::log::ChannelLog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub enum LogWriteRequest {
     Append(HomeChannelEntry),
@@ -50,6 +50,48 @@ impl HomeChannelWriter {
 
     pub async fn shutdown(&self) {
         let _ = self.tx.send(LogWriteRequest::Shutdown).await;
+    }
+
+    /// Clean up tool result files in a snowflake range after a move supersedes them.
+    /// Reads the home channel, finds ToolEntry entries with result_file in the range,
+    /// and deletes the files.
+    pub async fn cleanup_tool_results(
+        home_channel_path: &Path,
+        move_start: &str,
+        move_end: &str,
+    ) {
+        let log = ChannelLog::from_path(home_channel_path.to_path_buf());
+        let entries = match log.read_all_home().await {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(error = %e, "Failed to read home channel for cleanup");
+                return;
+            }
+        };
+
+        let mut cleaned = 0;
+        for entry in &entries {
+            if let HomeChannelEntry::Tool(t) = entry {
+                // Check if this entry's ID is in the snowflake range
+                if t.id.as_str() >= move_start && t.id.as_str() <= move_end {
+                    if let Some(ref file_path) = t.result_file {
+                        match tokio::fs::remove_file(file_path).await {
+                            Ok(()) => cleaned += 1,
+                            Err(e) => {
+                                // File may already be gone — not an error
+                                if e.kind() != std::io::ErrorKind::NotFound {
+                                    warn!(path = %file_path, error = %e, "Failed to clean up tool result file");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if cleaned > 0 {
+            info!(cleaned, move_start, move_end, "Cleaned up tool result files");
+        }
     }
 }
 

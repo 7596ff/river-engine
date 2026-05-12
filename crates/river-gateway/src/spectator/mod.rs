@@ -10,6 +10,7 @@ pub mod format;
 pub mod handlers;
 pub mod prompt;
 
+use crate::channels::writer::HomeChannelWriter;
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::model::ModelClient;
 use chrono::Utc;
@@ -27,6 +28,8 @@ pub struct SpectatorConfig {
     pub moments_dir: PathBuf,
     /// Directory for writing move files (channels/home/{agent}/moves/)
     pub moves_dir: PathBuf,
+    /// Path to the home channel JSONL (for tool result cleanup)
+    pub home_channel_path: PathBuf,
     /// Model timeout
     pub model_timeout: std::time::Duration,
 }
@@ -203,6 +206,11 @@ impl SpectatorTask {
             channel: "home".to_string(),
             timestamp: Utc::now(),
         }));
+
+        // Clean up tool result files in the covered snowflake range
+        HomeChannelWriter::cleanup_tool_results(
+            &self.config.home_channel_path, &start, &end,
+        ).await;
 
         tracing::debug!(
             turn = turn_number,

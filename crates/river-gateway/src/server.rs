@@ -359,6 +359,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         spectator_dir: config.workspace.join("spectator"),
         moments_dir: config.workspace.join("embeddings").join("moments"),
         moves_dir: config.workspace.join("channels/home").join(&agent_name).join("moves"),
+        home_channel_path: config.workspace.join("channels/home").join(format!("{}.jsonl", agent_name)),
         model_timeout: Duration::from_secs(60),
     };
 
