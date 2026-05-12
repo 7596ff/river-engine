@@ -6,25 +6,32 @@ The home channel replaces the agent's invisible thinking with a visible, inspect
 
 Every agent has a home channel at `channels/home/{agent_name}.jsonl`. This is the single source of truth for the agent's entire stream of consciousness. The log is strictly append-only — it is never modified after entries are written.
 
+### Snowflake IDs
+
+Every entry in the home channel carries a snowflake ID. Snowflakes are unique, sortable, and encode a timestamp. Moves reference snowflake ranges (e.g., "covers entries from snowflake X to snowflake Y") so the agent can always locate the raw entries a move summarizes.
+
 ### Entry Types
 
 **MessageEntry** (existing, extended with new roles):
+- `id` — snowflake ID
 - `agent` — model responses (all of them, not just send_message)
 - `user` — messages from adapters, tagged with source: `[user:discord:789012/general] cassie: hello`
 - `system` — system-level notifications
 - `bystander` — messages posted directly to the home channel, anonymous by design
 
 **ToolEntry** (new):
+- `id` — snowflake ID
 - `tool_name` — which tool was called
 - `arguments` — the tool call arguments (JSON)
 - `result` — the tool result, OR a file path if the result exceeds a size threshold
 - `tool_call_id` — the model's tool call ID for threading
 
-Large tool results get written to a file (e.g. `channels/home/{agent_name}/tool-results/{id}.txt`) and the entry contains a link instead of the full content. Tool result files are cleaned up when the entries they belong to are superseded by a spectator move — the move summary replaces the need for the raw file.
+Large tool results get written to a file (e.g. `channels/home/{agent_name}/tool-results/{id}.txt`) and the entry contains a link instead of the full content. Tool result files are cleaned up by the log writer actor (not the spectator) when the entries they belong to are superseded by a spectator move — the move summary replaces the need for the raw file. The log writer owns the home channel directory and is the only process that creates or deletes files in it.
 
-**CursorEntry** (existing): read-up-to markers, unchanged.
+**CursorEntry** (existing): read-up-to markers. Carries a snowflake ID.
 
 **HeartbeatEntry** (new):
+- `id` — snowflake ID
 - Heartbeat wake events
 - Only written to the home channel if the heartbeat actually produces a turn (the agent has something to do). No-op heartbeats are transient and don't persist.
 
@@ -95,9 +102,17 @@ The home channel log itself is never modified. "Compression" is ephemeral — th
 
 ### Spectator and Moves
 
-The spectator operates as before — it observes the home channel and produces moves/moments. Moves summarize ranges of turns. The context builder uses moves to represent compressed history, reading the raw log only for entries after the most recent move.
+The spectator operates as before — it observes the home channel and produces moves/moments. Moves summarize ranges of the home channel, referenced by snowflake range (e.g., "this move covers snowflake X through snowflake Y"). The context builder uses moves to represent compressed history, reading the raw log only for entries after the most recent move's ending snowflake.
 
-This means the spectator is the compressor. It reads the home channel tail, writes move files, and the next context build uses those moves instead of the raw entries they summarize.
+This means the spectator is the compressor. It reads the home channel tail, writes move files with snowflake ranges, and the next context build uses those moves instead of the raw entries they summarize.
+
+### Move Verifiability
+
+Because moves reference snowflake ranges and the home channel is append-only and immutable, the agent can always go back and read the raw entries a move was made from. If a move seems wrong or incomplete, the raw log is still there. Moves are summaries, not replacements — the source material is never lost.
+
+### Tool Result Cleanup
+
+When the log writer actor detects that a move has been written covering a range of entries, it cleans up any tool result files referenced by entries in that range. The log writer is the only process that deletes files in the home channel directory. The spectator writes moves but never touches tool result files — this avoids coupling between the observational component and the agent's private files.
 
 ## Bystander Interface
 
