@@ -765,7 +765,12 @@ impl SpectatorTask {
 
         if transcript.is_empty() {
             // All entries were filtered (heartbeats/cursors/spectator messages)
-            // Advance cursor past them so we don't re-read next sweep
+            // Write a no-activity move to advance the cursor past them
+            let first_id = entries[0].id().to_string();
+            let last_id = entries.last().unwrap().id().to_string();
+            if let Err(e) = moves::append_move(&self.config.moves_path, &first_id, &last_id, "[no activity]").await {
+                tracing::error!(error = %e, "Failed to write no-activity move");
+            }
             self.last_sweep = Some(std::time::Instant::now());
             return false;
         }
@@ -799,15 +804,6 @@ impl SpectatorTask {
                 return false;
             }
         };
-
-        // Sanity check — reject degenerate responses
-        if summary.len() < 50 {
-            tracing::warn!(
-                len = summary.len(),
-                "Sweep LLM response too short (< 50 chars), treating as failure"
-            );
-            return false;
-        }
 
         // Write move
         if let Err(e) = moves::append_move(&self.config.moves_path, &first_id, &last_id, &summary).await {
