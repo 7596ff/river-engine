@@ -136,8 +136,8 @@ impl PartialOrd for Snowflake {
 
 impl fmt::Display for Snowflake {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Display as hex: high-low
-        write!(f, "{:016x}-{:016x}", self.high, self.low)
+        // Display as bare hex: 32 chars, zero-padded, sortable as strings
+        write!(f, "{:016x}{:016x}", self.high, self.low)
     }
 }
 
@@ -250,8 +250,8 @@ mod tests {
         let id = Snowflake::new(0x123456789ABCDEF0, birth, SnowflakeType::Message, 0);
 
         let display = format!("{}", id);
-        assert!(display.contains("-"));
-        assert_eq!(display.len(), 33); // 16 + 1 + 16
+        assert!(!display.contains("-"));
+        assert_eq!(display.len(), 32); // 16 + 16, bare hex
     }
 
     #[test]

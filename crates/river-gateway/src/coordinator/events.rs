@@ -19,12 +19,6 @@ pub enum AgentEvent {
         transcript_summary: String,
         tool_calls: Vec<String>,
         timestamp: DateTime<Utc>,
-        /// First snowflake ID written during this turn (for move file naming)
-        #[serde(default)]
-        first_snowflake: Option<String>,
-        /// Last snowflake ID written during this turn
-        #[serde(default)]
-        last_snowflake: Option<String>,
     },
     /// Agent wrote a note to embeddings/
     NoteWritten {

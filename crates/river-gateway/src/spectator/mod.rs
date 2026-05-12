@@ -9,7 +9,6 @@
 pub mod handlers;
 pub mod prompt;
 
-use crate::channels::writer::HomeChannelWriter;
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::model::ModelClient;
 use chrono::Utc;
@@ -21,12 +20,10 @@ use std::sync::Arc;
 pub struct SpectatorConfig {
     /// Directory containing spectator prompt files
     pub spectator_dir: PathBuf,
-    /// Directory for writing moment files
-    pub moments_dir: PathBuf,
-    /// Directory for writing move files (channels/home/{agent}/moves/)
-    pub moves_dir: PathBuf,
-    /// Path to the home channel JSONL (for tool result cleanup)
+    /// Path to the home channel JSONL
     pub home_channel_path: PathBuf,
+    /// Path to moves.jsonl
+    pub moves_path: PathBuf,
     /// Model timeout
     pub model_timeout: std::time::Duration,
 }
@@ -98,13 +95,10 @@ impl SpectatorTask {
                     turn_number,
                     transcript_summary,
                     tool_calls,
-                    first_snowflake,
-                    last_snowflake,
                     ..
                 })) => {
                     self.handle_turn_complete(
                         turn_number, &transcript_summary, &tool_calls,
-                        first_snowflake.as_deref(), last_snowflake.as_deref(),
                     ).await;
                 }
                 Ok(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
@@ -129,79 +123,18 @@ impl SpectatorTask {
         tracing::info!("Spectator task stopped");
     }
 
+    /// Placeholder — will be replaced by sweep-based move generation.
+    /// Currently a no-op since the spectator redesign is pending.
     async fn handle_turn_complete(
         &self,
         turn_number: u64,
-        transcript_summary: &str,
-        tool_calls: &[String],
-        first_snowflake: Option<&str>,
-        last_snowflake: Option<&str>,
+        _transcript_summary: &str,
+        _tool_calls: &[String],
     ) {
-        let template = match &self.on_turn_complete {
-            Some(t) => t,
-            None => return,
-        };
-
-        // Use transcript summary as the prompt context
-        let user_prompt = prompt::substitute(template, &[
-            ("transcript", transcript_summary),
-            ("turn_number", &turn_number.to_string()),
-        ]);
-
-        // Call LLM for move summary
-        let summary = match self.call_model(&user_prompt).await {
-            Ok(text) => text,
-            Err(e) => {
-                tracing::warn!(turn = turn_number, error = %e, "Model call failed, using transcript summary");
-                transcript_summary.to_string()
-            }
-        };
-
-        // Write move file with snowflake range
-        let (start, end) = match (first_snowflake, last_snowflake) {
-            (Some(s), Some(e)) => (s.to_string(), e.to_string()),
-            _ => {
-                tracing::warn!(turn = turn_number, "No snowflake range for turn, skipping move");
-                return;
-            }
-        };
-
-        let filename = format!("{}-{}.md", start, end);
-        let move_path = self.config.moves_dir.join(&filename);
-
-        let content = format!(
-            "Turn {}: {}\n\nTools: {}",
-            turn_number,
-            summary,
-            if tool_calls.is_empty() { "none".to_string() } else { tool_calls.join(", ") },
-        );
-
-        if let Err(e) = tokio::fs::create_dir_all(&self.config.moves_dir).await {
-            tracing::error!(error = %e, "Failed to create moves directory");
+        if self.on_turn_complete.is_none() {
             return;
         }
-
-        if let Err(e) = tokio::fs::write(&move_path, &content).await {
-            tracing::error!(error = %e, "Failed to write move file");
-            return;
-        }
-
-        // Emit event
-        self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
-            channel: "home".to_string(),
-            timestamp: Utc::now(),
-        }));
-
-        // Clean up tool result files in the covered snowflake range
-        HomeChannelWriter::cleanup_tool_results(
-            &self.config.home_channel_path, &start, &end,
-        ).await;
-
-        tracing::debug!(
-            turn = turn_number,
-            path = %move_path.display(),
-            "Move recorded to file"
-        );
+        tracing::debug!(turn = turn_number, "TurnComplete received (sweep-based moves pending)");
     }
 
     // NOTE: Compression (moments from moves) is deferred until the spectator

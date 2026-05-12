@@ -166,22 +166,10 @@ impl AgentTask {
         }
     }
 
-    /// Generate a snowflake and track it for the turn
-    fn next_snowflake(&self, first: &mut Option<String>, last: &mut Option<String>) -> String {
-        let id = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
-        if first.is_none() {
-            *first = Some(id.clone());
-        }
-        *last = Some(id.clone());
-        id
-    }
-
     /// One turn: wake → think → act → settle
     async fn turn_cycle(&mut self, is_heartbeat: bool) {
         self.turn_count += 1;
         let mut stats = TurnStats::default();
-        let mut first_snowflake: Option<String> = None;
-        let mut last_snowflake: Option<String> = None;
 
         // ========== WAKE ==========
         self.flash_queue.tick_turn().await;
@@ -199,7 +187,7 @@ impl AgentTask {
         // Write heartbeat to home channel if applicable
         if is_heartbeat {
             let hb = HeartbeatEntry::new(
-                self.next_snowflake(&mut first_snowflake, &mut last_snowflake),
+                self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
                 Utc::now().to_rfc3339(),
             );
             self.home_channel_writer.write(HomeChannelEntry::Heartbeat(hb)).await;
@@ -285,7 +273,7 @@ impl AgentTask {
 
             if let Some(ref content) = response.content {
                 let entry = MessageEntry::agent(
-                    self.next_snowflake(&mut first_snowflake, &mut last_snowflake),
+                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
                     content.clone(), "home".to_string(), None,
                 );
                 self.home_channel_writer.write(HomeChannelEntry::Message(entry)).await;
@@ -305,7 +293,7 @@ impl AgentTask {
             // Write tool calls to home channel
             for tc in &response.tool_calls {
                 let entry = ToolEntry::call(
-                    self.next_snowflake(&mut first_snowflake, &mut last_snowflake),
+                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
                     tc.function.name.clone(),
                     serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
                     tc.id.clone(),
@@ -321,7 +309,7 @@ impl AgentTask {
                 let tool_msg = ChatMessage::tool(&result.tool_call_id, &result.result);
                 messages.push(tool_msg);
 
-                let snowflake = self.next_snowflake(&mut first_snowflake, &mut last_snowflake);
+                let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
                 let entry = if result.result.len() > 4096 {
                     let results_dir = self.config.workspace.join("channels").join("home")
                         .join(&self.agent_name).join("tool-results");
@@ -367,8 +355,6 @@ impl AgentTask {
             transcript_summary: transcript_summary.clone(),
             tool_calls: stats.tool_calls,
             timestamp: Utc::now(),
-            first_snowflake: first_snowflake,
-            last_snowflake: last_snowflake,
         }));
 
         tracing::info!(
@@ -489,33 +475,29 @@ impl AgentTask {
         Ok(parts.join("\n\n---\n\n"))
     }
 
-    /// Load move files from the moves directory, sorted by name
+    /// Load move summaries from moves.jsonl, returning the last N
     async fn load_moves(&self) -> Vec<String> {
-        let moves_dir = self.config.workspace.join("channels").join("home")
-            .join(&self.agent_name).join("moves");
-        let mut moves = Vec::new();
+        let moves_path = self.config.workspace.join("channels").join("home")
+            .join(&self.agent_name).join("moves.jsonl");
 
-        let mut entries = match tokio::fs::read_dir(&moves_dir).await {
-            Ok(e) => e,
-            Err(_) => return moves, // Directory doesn't exist yet
+        let content = match tokio::fs::read_to_string(&moves_path).await {
+            Ok(c) => c,
+            Err(_) => return Vec::new(), // File doesn't exist yet
         };
 
-        let mut paths = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.extension().map_or(false, |e| e == "md") {
-                paths.push(path);
-            }
-        }
-        paths.sort();
-
-        for path in paths {
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                moves.push(content);
+        let mut summaries = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() { continue; }
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(summary) = val.get("summary").and_then(|s| s.as_str()) {
+                    summaries.push(summary.to_string());
+                }
             }
         }
 
-        moves
+        // Return last 10 (or configured tail)
+        let tail = summaries.len().saturating_sub(10);
+        summaries[tail..].to_vec()
     }
 
     /// Get current turn count
