@@ -87,36 +87,8 @@ struct PolicyInfo {
     attention_file: Option<String>,
 }
 
-/// Incoming message request
-#[derive(Debug, Clone, Deserialize)]
-pub struct IncomingMessage {
-    pub adapter: String,
-    pub event_type: String,
-    pub channel: String,
-    #[serde(default)]
-    pub channel_name: Option<String>,
-    #[serde(default)]
-    pub guild_id: Option<String>,
-    #[serde(default)]
-    pub guild_name: Option<String>,
-    pub author: Author,
-    pub content: String,
-    pub message_id: Option<String>,
-    pub metadata: Option<serde_json::Value>,
-    /// Priority level (defaults to Interactive for user messages)
-    #[serde(default = "default_priority")]
-    pub priority: river_core::Priority,
-}
-
-fn default_priority() -> river_core::Priority {
-    river_core::Priority::Interactive
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Author {
-    pub id: String,
-    pub name: String,
-}
+// Incoming messages use river_adapter::IncomingEvent as the canonical type.
+// See crates/river-adapter/src/types.rs for the definition.
 
 /// Bystander message request
 #[derive(Debug, Clone, Deserialize)]
@@ -211,7 +183,7 @@ async fn health_check(State(state): State<Arc<AppState>>) -> (StatusCode, Json<H
 async fn handle_incoming(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(msg): Json<IncomingMessage>,
+    Json(msg): Json<river_adapter::IncomingEvent>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     tracing::info!(
         adapter = %msg.adapter,
@@ -240,7 +212,7 @@ async fn handle_incoming(
             msg.adapter.clone(),
             msg.channel.clone(),
             msg.channel_name.clone(),
-            msg.message_id.clone(),
+            Some(msg.message_id.clone()),
         );
         writer.write(
             crate::channels::entry::HomeChannelEntry::Message(home_entry)
@@ -254,7 +226,7 @@ async fn handle_incoming(
         msg.author.id.clone(),
         msg.content.clone(),
         msg.adapter.clone(),
-        msg.message_id.clone(),
+        Some(msg.message_id.clone()),
     );
 
     // Append to adapter channel log
@@ -468,13 +440,13 @@ mod tests {
 
         let body = serde_json::json!({
             "adapter": "discord",
-            "event_type": "message",
+            "event_type": "MessageCreate",
             "channel": "general",
-            "author": {
-                "id": "user123",
-                "name": "Alice"
-            },
-            "content": "Hello, world!"
+            "author": { "id": "user123", "name": "Alice", "is_bot": false },
+            "content": "Hello, world!",
+            "message_id": "msg-001",
+            "timestamp": "2026-05-12T12:00:00Z",
+            "metadata": {}
         });
 
         let response = app
@@ -500,10 +472,13 @@ mod tests {
 
         let body = serde_json::json!({
             "adapter": "discord",
-            "event_type": "message",
+            "event_type": "MessageCreate",
             "channel": "general",
-            "author": { "id": "user123", "name": "Alice" },
-            "content": "Hello"
+            "author": { "id": "user123", "name": "Alice", "is_bot": false },
+            "content": "Hello",
+            "message_id": "msg-001",
+            "timestamp": "2026-05-12T12:00:00Z",
+            "metadata": {}
         });
 
         // Request without auth should be rejected
@@ -530,10 +505,13 @@ mod tests {
 
         let body = serde_json::json!({
             "adapter": "discord",
-            "event_type": "message",
+            "event_type": "MessageCreate",
             "channel": "general",
-            "author": { "id": "user123", "name": "Alice" },
-            "content": "Hello"
+            "author": { "id": "user123", "name": "Alice", "is_bot": false },
+            "content": "Hello",
+            "message_id": "msg-001",
+            "timestamp": "2026-05-12T12:00:00Z",
+            "metadata": {}
         });
 
         // Request with valid auth should succeed
@@ -560,10 +538,13 @@ mod tests {
 
         let body = serde_json::json!({
             "adapter": "discord",
-            "event_type": "message",
+            "event_type": "MessageCreate",
             "channel": "general",
-            "author": { "id": "user123", "name": "Alice" },
-            "content": "Hello"
+            "author": { "id": "user123", "name": "Alice", "is_bot": false },
+            "content": "Hello",
+            "message_id": "msg-001",
+            "timestamp": "2026-05-12T12:00:00Z",
+            "metadata": {}
         });
 
         // Request with wrong token should be rejected
