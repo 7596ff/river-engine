@@ -66,6 +66,15 @@ mod tests {
     }
 
     #[test]
+    fn test_format_spectator_message_filtered() {
+        let entry = HomeChannelEntry::Message(MessageEntry::system_msg(
+            "abc010".into(), "[spectator] move written covering entries abc001-abc009".into(),
+        ));
+        let result = format_entry(&entry);
+        assert_eq!(result, None); // spectator's own messages are filtered
+    }
+
+    #[test]
     fn test_format_tool_call() {
         let entry = HomeChannelEntry::Tool(ToolEntry::call(
             "abc005".into(), "read_file".into(),
@@ -160,7 +169,7 @@ use crate::channels::entry::{HomeChannelEntry, MessageEntry};
 /// Returns None for entries that should be filtered out (heartbeats, cursors).
 pub fn format_entry(entry: &HomeChannelEntry) -> Option<String> {
     match entry {
-        HomeChannelEntry::Message(m) => Some(format_message(m)),
+        HomeChannelEntry::Message(m) => format_message(m),
         HomeChannelEntry::Tool(t) => {
             match t.kind.as_str() {
                 "tool_call" => Some(format!("[{}] tool_call: {}", t.id, t.tool_name)),
@@ -180,9 +189,15 @@ pub fn format_entry(entry: &HomeChannelEntry) -> Option<String> {
     }
 }
 
-/// Format a message entry with source tags
-fn format_message(m: &MessageEntry) -> String {
-    match m.role.as_str() {
+/// Format a message entry with source tags.
+/// Returns None for spectator's own messages (feedback loop prevention).
+fn format_message(m: &MessageEntry) -> Option<String> {
+    // Filter spectator's own observability messages
+    if m.role == "system" && m.content.starts_with("[spectator]") {
+        return None;
+    }
+
+    Some(match m.role.as_str() {
         "user" => {
             let author = m.author.as_deref().unwrap_or("unknown");
             match (&m.source_adapter, &m.source_channel_id, &m.source_channel_name) {
@@ -199,7 +214,7 @@ fn format_message(m: &MessageEntry) -> String {
         "bystander" => format!("[{}] bystander: {}", m.id, m.content),
         "system" => format!("[{}] system: {}", m.id, m.content),
         other => format!("[{}] {}: {}", m.id, other, m.content),
-    }
+    })
 }
 
 /// Estimate tokens for a string (same heuristic as the rest of the codebase)
@@ -749,13 +764,18 @@ impl SpectatorTask {
         );
 
         if transcript.is_empty() {
+            // All entries were filtered (heartbeats/cursors/spectator messages)
+            // Advance cursor past them so we don't re-read next sweep
             self.last_sweep = Some(std::time::Instant::now());
             return false;
         }
 
         let first_id = entries[0].id().to_string();
         let last_id = entries[last_idx].id().to_string();
-        let has_more = last_idx < entries.len() - 1;
+
+        // Check if there are more non-filtered entries beyond what we included
+        let remaining = &entries[last_idx + 1..];
+        let has_more = remaining.iter().any(|e| format::format_entry(e).is_some());
 
         // Read recent moves for continuity
         let recent_moves = moves::read_moves_tail(&self.config.moves_path, self.config.moves_tail).await;
@@ -948,7 +968,48 @@ git add -A && git commit -m "refactor(agent): load_moves uses spectator::moves m
 
 ---
 
-### Task 7: Remove Dead Spectator Code
+### Task 7: Create on-sweep.md Prompt File
+
+**Files:**
+- Create: `spectator/on-sweep.md` (in the agent's workspace, not in the crate)
+
+This is the prompt template the spectator loads at startup. Without it, `on_sweep` is `None` and the spectator never sweeps.
+
+- [ ] **Step 1: Create the prompt file**
+
+Create `spectator/on-sweep.md` in the agent workspace (the path the spectator loads from):
+
+```markdown
+Below are the most recent move summaries from this agent's history, followed by new activity entries from the home channel that have not yet been summarized.
+
+## Recent moves (for narrative continuity)
+
+{recent_moves}
+
+## New entries to summarize
+
+{entries}
+
+## Instructions
+
+Write a narrative summary of what happened in the new entries above. Cover all significant topics — what the user asked for, what the agent did, what tools were used and why, what decisions were made, what the outcomes were.
+
+Write in third person ("the agent", "the user"). Be concise but thorough — don't skip topics. If multiple distinct tasks happened, cover each one. No length limit — write as much as the content requires.
+
+Output plain text only. No JSON, no markdown headers, no formatting beyond paragraphs.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add -A && git commit -m "feat(spectator): create on-sweep.md prompt template"
+```
+
+Note: This file lives in the agent's workspace directory, not in the Rust crate. It will be loaded at runtime by the spectator from `{workspace}/spectator/on-sweep.md`.
+
+---
+
+### Task 8: Remove Dead Spectator Code
 
 **Files:**
 - Delete: `crates/river-gateway/src/spectator/handlers.rs` (if unused)
