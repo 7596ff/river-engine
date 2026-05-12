@@ -1,5 +1,6 @@
 //! Shared application state
 
+use crate::channels::writer::HomeChannelWriter;
 use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub policy: Arc<RwLock<HealthPolicy>>,
     /// Registry of connected adapters (used by both HTTP registration and tools)
     pub adapter_registry: Arc<RwLock<crate::tools::adapters::AdapterRegistry>>,
+    /// Home channel writer (if configured)
+    pub home_channel_writer: Option<HomeChannelWriter>,
 }
 
 /// Gateway configuration (runtime)
@@ -85,6 +88,7 @@ impl AppState {
             metrics,
             policy,
             adapter_registry: Arc::new(RwLock::new(crate::tools::adapters::AdapterRegistry::new())),
+            home_channel_writer: None,
         }
     }
 }

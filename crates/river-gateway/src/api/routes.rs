@@ -128,11 +128,18 @@ pub struct Author {
     pub name: String,
 }
 
+/// Bystander message request
+#[derive(Debug, Clone, Deserialize)]
+pub struct BystanderMessage {
+    pub content: String,
+}
+
 /// Create the router with all routes
 pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/incoming", post(handle_incoming))
+        .route("/home/{agent_name}/message", post(handle_bystander))
         .route("/tools", get(list_tools))
         .route("/adapters/register", post(register_adapter))
         .with_state(state)
@@ -265,6 +272,46 @@ async fn handle_incoming(
         "status": "delivered",
         "channel": channel_key,
     })))
+}
+
+async fn handle_bystander(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(_agent_name): axum::extract::Path<String>,
+    Json(msg): Json<BystanderMessage>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Validate authentication
+    if let Err(status) = validate_auth(&headers, state.auth_token.as_deref()) {
+        return Err(status);
+    }
+
+    let writer = match &state.home_channel_writer {
+        Some(w) => w,
+        None => {
+            tracing::warn!("Bystander message received but home channel not configured");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+
+    let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
+    let snowflake_str = snowflake.to_string();
+
+    let entry = crate::channels::entry::MessageEntry::bystander(
+        snowflake_str.clone(), msg.content,
+    );
+
+    writer.write(
+        crate::channels::entry::HomeChannelEntry::Message(entry)
+    ).await;
+
+    state.message_queue.push(crate::queue::ChannelNotification {
+        channel: "home".to_string(),
+        snowflake_id: snowflake_str.clone(),
+    });
+
+    tracing::info!(id = %snowflake_str, "Bystander message received");
+
+    Ok(Json(serde_json::json!({ "ok": true, "id": snowflake_str })))
 }
 
 async fn list_tools(
