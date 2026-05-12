@@ -3,7 +3,6 @@
 //! Runs as a peer task in the coordinator, managing the wake/think/act/settle
 //! turn cycle. Context is built from the home channel — an append-only JSONL log.
 
-use crate::agent::channel::ChannelContext;
 use crate::agent::home_context::{self, HomeContextConfig};
 use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry, HeartbeatEntry};
 use crate::channels::writer::HomeChannelWriter;
@@ -73,9 +72,6 @@ pub struct AgentTask {
     flash_queue: Arc<FlashQueue>,
     snowflake_gen: Arc<SnowflakeGenerator>,
     turn_count: u64,
-    channel_context: Option<ChannelContext>,
-    /// Pending channel switch (applied at start of next turn)
-    pending_channel_switch: Option<ChannelContext>,
     /// Home channel writer
     home_channel_writer: HomeChannelWriter,
     /// Path to home channel JSONL
@@ -109,8 +105,6 @@ impl AgentTask {
             flash_queue,
             snowflake_gen,
             turn_count: 0,
-            channel_context: None,
-            pending_channel_switch: None,
             home_channel_writer,
             home_channel_path,
             agent_name,

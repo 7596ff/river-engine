@@ -25,12 +25,6 @@ pub enum AgentEvent {
         path: String,
         timestamp: DateTime<Utc>,
     },
-    /// Agent switched channels
-    ChannelSwitched {
-        from: String,
-        to: String,
-        timestamp: DateTime<Utc>,
-    },
     /// Context is getting full
     ContextPressure {
         usage_percent: f64,
