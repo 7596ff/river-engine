@@ -17,20 +17,9 @@ use crate::redis::{RedisClient, RedisConfig};
 use crate::state::{AppState, GatewayConfig};
 use crate::subagent::SubagentManager;
 use crate::tools::{
-    BashTool, EditTool, EmbedTool, GlobTool, GrepTool, MemoryDeleteTool, MemoryDeleteBySourceTool,
-    MemorySearchTool, ReadTool, ToolRegistry, WriteTool,
-    SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
-    InternalSendTool, InternalReceiveTool, WaitForSubagentTool,
-    // Web tools
-    WebFetchTool, WebSearchTool,
-    // Communication tools
-    SendMessageTool, ListAdaptersTool, ReadChannelTool, AdapterRegistry, SyncConversationTool,
-    // Model management tools
-    RequestModelTool, ReleaseModelTool, SwitchModelTool, ModelManagerConfig, ModelManagerState,
-    // Scheduling tools
-    ScheduleHeartbeatTool, RotateContextTool, HeartbeatScheduler, ContextRotation,
-    // Logging tools
-    LogReadTool,
+    BashTool, EditTool, GlobTool, GrepTool, ReadTool, ToolRegistry, WriteTool,
+    SendMessageTool, AdapterRegistry,
+    HeartbeatScheduler, ContextRotation,
 };
 use chrono::Utc;
 use std::net::SocketAddr;
@@ -367,8 +356,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         spectator_config,
         coordinator.bus().clone(),
         spectator_model,
-        db_arc.clone(),
-        snowflake_gen.clone(),
     );
 
     coordinator.spawn_task("spectator", |_| spectator_task.run());

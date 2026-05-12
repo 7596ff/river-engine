@@ -6,7 +6,6 @@
 //!
 //! Moves are stored as files at channels/home/{agent}/moves/{start}-{end}.md
 
-pub mod format;
 pub mod handlers;
 pub mod prompt;
 
@@ -14,10 +13,8 @@ use crate::channels::writer::HomeChannelWriter;
 use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
 use crate::model::ModelClient;
 use chrono::Utc;
-use river_core::SnowflakeGenerator;
-use river_db::Database;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Configuration for the spectator task
 #[derive(Debug, Clone)]
@@ -39,13 +36,10 @@ pub struct SpectatorTask {
     config: SpectatorConfig,
     bus: EventBus,
     model_client: ModelClient,
-    db: Arc<Mutex<Database>>,
-    snowflake_gen: Arc<SnowflakeGenerator>,
     /// Cached identity (system prompt)
     identity: String,
     /// Cached prompt templates (None = handler disabled)
     on_turn_complete: Option<String>,
-    on_compress: Option<String>,
     on_pressure: Option<String>,
 }
 
@@ -54,18 +48,13 @@ impl SpectatorTask {
         config: SpectatorConfig,
         bus: EventBus,
         model_client: ModelClient,
-        db: Arc<Mutex<Database>>,
-        snowflake_gen: Arc<SnowflakeGenerator>,
     ) -> Self {
         Self {
             config,
             bus,
             model_client,
-            db,
-            snowflake_gen,
             identity: String::new(),
             on_turn_complete: None,
-            on_compress: None,
             on_pressure: None,
         }
     }
@@ -89,16 +78,12 @@ impl SpectatorTask {
         self.on_turn_complete = prompt::load_prompt(
             &self.config.spectator_dir.join("on-turn-complete.md"),
         );
-        self.on_compress = prompt::load_prompt(
-            &self.config.spectator_dir.join("on-compress.md"),
-        );
         self.on_pressure = prompt::load_prompt(
             &self.config.spectator_dir.join("on-pressure.md"),
         );
 
         tracing::info!(
             turn_complete = self.on_turn_complete.is_some(),
-            compress = self.on_compress.is_some(),
             pressure = self.on_pressure.is_some(),
             "Spectator handlers loaded"
         );

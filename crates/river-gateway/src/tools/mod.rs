@@ -35,7 +35,7 @@ pub use model::{ModelManagerConfig, ModelManagerState, RequestModelTool, Release
 pub use context::{ContextRotation, RotateContextTool, ContextStatusTool};
 pub use heartbeat::{HeartbeatScheduler, ScheduleHeartbeatTool};
 pub use adapters::{AdapterConfig, AdapterRegistry, ListAdaptersTool};
-pub use communication::{SendMessageTool, SpeakTool, SwitchChannelTool, TypingTool, ReadChannelTool};
+pub use communication::{SendMessageTool, ReadChannelTool};
 pub use memory::{EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool};
 pub use subagent::{
     SpawnSubagentTool, ListSubagentsTool, SubagentStatusTool, StopSubagentTool,
