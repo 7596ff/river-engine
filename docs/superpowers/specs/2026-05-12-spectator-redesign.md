@@ -113,6 +113,8 @@ This is visible to both the agent (in the home channel tail) and operators (in t
 
 If the LLM call fails, nothing is written. The spectator logs the error and continues listening. The next successful sweep covers a larger window — all entries since the last successful move, up to the token budget. No mechanical fallbacks. Moves are narrative or nothing.
 
+If the LLM returns a response shorter than 50 characters, treat it as a failure — likely a refusal, error message, or degenerate output. Don't write the move, don't advance the cursor, log a warning. The next sweep retries with the same entries.
+
 ## Cleanup
 
 After writing a move, the spectator cleans up tool result files in the covered snowflake range. The context builder already handles missing tool result files gracefully (`[tool result file missing: {path}]`). The spectator only sweeps after TurnComplete (settle gate), so the agent is between turns during cleanup.
