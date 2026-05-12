@@ -12,7 +12,8 @@ target/
 Thumbs.db
 
 .env
-.obsidian/*
+.obsidian/
+/result
 
 install.sh
 river-tui.log
