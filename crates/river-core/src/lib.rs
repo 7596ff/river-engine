@@ -4,6 +4,7 @@
 //! structures used throughout River Engine.
 
 pub mod auth;
+pub mod channels;
 pub mod config;
 pub mod error;
 pub mod snowflake;
@@ -14,6 +15,11 @@ pub use auth::{build_authed_client, require_auth_token, validate_bearer};
 
 // Re-exports from snowflake module
 pub use snowflake::{AgentBirth, Snowflake, SnowflakeGenerator, SnowflakeType};
+
+// Re-exports from channels module
+pub use channels::{
+    ChannelEntry, CursorEntry, HeartbeatEntry, HomeChannelEntry, MessageEntry, ToolEntry,
+};
 
 // Re-exports from types module
 pub use types::{ContextStatus, Priority, SubagentType};
