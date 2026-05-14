@@ -4,6 +4,7 @@
 
 use crate::snowflake::Snowflake;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// A single entry in a channel log
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +303,74 @@ impl ChannelEntry {
     }
 }
 
+impl fmt::Display for MessageEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time = self.id.to_datetime().format("%Y-%m-%d %H:%M:%S");
+        match self.role.as_str() {
+            "agent" => write!(f, "{} [agent] {}", time, self.content),
+            "user" => {
+                let author = self.author.as_deref().unwrap_or("unknown");
+                let adapter = self.source_adapter.as_deref().unwrap_or(&self.adapter);
+                write!(f, "{} [user:{}] {}: {}", time, adapter, author, self.content)
+            }
+            "bystander" => write!(f, "{} [bystander] {}", time, self.content),
+            "system" => write!(f, "{} [system] {}", time, self.content),
+            other => write!(f, "{} [{}] {}", time, other, self.content),
+        }
+    }
+}
+
+impl fmt::Display for ToolEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time = self.id.to_datetime().format("%Y-%m-%d %H:%M:%S");
+        match self.kind.as_str() {
+            "tool_call" => {
+                let args = self
+                    .arguments
+                    .as_ref()
+                    .map(|a| serde_json::to_string(a).unwrap_or_default())
+                    .unwrap_or_default();
+                write!(f, "{} 🔧 {}({})", time, self.tool_name, args)
+            }
+            "tool_result" => {
+                if let Some(ref file) = self.result_file {
+                    write!(f, "{} 🔧 {} → file: {}", time, self.tool_name, file)
+                } else if let Some(ref result) = self.result {
+                    write!(f, "{} 🔧 {} → {}", time, self.tool_name, result)
+                } else {
+                    write!(f, "{} 🔧 {} → ok", time, self.tool_name)
+                }
+            }
+            other => write!(f, "{} [tool:{}] {}", time, other, self.tool_name),
+        }
+    }
+}
+
+impl fmt::Display for HeartbeatEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time = self.id.to_datetime().format("%Y-%m-%d %H:%M:%S");
+        write!(f, "{} 💓", time)
+    }
+}
+
+impl fmt::Display for CursorEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let time = self.id.to_datetime().format("%Y-%m-%d %H:%M:%S");
+        write!(f, "{} ┄ read cursor", time)
+    }
+}
+
+impl fmt::Display for HomeChannelEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HomeChannelEntry::Message(m) => m.fmt(f),
+            HomeChannelEntry::Cursor(c) => c.fmt(f),
+            HomeChannelEntry::Tool(t) => t.fmt(f),
+            HomeChannelEntry::Heartbeat(h) => h.fmt(f),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,5 +657,74 @@ mod tests {
             "2026-01-01T00:00:00Z".into(),
         ));
         assert_eq!(hb_entry.id(), test_snowflake_seq(12));
+    }
+
+    #[test]
+    fn test_display_agent_message() {
+        let entry = MessageEntry::agent(test_snowflake(), "hello world".into(), "home".into(), None);
+        let display = format!("{}", entry);
+        assert!(display.contains("[agent]"));
+        assert!(display.contains("hello world"));
+        assert!(display.contains("2026-05-14"));
+    }
+
+    #[test]
+    fn test_display_user_message() {
+        let entry = MessageEntry::user_home(
+            test_snowflake(), "cassie".into(), "u1".into(), "hi there".into(),
+            "discord".into(), "general".into(), Some("general".into()), None,
+        );
+        let display = format!("{}", entry);
+        assert!(display.contains("[user:discord]"));
+        assert!(display.contains("cassie:"));
+        assert!(display.contains("hi there"));
+    }
+
+    #[test]
+    fn test_display_bystander_message() {
+        let entry = MessageEntry::bystander(test_snowflake(), "interesting".into());
+        let display = format!("{}", entry);
+        assert!(display.contains("[bystander]"));
+        assert!(display.contains("interesting"));
+    }
+
+    #[test]
+    fn test_display_heartbeat() {
+        let entry = HeartbeatEntry::new(test_snowflake(), "2026-05-14T12:00:00Z".into());
+        let display = format!("{}", entry);
+        assert!(display.contains("💓"));
+        assert!(display.contains("2026-05-14"));
+    }
+
+    #[test]
+    fn test_display_cursor() {
+        let entry = CursorEntry::new(test_snowflake());
+        let display = format!("{}", entry);
+        assert!(display.contains("┄"));
+        assert!(display.contains("read cursor"));
+    }
+
+    #[test]
+    fn test_display_tool_call_full() {
+        let entry = ToolEntry::call(
+            test_snowflake(), "read_file".into(),
+            serde_json::json!({"path": "/tmp/test.txt"}),
+            "tc_001".into(),
+        );
+        let display = format!("{}", entry);
+        assert!(display.contains("read_file"));
+        assert!(display.contains("/tmp/test.txt"));
+    }
+
+    #[test]
+    fn test_display_tool_result_full() {
+        let entry = ToolEntry::result(
+            test_snowflake(), "read_file".into(),
+            "line 1\nline 2\nline 3".into(),
+            "tc_001".into(),
+        );
+        let display = format!("{}", entry);
+        assert!(display.contains("line 1"));
+        assert!(display.contains("line 3"));
     }
 }
