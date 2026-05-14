@@ -27,12 +27,12 @@ pub async fn run(
     client: Arc<BystanderClient>,
 ) -> anyhow::Result<()> {
     enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
+    crossterm::execute!(stdout(), EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
 
     let result = run_inner(agent, &mut entry_rx, client).await;
 
     let _ = disable_raw_mode();
-    let _ = stdout().execute(LeaveAlternateScreen);
+    let _ = crossterm::execute!(stdout(), LeaveAlternateScreen, crossterm::event::DisableMouseCapture);
 
     result
 }
@@ -184,6 +184,21 @@ async fn run_inner(
                             }
                             (KeyCode::PageDown, _) => {
                                 scroll_offset = scroll_offset.saturating_add(10);
+                                let total = lines.len() as u16;
+                                if scroll_offset >= total { follow_tail = true; }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Mouse(mouse) => {
+                        use crossterm::event::MouseEventKind;
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                follow_tail = false;
+                                scroll_offset = scroll_offset.saturating_sub(3);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                scroll_offset = scroll_offset.saturating_add(3);
                                 let total = lines.len() as u16;
                                 if scroll_offset >= total { follow_tail = true; }
                             }
