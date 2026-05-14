@@ -143,6 +143,7 @@ impl Tool for SpawnSubagentTool {
                     self.model_url.clone(),
                     model.clone(),
                     Duration::from_secs(120),
+                None,
                 )?;
 
                 // Create filtered tool registry for subagent

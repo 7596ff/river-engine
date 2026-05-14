@@ -25,7 +25,12 @@ pub struct ModelClient {
 }
 
 impl ModelClient {
-    pub fn new(url: String, model: String, timeout: Duration) -> Result<Self, RiverError> {
+    pub fn new(
+        url: String,
+        model: String,
+        timeout: Duration,
+        api_key_env: Option<&str>,
+    ) -> Result<Self, RiverError> {
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .build()
@@ -38,23 +43,34 @@ impl ModelClient {
             Provider::OpenAI
         };
 
-        // Check for API key in environment based on provider
-        let api_key = match provider {
-            Provider::Anthropic => std::env::var("ANTHROPIC_API_KEY").ok(),
-            Provider::OpenAI => std::env::var("OPENROUTER_API_KEY").ok(),
+        // Read API key from specified env var, or fall back to provider defaults
+        let api_key = if let Some(env_var) = api_key_env {
+            match std::env::var(env_var) {
+                Ok(key) if !key.is_empty() => {
+                    tracing::info!(env_var, "API key loaded from environment");
+                    Some(key)
+                }
+                _ => {
+                    tracing::warn!(env_var, "API key env var set but empty or missing");
+                    None
+                }
+            }
+        } else {
+            // Fall back to provider defaults
+            let default_var = match provider {
+                Provider::Anthropic => "ANTHROPIC_API_KEY",
+                Provider::OpenAI => "OPENAI_API_KEY",
+            };
+            match std::env::var(default_var) {
+                Ok(key) if !key.is_empty() => {
+                    tracing::info!(env_var = default_var, "API key loaded from default env var");
+                    Some(key)
+                }
+                _ => None,
+            }
         };
 
-        if api_key.is_some() {
-            tracing::info!(provider = ?provider, "API key found in environment");
-        } else {
-            let env_var = match provider {
-                Provider::Anthropic => "ANTHROPIC_API_KEY",
-                Provider::OpenAI => "OPENROUTER_API_KEY",
-            };
-            tracing::warn!("No API key found in {} environment variable(s)", env_var);
-        }
-
-        tracing::info!(provider = ?provider, url = %url, model = %model, "ModelClient initialized");
+        tracing::info!(provider = ?provider, url = %url, model = %model, has_api_key = api_key.is_some(), "ModelClient initialized");
 
         Ok(Self {
             url,

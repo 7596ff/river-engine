@@ -22,10 +22,10 @@ let
         description = "Model name at the endpoint";
       };
 
-      api_key_file = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
+      api_key_env = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Path to file containing API key";
+        description = "Environment variable name for API key (e.g. DEEPSEEK_API_KEY)";
       };
 
       context_limit = lib.mkOption {
@@ -302,8 +302,7 @@ in
             provider = model.provider;
             endpoint = model.endpoint;
             name = model.name;
-            api_key_file = if model.api_key_file != null
-              then toString model.api_key_file else null;
+            api_key_env = model.api_key_env;
             context_limit = model.context_limit;
             dimensions = model.dimensions;
             path = if model.path != null

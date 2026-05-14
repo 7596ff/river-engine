@@ -97,6 +97,14 @@ struct Args {
     /// Spectator model name (defaults to same as agent)
     #[arg(long)]
     spectator_model_name: Option<String>,
+
+    /// Env var name for agent model API key (e.g. DEEPSEEK_API_KEY)
+    #[arg(long)]
+    model_api_key_env: Option<String>,
+
+    /// Env var name for spectator model API key
+    #[arg(long)]
+    spectator_api_key_env: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -303,6 +311,8 @@ async fn main() -> anyhow::Result<()> {
         adapters: adapter_configs,
         spectator_model_url: args.spectator_model_url,
         spectator_model_name: args.spectator_model_name,
+        model_api_key_env: args.model_api_key_env,
+        spectator_api_key_env: args.spectator_api_key_env,
     };
 
     run(config).await

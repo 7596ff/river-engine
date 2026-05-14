@@ -40,9 +40,9 @@ pub struct ModelConfig {
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Path to file containing API key
+    /// Env var name for API key (e.g. DEEPSEEK_API_KEY, ANTHROPIC_API_KEY)
     #[serde(default)]
-    pub api_key_file: Option<PathBuf>,
+    pub api_key_env: Option<String>,
 
     /// Context window size in tokens
     #[serde(default)]

@@ -52,6 +52,10 @@ pub struct ServerConfig {
     pub spectator_model_url: Option<String>,
     /// Spectator model name (defaults to same as agent)
     pub spectator_model_name: Option<String>,
+    /// Env var name for agent model API key
+    pub model_api_key_env: Option<String>,
+    /// Env var name for spectator model API key
+    pub spectator_api_key_env: Option<String>,
 }
 
 /// Initialize and run the gateway server
@@ -351,6 +355,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         agent_model_url.clone(),
         agent_model_name.clone(),
         Duration::from_secs(120),
+        config.model_api_key_env.as_deref(),
     )?;
 
     let agent_config = AgentTaskConfig {
@@ -380,6 +385,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         spectator_model_url.clone(),
         spectator_model_name.clone(),
         Duration::from_secs(60),
+        config.spectator_api_key_env.as_deref(),
     )?;
 
     let spectator_config = SpectatorConfig {

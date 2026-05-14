@@ -44,6 +44,12 @@ pub fn gateway_args(
             args.push(name.clone());
         }
     }
+    if let Some(model_config) = _models.get(&agent.model) {
+        if let Some(ref env) = model_config.api_key_env {
+            args.push("--model-api-key-env".to_string());
+            args.push(env.clone());
+        }
+    }
 
     // Spectator model
     let spectator_key = agent.spectator_model.as_deref().unwrap_or(&agent.model);
@@ -53,6 +59,12 @@ pub fn gateway_args(
         if let Some(ref name) = resolved.name {
             args.push("--spectator-model-name".to_string());
             args.push(name.clone());
+        }
+    }
+    if let Some(model_config) = _models.get(spectator_key) {
+        if let Some(ref env) = model_config.api_key_env {
+            args.push("--spectator-api-key-env".to_string());
+            args.push(env.clone());
         }
     }
 
