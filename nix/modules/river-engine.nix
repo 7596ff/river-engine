@@ -449,6 +449,8 @@ in
           RestartSec = 5;
 
           ReadWritePaths = agentPaths;
+        } // lib.optionalAttrs (cfg.envFile != null) {
+          EnvironmentFile = toString cfg.envFile;
         };
       };
 
