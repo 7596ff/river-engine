@@ -239,9 +239,11 @@ impl AgentTask {
 
         // ========== THINK + ACT LOOP ==========
         let mut iteration = 0;
+        tracing::debug!(max_iterations = self.config.max_tool_calls, "Starting think+act loop");
 
         loop {
             iteration += 1;
+            tracing::debug!(iteration, "Loop iteration start");
             if iteration > self.config.max_tool_calls {
                 tracing::warn!(
                     iterations = iteration,
@@ -296,6 +298,7 @@ impl AgentTask {
 
             // If no tool calls, we're done
             if response.tool_calls.is_empty() {
+                tracing::debug!(iteration, "No tool calls — breaking loop");
                 if let Some(ref content) = response.content {
                     tracing::info!(
                         content_len = content.len(),
@@ -304,6 +307,7 @@ impl AgentTask {
                 }
                 break;
             }
+            tracing::debug!(iteration, tool_count = response.tool_calls.len(), "Has tool calls — executing");
 
             // Write tool calls to home channel
             for tc in &response.tool_calls {
@@ -359,6 +363,8 @@ impl AgentTask {
                     .await;
             }
 
+            tracing::debug!(iteration, results = tool_results.len(), "Tool execution complete, checking for mid-turn messages");
+
             // Check for messages that arrived during tool execution (final batch check)
             let mid_turn_notifications = self.message_queue.drain();
             if !mid_turn_notifications.is_empty() {
@@ -370,6 +376,7 @@ impl AgentTask {
                 );
                 messages.push(system_msg);
             }
+            tracing::debug!(iteration, message_count = messages.len(), "Continuing loop — will call model again");
         }
 
         // ========== SETTLE ==========
