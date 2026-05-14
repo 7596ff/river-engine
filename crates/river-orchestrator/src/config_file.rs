@@ -335,6 +335,7 @@ mod tests {
             bin: None,
             port: 8081,
             token_file: None,
+            token_env: None,
             guild_id: None,
             channels: vec![],
         };
@@ -348,6 +349,7 @@ mod tests {
             bin: Some(PathBuf::from("/usr/local/bin/my-discord")),
             port: 8081,
             token_file: None,
+            token_env: None,
             guild_id: None,
             channels: vec![],
         };
