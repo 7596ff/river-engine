@@ -335,12 +335,12 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
 
     for (name, agent) in &config.agents {
         // Check birth
-        let db_path = agent.data_dir.join("river.db");
-        if !db_path.exists() {
+        let birth_path = agent.data_dir.join("birth.json");
+        if !birth_path.exists() {
             tracing::error!(
                 agent = %name,
-                "Agent not birthed. Run: river-gateway birth --data-dir {} --name {}",
-                agent.data_dir.display(), name
+                "Agent not birthed. Run: river-gateway birth --data-dir {} --workspace {} --name {}",
+                agent.data_dir.display(), agent.workspace.display(), name
             );
             continue;
         }
