@@ -1,5 +1,12 @@
 //! River Gateway - Agent Runtime
 
+/// Birth record stored at {data_dir}/birth.json
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct BirthRecord {
+    pub id: river_core::Snowflake,
+    pub name: String,
+}
+
 pub mod adapters;
 pub use adapters::AdapterRegistry;
 pub mod api;

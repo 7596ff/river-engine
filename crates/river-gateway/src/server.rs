@@ -118,18 +118,24 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         None
     };
 
-    // Load agent birth from database (must have been created via `river-gateway birth`)
-    let birth_memory = db.get_birth_memory()?.ok_or_else(|| {
-        anyhow::anyhow!(
+    // Load agent birth from birth.json
+    let birth_path = config.data_dir.join("birth.json");
+    let birth_record: crate::BirthRecord = if birth_path.exists() {
+        let content = std::fs::read_to_string(&birth_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read birth file: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse birth file: {}", e))?
+    } else {
+        anyhow::bail!(
             "Agent not birthed. Run `river-gateway birth --data-dir {:?} --name <name>` first.",
             config.data_dir
-        )
-    })?;
-    let agent_birth = birth_memory.id.birth();
+        );
+    };
+    let agent_birth = birth_record.id.birth();
     tracing::info!(
-        "Agent birth: {} (from memory: \"{}\")",
+        "Agent birth: {} (name: \"{}\")",
         agent_birth,
-        birth_memory.content
+        birth_record.name
     );
 
     // Create gateway config

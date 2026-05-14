@@ -1,8 +1,8 @@
 use chrono::{Datelike, Timelike};
 use clap::{Parser, Subcommand};
-use river_core::{AgentBirth, SnowflakeGenerator, SnowflakeType};
-use river_gateway::db::{init_db, Memory};
+use river_core::{AgentBirth, Snowflake, SnowflakeGenerator, SnowflakeType};
 use river_gateway::server::{run, ServerConfig};
+use river_gateway::BirthRecord;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -103,9 +103,13 @@ struct Args {
 enum Command {
     /// Birth a new agent (must be run once before first start)
     Birth {
-        /// Data directory for database
+        /// Data directory
         #[arg(short, long)]
         data_dir: PathBuf,
+
+        /// Workspace directory
+        #[arg(short, long)]
+        workspace: PathBuf,
 
         /// Agent name
         #[arg(short, long)]
@@ -113,21 +117,22 @@ enum Command {
     },
 }
 
-fn birth_agent(data_dir: PathBuf, name: String) -> anyhow::Result<()> {
+fn birth_agent(data_dir: PathBuf, workspace: PathBuf, name: String) -> anyhow::Result<()> {
     println!("Birthing agent '{}'...", name);
 
-    // Initialize database
-    let db_path = data_dir.join("river.db");
     std::fs::create_dir_all(&data_dir)?;
-    let db = init_db(&db_path)?;
+
+    let birth_path = data_dir.join("birth.json");
 
     // Check if already birthed
-    if let Some(existing) = db.get_birth_memory()? {
+    if birth_path.exists() {
+        let existing: BirthRecord =
+            serde_json::from_str(&std::fs::read_to_string(&birth_path)?)?;
         let birth = existing.id.birth();
         anyhow::bail!(
-            "Agent already birthed at {}. Birth memory: \"{}\"",
+            "Agent already birthed at {}. Name: \"{}\"",
             birth,
-            existing.content
+            existing.name
         );
     }
 
@@ -142,30 +147,57 @@ fn birth_agent(data_dir: PathBuf, name: String) -> anyhow::Result<()> {
         now.second() as u8,
     )?;
 
-    // Create snowflake generator with this birth
+    // Create snowflake generator and first ID
     let gen = SnowflakeGenerator::new(agent_birth);
-
-    // Create the first memory - the birth memory
-    let birth_memory = Memory {
-        id: gen.next_id(SnowflakeType::Embedding),
-        content: format!("i am {}", name),
-        embedding: vec![0.0; 384], // Placeholder embedding (will be re-embedded if needed)
-        source: "system:birth".to_string(),
-        timestamp: now.timestamp(),
-        expires_at: None,
-        metadata: Some(format!(
-            "{{\"birth\":\"{}\",\"name\":\"{}\"}}",
-            agent_birth, name
-        )),
+    let birth_id = gen.next_id(SnowflakeType::Embedding);
+    let record = BirthRecord {
+        id: birth_id,
+        name: name.clone(),
     };
 
-    db.insert_memory(&birth_memory)?;
+    // Write birth file
+    let json = serde_json::to_string_pretty(&record)?;
+    std::fs::write(&birth_path, &json)?;
+
+    // Write first home channel entry
+    let home_dir = workspace.join("channels/home").join(&name);
+    std::fs::create_dir_all(home_dir.join("moves"))?;
+    std::fs::create_dir_all(home_dir.join("tool-results"))?;
+
+    let home_channel_path = workspace
+        .join("channels/home")
+        .join(format!("{}.jsonl", name));
+
+    let birth_entry = river_core::HomeChannelEntry::Message(
+        river_core::MessageEntry::system_msg(
+            birth_id,
+            format!("agent '{}' born at {}", name, agent_birth),
+        ),
+    );
+    let mut entry_json = serde_json::to_string(&birth_entry)?;
+    entry_json.push('\n');
+    std::fs::write(&home_channel_path, &entry_json)?;
 
     println!("Agent '{}' born at {}", name, agent_birth);
-    println!("Birth memory ID: {}", birth_memory.id);
-    println!("Database: {:?}", db_path);
+    println!("Birth ID: {}", birth_id);
+    println!("Birth file: {:?}", birth_path);
+    println!("Home channel: {:?}", home_channel_path);
 
     Ok(())
+}
+
+/// Load birth record from {data_dir}/birth.json
+pub fn load_birth(data_dir: &std::path::Path) -> anyhow::Result<BirthRecord> {
+    let birth_path = data_dir.join("birth.json");
+    if !birth_path.exists() {
+        anyhow::bail!(
+            "Agent not birthed. Run `river-gateway birth --data-dir {:?} --name <name>` first.",
+            data_dir
+        );
+    }
+    let content = std::fs::read_to_string(&birth_path)?;
+    let record: BirthRecord = serde_json::from_str(&content)?;
+    Ok(record)
 }
 
 #[tokio::main]
@@ -174,8 +206,13 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Handle birth subcommand
-    if let Some(Command::Birth { data_dir, name }) = args.command {
-        return birth_agent(data_dir, name);
+    if let Some(Command::Birth {
+        data_dir,
+        workspace,
+        name,
+    }) = args.command
+    {
+        return birth_agent(data_dir, workspace, name);
     }
 
     // Normal startup - requires workspace and data_dir
