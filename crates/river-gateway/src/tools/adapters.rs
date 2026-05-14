@@ -1,8 +1,8 @@
 //! Adapter infrastructure — registry, config, shared send logic
 
 use super::registry::{Tool, ToolResult};
-use river_core::{RiverError, SnowflakeGenerator, SnowflakeType};
 use river_adapter::Feature;
+use river_core::{RiverError, SnowflakeGenerator, SnowflakeType};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -69,16 +69,14 @@ pub async fn send_to_adapter(
     channels_dir: &Path,
     snowflake_gen: &SnowflakeGenerator,
 ) -> Result<ToolResult, RiverError> {
-    let config = registry
-        .get(adapter)
-        .ok_or_else(|| {
-            error!(
-                adapter = %adapter,
-                available = ?registry.names(),
-                "Unknown adapter"
-            );
-            RiverError::tool(format!("Adapter '{}' not registered", adapter))
-        })?;
+    let config = registry.get(adapter).ok_or_else(|| {
+        error!(
+            adapter = %adapter,
+            available = ?registry.names(),
+            "Unknown adapter"
+        );
+        RiverError::tool(format!("Adapter '{}' not registered", adapter))
+    })?;
 
     let payload = serde_json::json!({
         "channel": channel_id,
@@ -189,10 +187,12 @@ impl Tool for ListAdaptersTool {
                 let adapters: Vec<_> = registry
                     .list()
                     .iter()
-                    .map(|a| serde_json::json!({
-                        "name": a.name,
-                        "outbound_url": a.outbound_url
-                    }))
+                    .map(|a| {
+                        serde_json::json!({
+                            "name": a.name,
+                            "outbound_url": a.outbound_url
+                        })
+                    })
                     .collect();
 
                 info!(
@@ -201,10 +201,13 @@ impl Tool for ListAdaptersTool {
                     "ListAdaptersTool: Returning adapter list"
                 );
 
-                Ok(ToolResult::success(serde_json::to_string_pretty(&serde_json::json!({
-                    "adapters": adapters,
-                    "count": adapters.len()
-                })).unwrap()))
+                Ok(ToolResult::success(
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "adapters": adapters,
+                        "count": adapters.len()
+                    }))
+                    .unwrap(),
+                ))
             })
         });
 

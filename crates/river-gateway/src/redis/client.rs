@@ -54,7 +54,13 @@ impl RedisClient {
     pub async fn working_set(&self, key: &str, value: &str, ttl_minutes: u64) -> RiverResult<()> {
         let full_key = self.namespaced_key("working", key);
         self.inner
-            .set::<(), _, _>(&full_key, value, Some(Expiration::EX(ttl_minutes as i64 * 60)), None, false)
+            .set::<(), _, _>(
+                &full_key,
+                value,
+                Some(Expiration::EX(ttl_minutes as i64 * 60)),
+                None,
+                false,
+            )
             .await
             .map_err(|e| RiverError::redis(format!("SET failed: {}", e)))
     }
@@ -69,7 +75,8 @@ impl RedisClient {
 
     pub async fn working_delete(&self, key: &str) -> RiverResult<bool> {
         let full_key = self.namespaced_key("working", key);
-        let deleted: i64 = self.inner
+        let deleted: i64 = self
+            .inner
             .del(&full_key)
             .await
             .map_err(|e| RiverError::redis(format!("DEL failed: {}", e)))?;
@@ -80,7 +87,13 @@ impl RedisClient {
     pub async fn medium_set(&self, key: &str, value: &str, ttl_hours: u64) -> RiverResult<()> {
         let full_key = self.namespaced_key("medium", key);
         self.inner
-            .set::<(), _, _>(&full_key, value, Some(Expiration::EX(ttl_hours as i64 * 3600)), None, false)
+            .set::<(), _, _>(
+                &full_key,
+                value,
+                Some(Expiration::EX(ttl_hours as i64 * 3600)),
+                None,
+                false,
+            )
             .await
             .map_err(|e| RiverError::redis(format!("SET failed: {}", e)))
     }
@@ -96,8 +109,15 @@ impl RedisClient {
     // Coordination domain
     pub async fn acquire_lock(&self, key: &str, ttl_seconds: u64) -> RiverResult<bool> {
         let full_key = self.namespaced_key("coord", &format!("lock:{}", key));
-        let result: Option<String> = self.inner
-            .set(&full_key, "locked", Some(Expiration::EX(ttl_seconds as i64)), Some(SetOptions::NX), false)
+        let result: Option<String> = self
+            .inner
+            .set(
+                &full_key,
+                "locked",
+                Some(Expiration::EX(ttl_seconds as i64)),
+                Some(SetOptions::NX),
+                false,
+            )
             .await
             .map_err(|e| RiverError::redis(format!("SET NX failed: {}", e)))?;
         Ok(result.is_some())
@@ -105,7 +125,8 @@ impl RedisClient {
 
     pub async fn release_lock(&self, key: &str) -> RiverResult<bool> {
         let full_key = self.namespaced_key("coord", &format!("lock:{}", key));
-        let deleted: i64 = self.inner
+        let deleted: i64 = self
+            .inner
             .del(&full_key)
             .await
             .map_err(|e| RiverError::redis(format!("DEL failed: {}", e)))?;
@@ -122,7 +143,8 @@ impl RedisClient {
 
     pub async fn counter_get(&self, key: &str) -> RiverResult<i64> {
         let full_key = self.namespaced_key("coord", &format!("counter:{}", key));
-        let value: Option<i64> = self.inner
+        let value: Option<i64> = self
+            .inner
             .get(&full_key)
             .await
             .map_err(|e| RiverError::redis(format!("GET failed: {}", e)))?;
@@ -130,7 +152,12 @@ impl RedisClient {
     }
 
     // Cache domain
-    pub async fn cache_set(&self, key: &str, value: &str, ttl_seconds: Option<u64>) -> RiverResult<()> {
+    pub async fn cache_set(
+        &self,
+        key: &str,
+        value: &str,
+        ttl_seconds: Option<u64>,
+    ) -> RiverResult<()> {
         let full_key = self.namespaced_key("cache", key);
         let expiration = ttl_seconds.map(|s| Expiration::EX(s as i64));
         self.inner

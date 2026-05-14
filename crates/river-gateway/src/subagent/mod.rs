@@ -2,13 +2,13 @@
 //!
 //! Subagents run as separate tokio tasks with shared workspace but independent context.
 
-pub mod types;
 pub mod queue;
 pub mod runner;
+pub mod types;
 
-pub use types::{SubagentInfo, SubagentResult, SubagentStatus, SubagentType};
 pub use queue::{InternalMessage, InternalQueue};
-pub use runner::{SubagentRunner, SubagentConfig, create_subagent_registry};
+pub use runner::{create_subagent_registry, SubagentConfig, SubagentRunner};
+pub use types::{SubagentInfo, SubagentResult, SubagentStatus, SubagentType};
 
 use river_core::{RiverError, Snowflake, SnowflakeGenerator, SnowflakeType};
 use std::collections::HashMap;
@@ -126,9 +126,10 @@ impl SubagentManager {
 
     /// Stop a subagent
     pub fn stop(&mut self, id: Snowflake) -> Result<(), RiverError> {
-        let entry = self.subagents.get_mut(&id).ok_or_else(|| {
-            RiverError::tool(format!("Subagent {} not found", id))
-        })?;
+        let entry = self
+            .subagents
+            .get_mut(&id)
+            .ok_or_else(|| RiverError::tool(format!("Subagent {} not found", id)))?;
 
         if entry.info.status.is_terminal() {
             return Err(RiverError::tool(format!(

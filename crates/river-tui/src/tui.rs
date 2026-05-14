@@ -64,21 +64,28 @@ async fn run_inner(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),    // message log
-                    Constraint::Length(1),  // status bar
-                    Constraint::Length(3),  // input
+                    Constraint::Length(1), // status bar
+                    Constraint::Length(3), // input
                 ])
                 .split(frame.area());
 
             // --- Message log ---
-            let msg_lines: Vec<Line> = messages.iter().map(|m| {
-                let time = m.timestamp.format("%H:%M").to_string();
-                let name_color = if m.is_agent { Color::Cyan } else { Color::Green };
-                Line::from(vec![
-                    Span::styled(format!("{} ", time), Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{}: ", m.sender), Style::default().fg(name_color)),
-                    Span::raw(&m.content),
-                ])
-            }).collect();
+            let msg_lines: Vec<Line> = messages
+                .iter()
+                .map(|m| {
+                    let time = m.timestamp.format("%H:%M").to_string();
+                    let name_color = if m.is_agent {
+                        Color::Cyan
+                    } else {
+                        Color::Green
+                    };
+                    Line::from(vec![
+                        Span::styled(format!("{} ", time), Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}: ", m.sender), Style::default().fg(name_color)),
+                        Span::raw(&m.content),
+                    ])
+                })
+                .collect();
 
             let msg_widget = Paragraph::new(msg_lines.clone())
                 .block(Block::default().borders(Borders::ALL))
@@ -97,7 +104,11 @@ async fn run_inner(
             // --- Status bar ---
             let gw_indicator = if connected { "●" } else { "○" };
             let gw_color = if connected { Color::Green } else { Color::Red };
-            let gw_text = if connected { "connected" } else { "disconnected" };
+            let gw_text = if connected {
+                "connected"
+            } else {
+                "disconnected"
+            };
 
             let mut status_spans = vec![
                 Span::raw(" [tui "),
@@ -106,7 +117,10 @@ async fn run_inner(
             ];
 
             if !server_ok {
-                status_spans.push(Span::styled(" | server: down", Style::default().fg(Color::Red)));
+                status_spans.push(Span::styled(
+                    " | server: down",
+                    Style::default().fg(Color::Red),
+                ));
             }
 
             status_spans.push(Span::raw("]"));

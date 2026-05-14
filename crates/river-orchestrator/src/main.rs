@@ -1,11 +1,7 @@
 use clap::Parser;
 use river_orchestrator::{
-    api::create_router,
-    config::OrchestratorConfig,
-    discovery::ModelScanner,
-    external::ExternalModelsFile,
-    process::ProcessConfig,
-    resources::ResourceConfig,
+    api::create_router, config::OrchestratorConfig, discovery::ModelScanner,
+    external::ExternalModelsFile, process::ProcessConfig, resources::ResourceConfig,
     OrchestratorState,
 };
 use std::net::SocketAddr;
@@ -85,8 +81,7 @@ async fn main() -> anyhow::Result<()> {
         return run_from_config(config_path, args.env_file).await;
     }
 
-    let auth_token = river_core::require_auth_token()
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let auth_token = river_core::require_auth_token().map_err(|e| anyhow::anyhow!("{}", e))?;
 
     tracing::info!("Starting River Orchestrator");
     tracing::info!("Port: {}", args.port);
@@ -156,10 +151,8 @@ async fn main() -> anyhow::Result<()> {
     // Health check loop
     let process_manager = state.process_manager.clone();
     tokio::spawn(async move {
-        river_orchestrator::process::health_check_loop(
-            process_manager,
-            Duration::from_secs(10),
-        ).await;
+        river_orchestrator::process::health_check_loop(process_manager, Duration::from_secs(10))
+            .await;
     });
 
     let app = create_router(state);
@@ -265,10 +258,15 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
         }
     }
 
-    let config_auth_token = river_core::require_auth_token()
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let config_auth_token =
+        river_core::require_auth_token().map_err(|e| anyhow::anyhow!("{}", e))?;
     let state = Arc::new(OrchestratorState::new(
-        orch_config, local_models, external_models, resource_config, process_config, config_auth_token,
+        orch_config,
+        local_models,
+        external_models,
+        resource_config,
+        process_config,
+        config_auth_token,
     ));
 
     // Start orchestrator HTTP server
@@ -297,10 +295,13 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
             tracing::info!(model = %model_id, "Loading GGUF model (waiting for health)...");
             match state.request_model(model_id, 120).await {
                 Ok(river_orchestrator::state::ModelRequestResponse::Ready { endpoint, .. }) => {
-                    resolved_models.insert(model_id.clone(), river_orchestrator::cli_builder::ResolvedModel {
-                        endpoint,
-                        name: model.name.clone(),
-                    });
+                    resolved_models.insert(
+                        model_id.clone(),
+                        river_orchestrator::cli_builder::ResolvedModel {
+                            endpoint,
+                            name: model.name.clone(),
+                        },
+                    );
                     tracing::info!(model = %model_id, "GGUF model ready");
                 }
                 Ok(river_orchestrator::state::ModelRequestResponse::Loading { .. }) => {
@@ -311,10 +312,13 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
                 }
             }
         } else if let Some(ref endpoint) = model.endpoint {
-            resolved_models.insert(model_id.clone(), river_orchestrator::cli_builder::ResolvedModel {
-                endpoint: endpoint.clone(),
-                name: model.name.clone(),
-            });
+            resolved_models.insert(
+                model_id.clone(),
+                river_orchestrator::cli_builder::ResolvedModel {
+                    endpoint: endpoint.clone(),
+                    name: model.name.clone(),
+                },
+            );
         }
     }
 
@@ -343,7 +347,11 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
 
         // Spawn gateway
         let gateway_args = river_orchestrator::cli_builder::gateway_args(
-            name, agent, &config.models, config.port, &resolved_models,
+            name,
+            agent,
+            &config.models,
+            config.port,
+            &resolved_models,
         );
         let gateway_spec = river_orchestrator::supervisor::ChildSpec {
             label: format!("{}/gateway", name),
@@ -351,7 +359,10 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
             args: gateway_args,
         };
         let rx = shutdown_tx.subscribe();
-        handles.push(tokio::spawn(river_orchestrator::supervisor::supervise(gateway_spec, rx)));
+        handles.push(tokio::spawn(river_orchestrator::supervisor::supervise(
+            gateway_spec,
+            rx,
+        )));
 
         // Spawn adapters
         for adapter in &agent.adapters {
@@ -373,7 +384,10 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
                 args: adapter_args,
             };
             let rx = shutdown_tx.subscribe();
-            handles.push(tokio::spawn(river_orchestrator::supervisor::supervise(adapter_spec, rx)));
+            handles.push(tokio::spawn(river_orchestrator::supervisor::supervise(
+                adapter_spec,
+                rx,
+            )));
         }
 
         started_agents += 1;
@@ -383,7 +397,11 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
         anyhow::bail!("No agents could start");
     }
 
-    tracing::info!(agents = started_agents, children = handles.len(), "All children spawned");
+    tracing::info!(
+        agents = started_agents,
+        children = handles.len(),
+        "All children spawned"
+    );
 
     // 8. Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
@@ -391,10 +409,7 @@ async fn run_from_config(config_path: PathBuf, env_file: Option<PathBuf>) -> any
     let _ = shutdown_tx.send(());
 
     // Wait for all supervisors to stop (with timeout)
-    let _ = tokio::time::timeout(
-        Duration::from_secs(15),
-        futures::future::join_all(handles),
-    ).await;
+    let _ = tokio::time::timeout(Duration::from_secs(15), futures::future::join_all(handles)).await;
 
     tracing::info!("Shutdown complete");
     Ok(())

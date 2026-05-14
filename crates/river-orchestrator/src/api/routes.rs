@@ -4,7 +4,7 @@ use crate::agents::AgentStatus;
 use crate::state::{LocalModelStatus, ModelRequestResponse, OrchestratorState};
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -208,7 +208,11 @@ async fn models_available(
             let (status, endpoint, device, idle_seconds) = match &entry.status {
                 LocalModelStatus::Available => ("available".to_string(), None, None, None),
                 LocalModelStatus::Loading => ("loading".to_string(), None, None, None),
-                LocalModelStatus::Loaded { endpoint, device, idle_seconds } => (
+                LocalModelStatus::Loaded {
+                    endpoint,
+                    device,
+                    idle_seconds,
+                } => (
                     "loaded".to_string(),
                     Some(endpoint.clone()),
                     Some(device.to_api_string()),
@@ -232,7 +236,8 @@ async fn models_available(
         })
         .collect();
 
-    let external: Vec<ExternalModelApiResponse> = state.external_models
+    let external: Vec<ExternalModelApiResponse> = state
+        .external_models
         .iter()
         .map(|m| ExternalModelApiResponse {
             id: m.id.clone(),
@@ -277,7 +282,10 @@ async fn models_available(
     Ok(Json(ModelsAvailableResponse {
         local,
         external,
-        resources: ResourcesApiResponse { devices, loaded_models },
+        resources: ResourcesApiResponse {
+            devices,
+            loaded_models,
+        },
         llama_server_available: state.llama_server_available(),
     }))
 }
@@ -288,49 +296,52 @@ async fn model_request(
     Json(req): Json<ModelRequest>,
 ) -> Result<Json<ModelRequestApiResponse>, (StatusCode, Json<ModelRequestApiResponse>)> {
     if let Err(_) = validate_auth(&headers, &state.auth_token) {
-        return Err((StatusCode::UNAUTHORIZED, Json(ModelRequestApiResponse {
-            status: "error".to_string(),
-            model: req.model,
-            endpoint: None,
-            device: None,
-            warning: None,
-            error: Some("Unauthorized".to_string()),
-        })));
-    }
-    match state.request_model(&req.model, req.timeout_seconds).await {
-        Ok(ModelRequestResponse::Ready { endpoint, device, warning }) => {
-            Ok(Json(ModelRequestApiResponse {
-                status: "ready".to_string(),
-                model: req.model,
-                endpoint: Some(endpoint),
-                device: device.map(|d| d.to_api_string()),
-                warning,
-                error: None,
-            }))
-        }
-        Ok(ModelRequestResponse::Loading { estimated_seconds: _ }) => {
-            Ok(Json(ModelRequestApiResponse {
-                status: "loading".to_string(),
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ModelRequestApiResponse {
+                status: "error".to_string(),
                 model: req.model,
                 endpoint: None,
                 device: None,
                 warning: None,
-                error: None,
-            }))
-        }
-        Err(e) => {
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(ModelRequestApiResponse {
-                    status: "error".to_string(),
-                    model: req.model,
-                    endpoint: None,
-                    device: None,
-                    warning: None,
-                    error: Some(e.to_string()),
-                }),
-            ))
-        }
+                error: Some("Unauthorized".to_string()),
+            }),
+        ));
+    }
+    match state.request_model(&req.model, req.timeout_seconds).await {
+        Ok(ModelRequestResponse::Ready {
+            endpoint,
+            device,
+            warning,
+        }) => Ok(Json(ModelRequestApiResponse {
+            status: "ready".to_string(),
+            model: req.model,
+            endpoint: Some(endpoint),
+            device: device.map(|d| d.to_api_string()),
+            warning,
+            error: None,
+        })),
+        Ok(ModelRequestResponse::Loading {
+            estimated_seconds: _,
+        }) => Ok(Json(ModelRequestApiResponse {
+            status: "loading".to_string(),
+            model: req.model,
+            endpoint: None,
+            device: None,
+            warning: None,
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ModelRequestApiResponse {
+                status: "error".to_string(),
+                model: req.model,
+                endpoint: None,
+                device: None,
+                warning: None,
+                error: Some(e.to_string()),
+            }),
+        )),
     }
 }
 
@@ -382,7 +393,10 @@ async fn resources(
         })
         .collect();
 
-    Ok(Json(ResourcesApiResponse { devices, loaded_models }))
+    Ok(Json(ResourcesApiResponse {
+        devices,
+        loaded_models,
+    }))
 }
 
 fn format_parameters(params: u64) -> String {
@@ -421,7 +435,12 @@ mod tests {
         let app = create_router(test_state());
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -465,7 +484,7 @@ mod tests {
                     .uri("/models/available")
                     .header("authorization", "Bearer test-token")
                     .body(Body::empty())
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -483,7 +502,7 @@ mod tests {
                     .uri("/resources")
                     .header("authorization", "Bearer test-token")
                     .body(Body::empty())
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();

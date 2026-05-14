@@ -1,14 +1,11 @@
 //! Integration tests for orchestrator
 
-use river_orchestrator::{
-    api::create_router,
-    config::OrchestratorConfig,
-    process::ProcessConfig,
-    resources::ResourceConfig,
-    OrchestratorState,
-};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use river_orchestrator::{
+    api::create_router, config::OrchestratorConfig, process::ProcessConfig,
+    resources::ResourceConfig, OrchestratorState,
+};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -28,7 +25,12 @@ async fn test_full_workflow() {
     // 1. Check health (no agents yet) — no auth needed
     let response = app
         .clone()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

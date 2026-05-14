@@ -1,7 +1,7 @@
 //! Model interaction types and client
 
-pub mod types;
 pub mod client;
+pub mod types;
 
-pub use types::{ChatMessage, ToolCallRequest, FunctionCall};
-pub use client::{ModelClient, ModelResponse, Usage, Provider};
+pub use client::{ModelClient, ModelResponse, Provider, Usage};
+pub use types::{ChatMessage, FunctionCall, ToolCallRequest};

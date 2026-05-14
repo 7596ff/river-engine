@@ -336,7 +336,8 @@ fn cmd_init(agent_name: &str, output: &PathBuf, birth: Option<&str>) -> Result<(
             serde_json::json!({
                 "birth": format!("{}", agent_birth),
                 "name": agent_name
-            }).to_string()
+            })
+            .to_string()
         ],
     )?;
 
@@ -365,11 +366,23 @@ fn cmd_init(agent_name: &str, output: &PathBuf, birth: Option<&str>) -> Result<(
     println!("Created database: {:?}", output);
     println!("Agent name: {}", agent_name);
     println!("Agent birth: {}", agent_birth);
-    println!("Birth memory: \"i am {}\" (ID: {})", agent_name, birth_memory_id);
+    println!(
+        "Birth memory: \"i am {}\" (ID: {})",
+        agent_name, birth_memory_id
+    );
     println!("\nNext steps:");
-    println!("  1. Import messages: river-migrate import-messages --db {:?} --input messages.json", output);
-    println!("  2. Import memories: river-migrate import-memories --db {:?} --input memories.json", output);
-    println!("  3. Start gateway with: river-gateway --workspace <path> --data-dir {:?}", output.parent().unwrap_or(output));
+    println!(
+        "  1. Import messages: river-migrate import-messages --db {:?} --input messages.json",
+        output
+    );
+    println!(
+        "  2. Import memories: river-migrate import-memories --db {:?} --input memories.json",
+        output
+    );
+    println!(
+        "  3. Start gateway with: river-gateway --workspace <path> --data-dir {:?}",
+        output.parent().unwrap_or(output)
+    );
 
     Ok(())
 }
@@ -378,20 +391,22 @@ fn cmd_import_messages(db: &PathBuf, input: &PathBuf, session: &str) -> Result<(
     tracing::info!("Importing messages from {:?}", input);
 
     // Read input file
-    let content = std::fs::read_to_string(input)
-        .with_context(|| format!("Failed to read {:?}", input))?;
-    let messages_input: MessagesInput = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {:?}", input))?;
+    let content =
+        std::fs::read_to_string(input).with_context(|| format!("Failed to read {:?}", input))?;
+    let messages_input: MessagesInput =
+        serde_json::from_str(&content).with_context(|| format!("Failed to parse {:?}", input))?;
 
     // Open database
     let conn = Connection::open(db)?;
 
     // Get agent birth from session metadata
-    let metadata: String = conn.query_row(
-        "SELECT metadata FROM sessions WHERE id = ?1",
-        [session],
-        |row| row.get(0),
-    ).with_context(|| format!("Session '{}' not found. Run 'init' first.", session))?;
+    let metadata: String = conn
+        .query_row(
+            "SELECT metadata FROM sessions WHERE id = ?1",
+            [session],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("Session '{}' not found. Run 'init' first.", session))?;
 
     let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
     let birth_str = metadata["agent_birth"]
@@ -444,7 +459,10 @@ fn cmd_import_messages(db: &PathBuf, input: &PathBuf, session: &str) -> Result<(
     )?;
 
     tracing::info!("Imported {} messages", imported);
-    println!("Imported {} messages into session '{}'", imported, session_id);
+    println!(
+        "Imported {} messages into session '{}'",
+        imported, session_id
+    );
 
     Ok(())
 }
@@ -453,20 +471,22 @@ fn cmd_import_memories(db: &PathBuf, input: &PathBuf) -> Result<()> {
     tracing::info!("Importing memories from {:?}", input);
 
     // Read input file
-    let content = std::fs::read_to_string(input)
-        .with_context(|| format!("Failed to read {:?}", input))?;
-    let memories_input: MemoriesInput = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {:?}", input))?;
+    let content =
+        std::fs::read_to_string(input).with_context(|| format!("Failed to read {:?}", input))?;
+    let memories_input: MemoriesInput =
+        serde_json::from_str(&content).with_context(|| format!("Failed to parse {:?}", input))?;
 
     // Open database
     let conn = Connection::open(db)?;
 
     // Get agent birth from main session
-    let metadata: String = conn.query_row(
-        "SELECT metadata FROM sessions WHERE id = 'main'",
-        [],
-        |row| row.get(0),
-    ).with_context(|| "Main session not found. Run 'init' first.")?;
+    let metadata: String = conn
+        .query_row(
+            "SELECT metadata FROM sessions WHERE id = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .with_context(|| "Main session not found. Run 'init' first.")?;
 
     let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
     let birth_str = metadata["agent_birth"]
@@ -521,7 +541,10 @@ fn cmd_import_memories(db: &PathBuf, input: &PathBuf) -> Result<()> {
     println!("Imported {} memories", imported);
     println!("\nNote: Memories have placeholder embeddings (zeros).");
     println!("To generate real embeddings, use the 'embed' tool or run:");
-    println!("  river-migrate regenerate-embeddings --db {:?} --embedding-url <url>", db);
+    println!(
+        "  river-migrate regenerate-embeddings --db {:?} --embedding-url <url>",
+        db
+    );
 
     Ok(())
 }
@@ -579,7 +602,8 @@ fn cmd_export_templates(output_dir: &PathBuf) -> Result<()> {
             },
             MessageTemplate {
                 role: "assistant".to_string(),
-                content: "Hi! I can help with coding, writing, analysis, and much more.".to_string(),
+                content: "Hi! I can help with coding, writing, analysis, and much more."
+                    .to_string(),
                 timestamp: "2024-01-15T10:30:05Z".to_string(),
                 tool_calls: None,
                 tool_call_id: None,
@@ -626,7 +650,9 @@ fn cmd_export_templates(output_dir: &PathBuf) -> Result<()> {
     let memories_template = MemoriesTemplate {
         memories: vec![
             MemoryTemplate {
-                content: "User prefers concise, technical responses without unnecessary pleasantries.".to_string(),
+                content:
+                    "User prefers concise, technical responses without unnecessary pleasantries."
+                        .to_string(),
                 source: "preference".to_string(),
                 timestamp: "2024-01-15T10:30:00Z".to_string(),
                 expires_at: None,
@@ -671,7 +697,8 @@ fn cmd_info(db: &PathBuf) -> Result<()> {
 
     // Sessions
     println!("Sessions:");
-    let mut stmt = conn.prepare("SELECT id, agent_name, created_at, last_active, context_tokens FROM sessions")?;
+    let mut stmt = conn
+        .prepare("SELECT id, agent_name, created_at, last_active, context_tokens FROM sessions")?;
     let sessions = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -690,8 +717,10 @@ fn cmd_info(db: &PathBuf) -> Result<()> {
         let active = DateTime::from_timestamp(last_active, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        println!("  {} (agent: {}, created: {}, active: {}, tokens: {})",
-            id, agent_name, created, active, tokens);
+        println!(
+            "  {} (agent: {}, created: {}, active: {}, tokens: {})",
+            id, agent_name, created, active, tokens
+        );
     }
 
     // Message count
@@ -738,7 +767,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if !applied {
-        conn.execute_batch(include_str!("../../river-db/src/migrations/001_messages.sql"))?;
+        conn.execute_batch(include_str!(
+            "../../river-db/src/migrations/001_messages.sql"
+        ))?;
         conn.execute("INSERT INTO migrations (name) VALUES ('001_messages')", [])?;
     }
 
@@ -749,7 +780,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if !applied {
-        conn.execute_batch(include_str!("../../river-db/src/migrations/002_memories.sql"))?;
+        conn.execute_batch(include_str!(
+            "../../river-db/src/migrations/002_memories.sql"
+        ))?;
         conn.execute("INSERT INTO migrations (name) VALUES ('002_memories')", [])?;
     }
 

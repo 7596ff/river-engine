@@ -4,14 +4,14 @@
 //! turn cycle. Context is built from the home channel — an append-only JSONL log.
 
 use crate::agent::home_context::{self, HomeContextConfig};
-use crate::channels::entry::{HomeChannelEntry, MessageEntry, ToolEntry, HeartbeatEntry};
+use crate::channels::entry::{HeartbeatEntry, HomeChannelEntry, MessageEntry, ToolEntry};
 use crate::channels::writer::HomeChannelWriter;
-use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
+use crate::coordinator::{AgentEvent, CoordinatorEvent, EventBus, SpectatorEvent};
 use crate::flash::{Flash, FlashQueue, FlashTTL};
-use crate::preferences::{Preferences, format_current_time};
 use crate::model::{ChatMessage, ModelClient, ToolCallRequest};
+use crate::preferences::{format_current_time, Preferences};
 use crate::queue::MessageQueue;
-use crate::tools::{ToolExecutor, ToolCall, ToolSchema};
+use crate::tools::{ToolCall, ToolExecutor, ToolSchema};
 use chrono::Utc;
 use river_core::{SnowflakeGenerator, SnowflakeType};
 use std::path::{Path, PathBuf};
@@ -175,11 +175,12 @@ impl AgentTask {
         self.flash_queue.tick_turn().await;
         let channel_name = "home".to_string();
 
-        self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
-            channel: channel_name.clone(),
-            turn_number: self.turn_count,
-            timestamp: Utc::now(),
-        }));
+        self.bus
+            .publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
+                channel: channel_name.clone(),
+                turn_number: self.turn_count,
+                timestamp: Utc::now(),
+            }));
 
         // Drain notifications (so the queue is clear for mid-turn checks)
         let _notifications = self.message_queue.drain();
@@ -190,7 +191,9 @@ impl AgentTask {
                 self.snowflake_gen.next_id(SnowflakeType::Message),
                 Utc::now().to_rfc3339(),
             );
-            self.home_channel_writer.write(HomeChannelEntry::Heartbeat(hb)).await;
+            self.home_channel_writer
+                .write(HomeChannelEntry::Heartbeat(hb))
+                .await;
         }
 
         tracing::info!(
@@ -212,8 +215,12 @@ impl AgentTask {
         let moves = self.load_moves().await;
 
         let home_messages = match home_context::build_context(
-            &self.home_channel_path, &moves, &self.config.home_context_config,
-        ).await {
+            &self.home_channel_path,
+            &moves,
+            &self.config.home_context_config,
+        )
+        .await
+        {
             Ok(m) => m,
             Err(e) => {
                 tracing::error!(error = %e, "Failed to build context from home channel");
@@ -267,16 +274,24 @@ impl AgentTask {
             // Add assistant response to local conversation and write to home channel
             let assistant_msg = ChatMessage::assistant(
                 response.content.clone(),
-                if response.tool_calls.is_empty() { None } else { Some(response.tool_calls.clone()) },
+                if response.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(response.tool_calls.clone())
+                },
             );
             messages.push(assistant_msg);
 
             if let Some(ref content) = response.content {
                 let entry = MessageEntry::agent(
                     self.snowflake_gen.next_id(SnowflakeType::Message),
-                    content.clone(), "home".to_string(), None,
+                    content.clone(),
+                    "home".to_string(),
+                    None,
                 );
-                self.home_channel_writer.write(HomeChannelEntry::Message(entry)).await;
+                self.home_channel_writer
+                    .write(HomeChannelEntry::Message(entry))
+                    .await;
             }
 
             // If no tool calls, we're done
@@ -298,11 +313,15 @@ impl AgentTask {
                     serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
                     tc.id.clone(),
                 );
-                self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
+                self.home_channel_writer
+                    .write(HomeChannelEntry::Tool(entry))
+                    .await;
             }
 
             // ========== ACT: Execute tool calls ==========
-            let tool_results = self.execute_tool_calls(&response.tool_calls, &mut stats).await;
+            let tool_results = self
+                .execute_tool_calls(&response.tool_calls, &mut stats)
+                .await;
 
             // Add tool results to local conversation and write to home channel
             for result in &tool_results {
@@ -311,22 +330,33 @@ impl AgentTask {
 
                 let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message);
                 let entry = if result.result.len() > 4096 {
-                    let results_dir = self.config.workspace.join("channels").join("home")
-                        .join(&self.agent_name).join("tool-results");
+                    let results_dir = self
+                        .config
+                        .workspace
+                        .join("channels")
+                        .join("home")
+                        .join(&self.agent_name)
+                        .join("tool-results");
                     tokio::fs::create_dir_all(&results_dir).await.ok();
                     let file_path = results_dir.join(format!("{}.txt", snowflake));
                     tokio::fs::write(&file_path, &result.result).await.ok();
                     ToolEntry::result_file(
-                        snowflake, result.tool_name.clone(),
-                        file_path.to_string_lossy().to_string(), result.tool_call_id.clone(),
+                        snowflake,
+                        result.tool_name.clone(),
+                        file_path.to_string_lossy().to_string(),
+                        result.tool_call_id.clone(),
                     )
                 } else {
                     ToolEntry::result(
-                        snowflake, result.tool_name.clone(),
-                        result.result.clone(), result.tool_call_id.clone(),
+                        snowflake,
+                        result.tool_name.clone(),
+                        result.result.clone(),
+                        result.tool_call_id.clone(),
                     )
                 };
-                self.home_channel_writer.write(HomeChannelEntry::Tool(entry)).await;
+                self.home_channel_writer
+                    .write(HomeChannelEntry::Tool(entry))
+                    .await;
             }
 
             // Check for messages that arrived during tool execution (final batch check)
@@ -335,7 +365,8 @@ impl AgentTask {
                 // Messages are already in the home channel via handle_incoming.
                 // Re-read context to pick them up, or inject a system note.
                 let system_msg = ChatMessage::system(
-                    "[New messages arrived during tool execution — they are in the home channel]".to_string()
+                    "[New messages arrived during tool execution — they are in the home channel]"
+                        .to_string(),
                 );
                 messages.push(system_msg);
             }
@@ -344,18 +375,17 @@ impl AgentTask {
         // ========== SETTLE ==========
         let transcript_summary = format!(
             "Turn {} completed: {} tool calls ({} failed)",
-            self.turn_count,
-            stats.total_tool_calls,
-            stats.failed_tool_calls
+            self.turn_count, stats.total_tool_calls, stats.failed_tool_calls
         );
 
-        self.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
-            channel: channel_name,
-            turn_number: self.turn_count,
-            transcript_summary: transcript_summary.clone(),
-            tool_calls: stats.tool_calls,
-            timestamp: Utc::now(),
-        }));
+        self.bus
+            .publish(CoordinatorEvent::Agent(AgentEvent::TurnComplete {
+                channel: channel_name,
+                turn_number: self.turn_count,
+                transcript_summary: transcript_summary.clone(),
+                tool_calls: stats.tool_calls,
+                timestamp: Utc::now(),
+            }));
 
         tracing::info!(
             turn = self.turn_count,
@@ -406,10 +436,11 @@ impl AgentTask {
                     // Check if tool wrote to embeddings/
                     if let Some(ref path) = r.output_file {
                         if path.contains("embeddings/") || path.contains("embeddings\\") {
-                            self.bus.publish(CoordinatorEvent::Agent(AgentEvent::NoteWritten {
-                                path: path.clone(),
-                                timestamp: Utc::now(),
-                            }));
+                            self.bus
+                                .publish(CoordinatorEvent::Agent(AgentEvent::NoteWritten {
+                                    path: path.clone(),
+                                    timestamp: Utc::now(),
+                                }));
                         }
                     }
                     r.output
@@ -441,10 +472,9 @@ impl AgentTask {
 
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
             let path = self.config.workspace.join(filename);
-            let content = tokio::fs::read_to_string(&path).await
-                .map_err(|e| anyhow::anyhow!(
-                    "Required identity file missing: {:?} ({})", path, e
-                ))?;
+            let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                anyhow::anyhow!("Required identity file missing: {:?} ({})", path, e)
+            })?;
             parts.push(content);
         }
 
@@ -461,10 +491,9 @@ impl AgentTask {
 
         for filename in &["AGENTS.md", "IDENTITY.md", "RULES.md"] {
             let path = workspace.join(filename);
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| anyhow::anyhow!(
-                    "Required identity file missing: {:?} ({})", path, e
-                ))?;
+            let content = std::fs::read_to_string(&path).map_err(|e| {
+                anyhow::anyhow!("Required identity file missing: {:?} ({})", path, e)
+            })?;
             parts.push(content);
         }
 
@@ -477,8 +506,13 @@ impl AgentTask {
 
     /// Load move summaries from moves.jsonl, returning the last N
     async fn load_moves(&self) -> Vec<String> {
-        let moves_path = self.config.workspace.join("channels").join("home")
-            .join(&self.agent_name).join("moves.jsonl");
+        let moves_path = self
+            .config
+            .workspace
+            .join("channels")
+            .join("home")
+            .join(&self.agent_name)
+            .join("moves.jsonl");
 
         crate::spectator::moves::read_moves_tail(&moves_path, 10)
             .await
@@ -539,14 +573,16 @@ mod tests {
                 "http://localhost:8080".to_string(),
                 "test-model".to_string(),
                 Duration::from_secs(30),
-            ).unwrap(),
+            )
+            .unwrap(),
             Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
             Arc::new(FlashQueue::new(10)),
             sg,
             writer,
             home_path,
             "test-agent".to_string(),
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     #[test]
@@ -563,14 +599,21 @@ mod tests {
         let task = test_task(&temp);
         let mut event_rx = task.bus.subscribe();
 
-        task.bus.publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
-            channel: "test".into(),
-            turn_number: 1,
-            timestamp: Utc::now(),
-        }));
+        task.bus
+            .publish(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
+                channel: "test".into(),
+                turn_number: 1,
+                timestamp: Utc::now(),
+            }));
 
         let event1 = event_rx.try_recv();
-        assert!(matches!(event1, Ok(CoordinatorEvent::Agent(AgentEvent::TurnStarted { turn_number: 1, .. }))));
+        assert!(matches!(
+            event1,
+            Ok(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
+                turn_number: 1,
+                ..
+            }))
+        ));
     }
 
     #[tokio::test]
@@ -586,7 +629,12 @@ mod tests {
             config,
             coord.bus().clone(),
             Arc::new(MessageQueue::new()),
-            ModelClient::new("http://localhost:8080".into(), "test".into(), Duration::from_secs(30)).unwrap(),
+            ModelClient::new(
+                "http://localhost:8080".into(),
+                "test".into(),
+                Duration::from_secs(30),
+            )
+            .unwrap(),
             Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
             Arc::new(FlashQueue::new(10)),
             sg,
@@ -597,7 +645,11 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.err().unwrap().to_string();
-        assert!(err.contains("AGENTS.md"), "Error should mention AGENTS.md: {}", err);
+        assert!(
+            err.contains("AGENTS.md"),
+            "Error should mention AGENTS.md: {}",
+            err
+        );
     }
 
     #[tokio::test]

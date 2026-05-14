@@ -32,8 +32,8 @@ impl EventHandler {
 
         // Build the event
         // Convert Twilight timestamp to chrono DateTime
-        let timestamp: DateTime<Utc> = DateTime::from_timestamp(msg.timestamp.as_secs(), 0)
-            .unwrap_or_else(Utc::now);
+        let timestamp: DateTime<Utc> =
+            DateTime::from_timestamp(msg.timestamp.as_secs(), 0).unwrap_or_else(Utc::now);
 
         let event = IncomingEvent {
             adapter: "discord".into(),
@@ -76,7 +76,9 @@ impl EventHandler {
         // Get user info - in twilight 0.16, member.user is User not Option<User>
         let (user_id, user_name) = match &reaction.member {
             Some(member) => {
-                let name = member.nick.as_ref()
+                let name = member
+                    .nick
+                    .as_ref()
                     .cloned()
                     .unwrap_or_else(|| member.user.name.clone());
                 let id = member.user.id.get().to_string();
@@ -94,7 +96,9 @@ impl EventHandler {
         };
 
         // Get whether the user is a bot (from member info if available)
-        let is_bot = reaction.member.as_ref()
+        let is_bot = reaction
+            .member
+            .as_ref()
             .map(|m| m.user.bot)
             .unwrap_or(false);
 

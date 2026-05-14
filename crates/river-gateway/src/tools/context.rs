@@ -29,14 +29,20 @@ impl ContextRotation {
     /// Request a context rotation with summary
     pub fn request(&self, summary: String) {
         self.requested.store(true, Ordering::SeqCst);
-        let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+        let mut s = self
+            .summary
+            .write()
+            .expect("ContextRotation RwLock poisoned");
         *s = Some(summary);
     }
 
     /// Request auto-rotation (no summary)
     pub fn request_auto(&self) {
         self.requested.store(true, Ordering::SeqCst);
-        let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+        let mut s = self
+            .summary
+            .write()
+            .expect("ContextRotation RwLock poisoned");
         *s = None;
     }
 
@@ -47,7 +53,10 @@ impl ContextRotation {
     /// - None = no rotation requested
     pub fn take_request(&self) -> Option<Option<String>> {
         if self.requested.swap(false, Ordering::SeqCst) {
-            let mut s = self.summary.write().expect("ContextRotation RwLock poisoned");
+            let mut s = self
+                .summary
+                .write()
+                .expect("ContextRotation RwLock poisoned");
             Some(s.take())
         } else {
             None
@@ -112,7 +121,7 @@ impl Tool for RotateContextTool {
         self.rotation.request(summary);
 
         Ok(ToolResult::success(
-            "Context rotation requested. Your summary will be preserved in the new context."
+            "Context rotation requested. Your summary will be preserved in the new context.",
         ))
     }
 }
@@ -167,7 +176,9 @@ impl Tool for ContextStatusTool {
             "near_limit": percent >= 90.0
         });
 
-        Ok(ToolResult::success(serde_json::to_string_pretty(&output).unwrap()))
+        Ok(ToolResult::success(
+            serde_json::to_string_pretty(&output).unwrap(),
+        ))
     }
 }
 

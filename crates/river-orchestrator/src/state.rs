@@ -30,7 +30,7 @@ pub enum LocalModelStatus {
 pub struct LocalModelEntry {
     pub model: LocalModel,
     pub status: LocalModelStatus,
-    pub releasable: bool,  // Can be evicted if resources needed
+    pub releasable: bool, // Can be evicted if resources needed
 }
 
 /// Shared orchestrator state
@@ -115,7 +115,11 @@ impl OrchestratorState {
     ///
     /// Blocks for up to `timeout_seconds` waiting for the model to become ready.
     /// Returns `Loading` if timeout expires (model continues loading in background).
-    pub async fn request_model(&self, model_id: &str, timeout_seconds: u32) -> Result<ModelRequestResponse, RiverError> {
+    pub async fn request_model(
+        &self,
+        model_id: &str,
+        timeout_seconds: u32,
+    ) -> Result<ModelRequestResponse, RiverError> {
         let timeout = Duration::from_secs(timeout_seconds as u64);
         let start = Instant::now();
         let poll_interval = Duration::from_millis(500);
@@ -135,7 +139,10 @@ impl OrchestratorState {
         {
             let local_models = self.local_models.read().await;
             if !local_models.contains_key(model_id) {
-                return Err(RiverError::orchestrator(format!("Model not found: {}", model_id)));
+                return Err(RiverError::orchestrator(format!(
+                    "Model not found: {}",
+                    model_id
+                )));
             }
         }
 
@@ -146,7 +153,9 @@ impl OrchestratorState {
                 let local_models = self.local_models.read().await;
                 if let Some(entry) = local_models.get(model_id) {
                     match &entry.status {
-                        LocalModelStatus::Loaded { endpoint, device, .. } => {
+                        LocalModelStatus::Loaded {
+                            endpoint, device, ..
+                        } => {
                             return Ok(ModelRequestResponse::Ready {
                                 endpoint: endpoint.clone(),
                                 device: Some(*device),
@@ -169,7 +178,8 @@ impl OrchestratorState {
                         }
                         LocalModelStatus::Error(e) => {
                             return Err(RiverError::orchestrator(format!(
-                                "Model failed to load: {}", e
+                                "Model failed to load: {}",
+                                e
                             )));
                         }
                         LocalModelStatus::Available => {
@@ -183,7 +193,7 @@ impl OrchestratorState {
             // Check if llama-server is available
             if !self.process_manager.is_available() {
                 return Err(RiverError::orchestrator(
-                    "Local model inference unavailable: llama-server not found"
+                    "Local model inference unavailable: llama-server not found",
                 ));
             }
 
@@ -201,7 +211,9 @@ impl OrchestratorState {
                 None => {
                     // Try to evict releasable models to make space
                     self.evict_for_space(vram_needed).await?;
-                    self.resource_tracker.find_device_for(vram_needed).await
+                    self.resource_tracker
+                        .find_device_for(vram_needed)
+                        .await
                         .ok_or_else(|| {
                             RiverError::orchestrator(format!(
                                 "Insufficient resources: model requires {} bytes, eviction failed",
@@ -241,10 +253,13 @@ impl OrchestratorState {
             match self.process_manager.spawn(&model_clone, device).await {
                 Ok(snapshot) => {
                     // Allocate resources
-                    self.resource_tracker.allocate(model_id, device, vram_needed).await;
+                    self.resource_tracker
+                        .allocate(model_id, device, vram_needed)
+                        .await;
 
                     // Update status to loaded
-                    let endpoint = format!("http://127.0.0.1:{}/v1/chat/completions", snapshot.port);
+                    let endpoint =
+                        format!("http://127.0.0.1:{}/v1/chat/completions", snapshot.port);
                     {
                         let mut local_models = self.local_models.write().await;
                         if let Some(entry) = local_models.get_mut(model_id) {
@@ -414,15 +429,21 @@ mod tests {
     #[tokio::test]
     async fn test_state_heartbeat_creates_agent() {
         let state = test_state();
-        state.heartbeat("test".to_string(), "http://localhost:3000".to_string()).await;
+        state
+            .heartbeat("test".to_string(), "http://localhost:3000".to_string())
+            .await;
         assert_eq!(state.agent_count().await, 1);
     }
 
     #[tokio::test]
     async fn test_state_heartbeat_updates_existing() {
         let state = test_state();
-        state.heartbeat("test".to_string(), "http://localhost:3000".to_string()).await;
-        state.heartbeat("test".to_string(), "http://localhost:4000".to_string()).await;
+        state
+            .heartbeat("test".to_string(), "http://localhost:3000".to_string())
+            .await;
+        state
+            .heartbeat("test".to_string(), "http://localhost:4000".to_string())
+            .await;
 
         let statuses = state.agent_statuses().await;
         assert_eq!(statuses.len(), 1);
@@ -432,8 +453,12 @@ mod tests {
     #[tokio::test]
     async fn test_state_agent_statuses() {
         let state = test_state();
-        state.heartbeat("agent1".to_string(), "http://localhost:3000".to_string()).await;
-        state.heartbeat("agent2".to_string(), "http://localhost:3001".to_string()).await;
+        state
+            .heartbeat("agent1".to_string(), "http://localhost:3000".to_string())
+            .await;
+        state
+            .heartbeat("agent2".to_string(), "http://localhost:3001".to_string())
+            .await;
 
         let statuses = state.agent_statuses().await;
         assert_eq!(statuses.len(), 2);

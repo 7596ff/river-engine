@@ -33,7 +33,10 @@ impl WebFetchTool {
         }
 
         let full_path = self.workspace.join(&path);
-        let canonical_workspace = self.workspace.canonicalize().unwrap_or_else(|_| self.workspace.clone());
+        let canonical_workspace = self
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| self.workspace.clone());
 
         // Resolve the path to check for escapes
         if let Ok(canonical) = full_path.canonicalize() {
@@ -44,7 +47,8 @@ impl WebFetchTool {
             // File doesn't exist yet - check parent
             if let Some(parent) = full_path.parent() {
                 if parent.exists() {
-                    let canonical_parent = parent.canonicalize()
+                    let canonical_parent = parent
+                        .canonicalize()
                         .map_err(|_| RiverError::tool("Invalid parent directory"))?;
                     if !canonical_parent.starts_with(&canonical_workspace) {
                         return Err(RiverError::tool("Path would escape workspace"));
@@ -60,9 +64,11 @@ impl WebFetchTool {
     fn fetch_url(&self, url: &str) -> Result<String, RiverError> {
         let output = Command::new("curl")
             .args([
-                "-sL",                              // Silent, follow redirects
-                "--max-time", &self.timeout.as_secs().to_string(),
-                "-A", "Mozilla/5.0 (compatible; RiverAgent/1.0)", // User agent
+                "-sL", // Silent, follow redirects
+                "--max-time",
+                &self.timeout.as_secs().to_string(),
+                "-A",
+                "Mozilla/5.0 (compatible; RiverAgent/1.0)", // User agent
                 url,
             ])
             .output()
@@ -98,11 +104,13 @@ impl WebFetchTool {
 
         // Write HTML to stdin
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(html.as_bytes())
+            stdin
+                .write_all(html.as_bytes())
                 .map_err(|e| RiverError::tool(format!("Failed to write to pandoc: {}", e)))?;
         }
 
-        let output = child.wait_with_output()
+        let output = child
+            .wait_with_output()
             .map_err(|e| RiverError::tool(format!("Failed to wait for pandoc: {}", e)))?;
 
         if !output.status.success() {
@@ -165,7 +173,10 @@ impl Tool for WebFetchTool {
         // Process with pandoc if not raw and appears to be HTML
         let processed = if raw {
             content
-        } else if content.trim().starts_with("<!") || content.trim().starts_with("<html") || content.contains("<body") {
+        } else if content.trim().starts_with("<!")
+            || content.trim().starts_with("<html")
+            || content.contains("<body")
+        {
             // Looks like HTML, try to convert
             match self.html_to_markdown(&content) {
                 Ok(md) => md,
@@ -194,7 +205,12 @@ impl Tool for WebFetchTool {
                 .map_err(|e| RiverError::tool(format!("Failed to write file: {}", e)))?;
 
             Ok(ToolResult::with_file(
-                format!("Fetched {} ({} bytes) to {}", url, processed.len(), file_path),
+                format!(
+                    "Fetched {} ({} bytes) to {}",
+                    url,
+                    processed.len(),
+                    file_path
+                ),
                 file_path.to_string(),
             ))
         } else {
@@ -269,17 +285,15 @@ impl Tool for WebSearchTool {
             .as_str()
             .ok_or_else(|| RiverError::tool("Missing 'query' parameter"))?;
 
-        let num_results = args["num_results"]
-            .as_u64()
-            .unwrap_or(10)
-            .min(25) as usize;
+        let num_results = args["num_results"].as_u64().unwrap_or(10).min(25) as usize;
 
         // Use ddgr for DuckDuckGo search
         let output = Command::new("ddgr")
             .args([
-                "--json",                    // JSON output
-                "-n", &num_results.to_string(), // Number of results
-                "--unsafe",                  // Don't filter results
+                "--json", // JSON output
+                "-n",
+                &num_results.to_string(), // Number of results
+                "--unsafe",               // Don't filter results
                 query,
             ])
             .output()

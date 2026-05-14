@@ -107,7 +107,10 @@ impl RiverError {
 
     /// Creates a new Model API error with HTTP status code.
     pub fn model_api(status: u16, msg: impl Into<String>) -> Self {
-        Self::ModelApi { status, message: msg.into() }
+        Self::ModelApi {
+            status,
+            message: msg.into(),
+        }
     }
 
     /// Creates a new Auth error with the given message.
@@ -205,10 +208,7 @@ mod tests {
     #[test]
     fn test_error_display_orchestrator() {
         let err = RiverError::Orchestrator("no available workers".into());
-        assert_eq!(
-            err.to_string(),
-            "Orchestrator error: no available workers"
-        );
+        assert_eq!(err.to_string(), "Orchestrator error: no available workers");
     }
 
     #[test]

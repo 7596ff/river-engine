@@ -1,7 +1,7 @@
 //! Path building for conversation files
 
-use std::path::{Path, PathBuf};
 use super::CONVERSATIONS_DIR;
+use std::path::{Path, PathBuf};
 
 /// Sanitize a user-provided name for safe filesystem use
 /// - Replaces path separators with _
@@ -46,7 +46,11 @@ pub fn build_discord_path(
         }
     }
 
-    path.join(format!("{}-{}.txt", channel_id, sanitize_name(channel_name)))
+    path.join(format!(
+        "{}-{}.txt",
+        channel_id,
+        sanitize_name(channel_name)
+    ))
 }
 
 #[cfg(test)]

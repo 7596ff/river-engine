@@ -88,7 +88,12 @@ impl SnowflakeGenerator {
             // Same timestamp - increment sequence
             if state.sequence < MAX_SEQUENCE {
                 state.sequence += 1;
-                return Snowflake::new(state.last_timestamp, self.birth, snowflake_type, state.sequence);
+                return Snowflake::new(
+                    state.last_timestamp,
+                    self.birth,
+                    snowflake_type,
+                    state.sequence,
+                );
             }
 
             // Sequence overflow - wait for next microsecond
@@ -227,7 +232,9 @@ mod tests {
         let gen = SnowflakeGenerator::new(birth);
 
         // Generate IDs quickly to ensure some share the same timestamp
-        let ids: Vec<Snowflake> = (0..100).map(|_| gen.next_id(SnowflakeType::Message)).collect();
+        let ids: Vec<Snowflake> = (0..100)
+            .map(|_| gen.next_id(SnowflakeType::Message))
+            .collect();
 
         // Find IDs with the same timestamp and verify sequences are different
         let mut by_timestamp: std::collections::HashMap<u64, Vec<u32>> =

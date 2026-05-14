@@ -98,6 +98,9 @@ mod tests {
         assert!(!mem.would_use_swap(20_000_000_000, 10_000_000_000));
         // 30GB model + 10GB used = 40GB, needs 8GB swap
         assert!(mem.would_use_swap(30_000_000_000, 10_000_000_000));
-        assert_eq!(mem.estimated_swap_usage(30_000_000_000, 10_000_000_000), 8_000_000_000);
+        assert_eq!(
+            mem.estimated_swap_usage(30_000_000_000, 10_000_000_000),
+            8_000_000_000
+        );
     }
 }

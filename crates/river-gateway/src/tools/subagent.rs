@@ -2,12 +2,12 @@
 //!
 //! These tools allow the parent agent to spawn and manage subagents.
 
+use super::registry::{Tool, ToolResult};
 use crate::model::ModelClient;
 use crate::subagent::{
-    create_subagent_registry, SubagentConfig, SubagentManager, SubagentRunner,
-    SubagentResult, SubagentType,
+    create_subagent_registry, SubagentConfig, SubagentManager, SubagentResult, SubagentRunner,
+    SubagentType,
 };
-use super::registry::{Tool, ToolResult};
 use river_core::{RiverError, Snowflake};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -25,12 +25,10 @@ fn parse_snowflake(s: &str) -> Result<Snowflake, RiverError> {
         )));
     }
 
-    let high = u64::from_str_radix(parts[0], 16).map_err(|e| {
-        RiverError::tool(format!("Invalid snowflake high part: {}", e))
-    })?;
-    let low = u64::from_str_radix(parts[1], 16).map_err(|e| {
-        RiverError::tool(format!("Invalid snowflake low part: {}", e))
-    })?;
+    let high = u64::from_str_radix(parts[0], 16)
+        .map_err(|e| RiverError::tool(format!("Invalid snowflake high part: {}", e)))?;
+    let low = u64::from_str_radix(parts[1], 16)
+        .map_err(|e| RiverError::tool(format!("Invalid snowflake low part: {}", e)))?;
 
     Ok(Snowflake::from_parts(high, low))
 }
@@ -185,10 +183,7 @@ impl Tool for SpawnSubagentTool {
                     let mut manager = manager_clone.write().await;
                     match result.status {
                         crate::subagent::SubagentStatus::Completed => {
-                            manager.set_completed(
-                                result.id,
-                                result.result.unwrap_or_default(),
-                            );
+                            manager.set_completed(result.id, result.result.unwrap_or_default());
                         }
                         crate::subagent::SubagentStatus::Failed => {
                             manager.set_failed(
@@ -430,7 +425,10 @@ impl Tool for InternalSendTool {
         match queue {
             Some(queue) => {
                 queue.send_to_subagent(content);
-                Ok(ToolResult::success(format!("Message sent to subagent {}", to)))
+                Ok(ToolResult::success(format!(
+                    "Message sent to subagent {}",
+                    to
+                )))
             }
             None => Err(RiverError::tool(format!("Subagent {} not found", to))),
         }
@@ -495,7 +493,9 @@ impl Tool for InternalReceiveTool {
                                 .list()
                                 .iter()
                                 .filter_map(|info| {
-                                    manager.queue(info.id).map(|q| (info.id, q.drain_for_parent()))
+                                    manager
+                                        .queue(info.id)
+                                        .map(|q| (info.id, q.drain_for_parent()))
                                 })
                                 .filter(|(_, msgs)| !msgs.is_empty())
                                 .collect()

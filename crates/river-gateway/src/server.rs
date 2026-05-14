@@ -6,21 +6,20 @@ use crate::coordinator::Coordinator;
 use crate::db::init_db;
 use crate::embeddings::{SyncService, VectorStore};
 use crate::flash::FlashQueue;
-use crate::spectator::{SpectatorTask, SpectatorConfig};
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
-use crate::policy::HealthPolicy;
 use crate::model::ModelClient;
+use crate::policy::HealthPolicy;
 use crate::queue::MessageQueue;
-use crate::watchdog::{spawn_watchdog_task, notify_ready};
 use crate::redis::{RedisClient, RedisConfig};
+use crate::spectator::{SpectatorConfig, SpectatorTask};
 use crate::state::{AppState, GatewayConfig};
 use crate::subagent::SubagentManager;
 use crate::tools::{
-    BashTool, EditTool, GlobTool, GrepTool, ReadTool, ToolRegistry, WriteTool,
-    SendMessageTool, AdapterRegistry,
-    HeartbeatScheduler, ContextRotation,
+    AdapterRegistry, BashTool, ContextRotation, EditTool, GlobTool, GrepTool, HeartbeatScheduler,
+    ReadTool, SendMessageTool, ToolRegistry, WriteTool,
 };
+use crate::watchdog::{notify_ready, spawn_watchdog_task};
 use chrono::Utc;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -127,7 +126,11 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         )
     })?;
     let agent_birth = birth_memory.id.birth();
-    tracing::info!("Agent birth: {} (from memory: \"{}\")", agent_birth, birth_memory.content);
+    tracing::info!(
+        "Agent birth: {} (from memory: \"{}\")",
+        agent_birth,
+        birth_memory.content
+    );
 
     // Create gateway config
     let agent_name = config.agent_name.clone();
@@ -135,7 +138,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         workspace: config.workspace.clone(),
         data_dir: config.data_dir.clone(),
         port: config.port,
-        model_url: config.model_url.unwrap_or_else(|| "http://localhost:8080".to_string()),
+        model_url: config
+            .model_url
+            .unwrap_or_else(|| "http://localhost:8080".to_string()),
         model_name: config.model_name.unwrap_or_else(|| "default".to_string()),
         context_limit: config.context_limit as u64,
         heartbeat_minutes: 45,
@@ -153,7 +158,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Wrap database in Arc for sharing
     let db_arc = Arc::new(std::sync::Mutex::new(db));
-    let snowflake_gen = Arc::new(river_core::SnowflakeGenerator::new(gateway_config.agent_birth));
+    let snowflake_gen = Arc::new(river_core::SnowflakeGenerator::new(
+        gateway_config.agent_birth,
+    ));
 
     // Create subagent manager
     let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen.clone())));
@@ -208,7 +215,10 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         if config.adapters.is_empty() {
             tracing::warn!("No communication adapters configured - send_message will not work");
         } else {
-            tracing::info!("Registered {} communication adapter(s)", config.adapters.len());
+            tracing::info!(
+                "Registered {} communication adapter(s)",
+                config.adapters.len()
+            );
         }
     }
 
@@ -277,15 +287,19 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     )));
 
     // Create home channel writer
-    let home_channel_path = config.workspace
+    let home_channel_path = config
+        .workspace
         .join("channels/home")
         .join(format!("{}.jsonl", agent_name));
-    let home_channel_writer = crate::channels::writer::HomeChannelWriter::spawn(home_channel_path.clone());
+    let home_channel_writer =
+        crate::channels::writer::HomeChannelWriter::spawn(home_channel_path.clone());
 
     // Create home channel directories
     let home_dir = config.workspace.join("channels/home").join(&agent_name);
     tokio::fs::create_dir_all(home_dir.join("moves")).await.ok();
-    tokio::fs::create_dir_all(home_dir.join("tool-results")).await.ok();
+    tokio::fs::create_dir_all(home_dir.join("tool-results"))
+        .await
+        .ok();
 
     // Create app state
     let mut app_state = AppState::new(
@@ -317,10 +331,12 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let flash_queue = Arc::new(FlashQueue::new(20));
 
     // Determine spectator model (defaults to same as agent)
-    let spectator_model_url = config.spectator_model_url
+    let spectator_model_url = config
+        .spectator_model_url
         .clone()
         .unwrap_or_else(|| agent_model_url.clone());
-    let spectator_model_name = config.spectator_model_name
+    let spectator_model_name = config
+        .spectator_model_name
         .clone()
         .unwrap_or_else(|| agent_model_name.clone());
 
@@ -362,14 +378,23 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     let spectator_config = SpectatorConfig {
         spectator_dir: config.workspace.join("spectator"),
-        home_channel_path: config.workspace.join("channels/home").join(format!("{}.jsonl", agent_name)),
-        moves_path: config.workspace.join("channels/home").join(&agent_name).join("moves.jsonl"),
+        home_channel_path: config
+            .workspace
+            .join("channels/home")
+            .join(format!("{}.jsonl", agent_name)),
+        moves_path: config
+            .workspace
+            .join("channels/home")
+            .join(&agent_name)
+            .join("moves.jsonl"),
         sweep_interval: Duration::from_secs(300),
         sweep_token_budget: 16384,
         moves_tail: 10,
     };
 
-    let spectator_home_writer = state.home_channel_writer.as_ref()
+    let spectator_home_writer = state
+        .home_channel_writer
+        .as_ref()
         .expect("Home channel writer must be configured")
         .clone();
 

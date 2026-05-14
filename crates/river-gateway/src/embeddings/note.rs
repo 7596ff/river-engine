@@ -43,14 +43,15 @@ impl Note {
             return Err("Note must start with YAML frontmatter (---)".into());
         }
 
-        let end = text[3..].find("---")
+        let end = text[3..]
+            .find("---")
             .ok_or("Missing closing --- for frontmatter")?;
 
         let yaml = &text[3..end + 3];
         let content = text[end + 6..].trim().to_string();
 
-        let frontmatter: NoteFrontmatter = serde_yaml::from_str(yaml)
-            .map_err(|e| format!("Invalid frontmatter: {}", e))?;
+        let frontmatter: NoteFrontmatter =
+            serde_yaml::from_str(yaml).map_err(|e| format!("Invalid frontmatter: {}", e))?;
 
         Ok(Note {
             frontmatter,

@@ -6,8 +6,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use river_adapter::{SendRequest, SendResponse};
 use chrono::Local;
+use river_adapter::{SendRequest, SendResponse};
 
 use crate::state::{ChatLine, SharedState};
 
@@ -63,7 +63,12 @@ mod tests {
         let state = SharedState::new();
         let app = create_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

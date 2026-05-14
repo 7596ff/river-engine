@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 pub struct ConversationWriter {
     rx: mpsc::Receiver<WriteOp>,
-    conversations: HashMap<PathBuf, Conversation>,  // In-memory cache
+    conversations: HashMap<PathBuf, Conversation>, // In-memory cache
 }
 
 impl ConversationWriter {
@@ -42,17 +42,32 @@ impl ConversationWriter {
             WriteOp::Message { msg, .. } => {
                 conv.apply_message(msg);
             }
-            WriteOp::ReactionAdd { message_id, emoji, user, .. } => {
+            WriteOp::ReactionAdd {
+                message_id,
+                emoji,
+                user,
+                ..
+            } => {
                 if let Some(msg) = conv.get_mut(&message_id) {
                     msg.add_reaction(&emoji, &user);
                 }
             }
-            WriteOp::ReactionRemove { message_id, emoji, user, .. } => {
+            WriteOp::ReactionRemove {
+                message_id,
+                emoji,
+                user,
+                ..
+            } => {
                 if let Some(msg) = conv.get_mut(&message_id) {
                     msg.remove_reaction(&emoji, &user);
                 }
             }
-            WriteOp::ReactionCount { message_id, emoji, count, .. } => {
+            WriteOp::ReactionCount {
+                message_id,
+                emoji,
+                count,
+                ..
+            } => {
                 if let Some(msg) = conv.get_mut(&message_id) {
                     msg.update_reaction_count(&emoji, count);
                 }
@@ -83,7 +98,10 @@ mod tests {
     #[test]
     fn test_conversation_apply_message_new() {
         let mut conv = Conversation::default();
-        let msg = Message { id: "msg1".into(), ..test_msg() };
+        let msg = Message {
+            id: "msg1".into(),
+            ..test_msg()
+        };
         conv.apply_message(msg);
         assert_eq!(conv.messages.len(), 1);
     }
@@ -91,10 +109,18 @@ mod tests {
     #[test]
     fn test_conversation_apply_message_merge_duplicate() {
         let mut conv = Conversation::default();
-        let msg1 = Message { id: "msg1".into(), content: "hello".into(), ..test_msg() };
+        let msg1 = Message {
+            id: "msg1".into(),
+            content: "hello".into(),
+            ..test_msg()
+        };
         conv.apply_message(msg1);
 
-        let msg2 = Message { id: "msg1".into(), content: "hello edited".into(), ..test_msg() };
+        let msg2 = Message {
+            id: "msg1".into(),
+            content: "hello edited".into(),
+            ..test_msg()
+        };
         conv.apply_message(msg2);
 
         assert_eq!(conv.messages.len(), 1); // Still 1

@@ -1,18 +1,18 @@
 //! River Adapter — shared types for communication adapters
 
-pub mod types;
 pub mod capabilities;
-pub mod registration;
-pub mod traits;
 pub mod error;
 pub mod http;
+pub mod registration;
+pub mod traits;
+pub mod types;
 
-pub use types::{IncomingEvent, EventType, Author, SendRequest, SendOptions, SendResponse};
 pub use capabilities::Feature;
-pub use registration::{AdapterInfo, RegisterRequest, RegisterResponse};
-pub use traits::Adapter;
 pub use error::AdapterError;
 pub use http::HttpAdapter;
+pub use registration::{AdapterInfo, RegisterRequest, RegisterResponse};
+pub use traits::Adapter;
+pub use types::{Author, EventType, IncomingEvent, SendOptions, SendRequest, SendResponse};
 
 #[cfg(test)]
 mod tests {

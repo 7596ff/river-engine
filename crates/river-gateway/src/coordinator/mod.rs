@@ -1,10 +1,10 @@
 //! Coordinator — manages peer tasks and event routing
 
-pub mod events;
 pub mod bus;
+pub mod events;
 
-pub use events::{AgentEvent, SpectatorEvent, CoordinatorEvent};
 pub use bus::EventBus;
+pub use events::{AgentEvent, CoordinatorEvent, SpectatorEvent};
 
 use tokio::task::JoinHandle;
 
@@ -51,7 +51,9 @@ impl Coordinator {
 
     /// Graceful shutdown: send shutdown event, wait for tasks
     pub async fn shutdown(&mut self) {
-        if self.shutdown { return; }
+        if self.shutdown {
+            return;
+        }
         self.shutdown = true;
 
         tracing::info!("Coordinator: sending shutdown signal");
@@ -59,10 +61,7 @@ impl Coordinator {
 
         for task in self.tasks.drain(..) {
             tracing::info!(task = %task.name, "Waiting for task to finish");
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                task.handle
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), task.handle).await {
                 Ok(Ok(())) => tracing::info!(task = %task.name, "Task finished"),
                 Ok(Err(e)) => tracing::error!(task = %task.name, error = %e, "Task panicked"),
                 Err(_) => tracing::warn!(task = %task.name, "Task timed out, aborting"),
@@ -77,7 +76,9 @@ impl Coordinator {
 
     /// Check if a named task is running (was spawned and not finished)
     pub fn is_running(&self, name: &str) -> bool {
-        self.tasks.iter().any(|t| t.name == name && !t.handle.is_finished())
+        self.tasks
+            .iter()
+            .any(|t| t.name == name && !t.handle.is_finished())
     }
 }
 
@@ -133,7 +134,9 @@ mod tests {
             let mut rx = bus_clone.subscribe();
             loop {
                 match rx.recv().await {
-                    Ok(CoordinatorEvent::Agent(AgentEvent::TurnStarted { turn_number, .. })) => {
+                    Ok(CoordinatorEvent::Agent(AgentEvent::TurnStarted {
+                        turn_number, ..
+                    })) => {
                         tx.send(turn_number).await.ok();
                         break;
                     }
@@ -144,10 +147,7 @@ mod tests {
         });
 
         // Wait for result
-        let turn = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            result_rx.recv()
-        ).await;
+        let turn = tokio::time::timeout(std::time::Duration::from_secs(2), result_rx.recv()).await;
 
         coord.shutdown().await;
 

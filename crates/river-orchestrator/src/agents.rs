@@ -102,4 +102,3 @@ mod tests {
         assert_eq!(agent.gateway_url, "http://localhost:4000");
     }
 }
-

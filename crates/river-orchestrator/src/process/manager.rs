@@ -171,9 +171,9 @@ impl ProcessManager {
             }
         };
 
-        let pid = child.id().ok_or_else(|| {
-            RiverError::orchestrator("Failed to get process ID")
-        })?;
+        let pid = child
+            .id()
+            .ok_or_else(|| RiverError::orchestrator("Failed to get process ID"))?;
 
         let now = Instant::now();
 

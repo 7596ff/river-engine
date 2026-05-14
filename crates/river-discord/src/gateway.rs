@@ -41,7 +41,10 @@ impl GatewayClient {
     }
 
     /// Send an incoming event to the gateway with retry and exponential backoff
-    pub async fn send_incoming(&self, event: IncomingEvent) -> Result<IncomingResponse, GatewayError> {
+    pub async fn send_incoming(
+        &self,
+        event: IncomingEvent,
+    ) -> Result<IncomingResponse, GatewayError> {
         const MAX_RETRIES: u32 = 3;
         const INITIAL_BACKOFF_SECS: u64 = 1;
 
@@ -77,7 +80,9 @@ impl GatewayClient {
             }
         }
 
-        Err(GatewayError::Request(last_error.unwrap_or_else(|| "Unknown error".to_string())))
+        Err(GatewayError::Request(
+            last_error.unwrap_or_else(|| "Unknown error".to_string()),
+        ))
     }
 
     /// Check if gateway is reachable

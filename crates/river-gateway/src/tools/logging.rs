@@ -140,13 +140,9 @@ impl Tool for LogReadTool {
                     _ => "INFO",
                 };
 
-                let unit = entry["_SYSTEMD_UNIT"]
-                    .as_str()
-                    .unwrap_or("unknown");
+                let unit = entry["_SYSTEMD_UNIT"].as_str().unwrap_or("unknown");
 
-                let message = entry["MESSAGE"]
-                    .as_str()
-                    .unwrap_or("");
+                let message = entry["MESSAGE"].as_str().unwrap_or("");
 
                 // Privacy: redact any content that looks like message content or file paths
                 let safe_message = redact_sensitive_content(message);

@@ -12,10 +12,11 @@ pub struct VectorStore {
 impl VectorStore {
     /// Open or create the vector database
     pub fn open(path: &Path) -> Result<Self, String> {
-        let conn = Connection::open(path)
-            .map_err(|e| format!("Failed to open vector DB: {}", e))?;
+        let conn =
+            Connection::open(path).map_err(|e| format!("Failed to open vector DB: {}", e))?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS chunks (
                 id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
@@ -27,9 +28,13 @@ impl VectorStore {
             );
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_path);
             CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
-        ").map_err(|e| format!("Failed to create tables: {}", e))?;
+        ",
+        )
+        .map_err(|e| format!("Failed to create tables: {}", e))?;
 
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// Open in-memory store (for testing)
@@ -37,7 +42,8 @@ impl VectorStore {
         let conn = Connection::open_in_memory()
             .map_err(|e| format!("Failed to open in-memory DB: {}", e))?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS chunks (
                 id TEXT PRIMARY KEY,
                 source_path TEXT NOT NULL,
@@ -48,9 +54,13 @@ impl VectorStore {
                 embedding BLOB
             );
             CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_path);
-        ").map_err(|e| format!("Failed to create tables: {}", e))?;
+        ",
+        )
+        .map_err(|e| format!("Failed to create tables: {}", e))?;
 
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// Upsert a chunk with its embedding
@@ -65,9 +75,7 @@ impl VectorStore {
         embedding: &[f32],
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let embedding_bytes: Vec<u8> = embedding.iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         conn.execute(
             "INSERT OR REPLACE INTO chunks (id, source_path, content, chunk_type, channel, hash, embedding)
@@ -81,12 +89,11 @@ impl VectorStore {
     /// Get hash for a source path (for sync diffing)
     pub fn get_hash(&self, source_path: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare(
-            "SELECT hash FROM chunks WHERE source_path = ?1 LIMIT 1"
-        ).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT hash FROM chunks WHERE source_path = ?1 LIMIT 1")
+            .map_err(|e| e.to_string())?;
 
-        let hash = stmt.query_row(params![source_path], |row| row.get(0))
-            .ok();
+        let hash = stmt.query_row(params![source_path], |row| row.get(0)).ok();
 
         Ok(hash)
     }
@@ -97,44 +104,56 @@ impl VectorStore {
         conn.execute(
             "DELETE FROM chunks WHERE source_path = ?1",
             params![source_path],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// Search by cosine similarity
-    pub fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<SearchResult>, String> {
+    pub fn search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(
             "SELECT id, source_path, content, chunk_type, channel, embedding FROM chunks WHERE embedding IS NOT NULL"
         ).map_err(|e| e.to_string())?;
 
-        let mut results: Vec<SearchResult> = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let source_path: String = row.get(1)?;
-            let content: String = row.get(2)?;
-            let chunk_type: String = row.get(3)?;
-            let channel: Option<String> = row.get(4)?;
-            let embedding_bytes: Vec<u8> = row.get(5)?;
+        let mut results: Vec<SearchResult> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let source_path: String = row.get(1)?;
+                let content: String = row.get(2)?;
+                let chunk_type: String = row.get(3)?;
+                let channel: Option<String> = row.get(4)?;
+                let embedding_bytes: Vec<u8> = row.get(5)?;
 
-            let embedding: Vec<f32> = embedding_bytes.chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect();
+                let embedding: Vec<f32> = embedding_bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
 
-            let similarity = cosine_similarity(query_embedding, &embedding);
+                let similarity = cosine_similarity(query_embedding, &embedding);
 
-            Ok(SearchResult {
-                id,
-                source_path,
-                content,
-                chunk_type,
-                channel,
-                similarity,
+                Ok(SearchResult {
+                    id,
+                    source_path,
+                    content,
+                    chunk_type,
+                    channel,
+                    similarity,
+                })
             })
-        }).map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
 
         Ok(results)
@@ -171,7 +190,17 @@ mod tests {
     #[test]
     fn test_upsert_and_get_hash() {
         let store = VectorStore::open_in_memory().unwrap();
-        store.upsert_chunk("test:0", "test.md", "content", "Note", None, "abc123", &[0.1, 0.2]).unwrap();
+        store
+            .upsert_chunk(
+                "test:0",
+                "test.md",
+                "content",
+                "Note",
+                None,
+                "abc123",
+                &[0.1, 0.2],
+            )
+            .unwrap();
         let hash = store.get_hash("test.md").unwrap();
         assert_eq!(hash, Some("abc123".to_string()));
     }
@@ -179,7 +208,9 @@ mod tests {
     #[test]
     fn test_delete_source() {
         let store = VectorStore::open_in_memory().unwrap();
-        store.upsert_chunk("test:0", "test.md", "content", "Note", None, "abc", &[0.1]).unwrap();
+        store
+            .upsert_chunk("test:0", "test.md", "content", "Note", None, "abc", &[0.1])
+            .unwrap();
         store.delete_source("test.md").unwrap();
         let hash = store.get_hash("test.md").unwrap();
         assert!(hash.is_none());
@@ -194,8 +225,12 @@ mod tests {
     #[test]
     fn test_search() {
         let store = VectorStore::open_in_memory().unwrap();
-        store.upsert_chunk("a:0", "a.md", "content a", "Note", None, "h1", &[1.0, 0.0]).unwrap();
-        store.upsert_chunk("b:0", "b.md", "content b", "Note", None, "h2", &[0.0, 1.0]).unwrap();
+        store
+            .upsert_chunk("a:0", "a.md", "content a", "Note", None, "h1", &[1.0, 0.0])
+            .unwrap();
+        store
+            .upsert_chunk("b:0", "b.md", "content b", "Note", None, "h2", &[0.0, 1.0])
+            .unwrap();
 
         let results = store.search(&[1.0, 0.0], 10).unwrap();
         assert_eq!(results.len(), 2);

@@ -43,7 +43,7 @@ pub struct DeviceResources {
     pub total_memory: u64,
     pub reserved: u64,
     pub allocated: u64,
-    pub allocations: HashMap<String, u64>,  // model_id -> bytes
+    pub allocations: HashMap<String, u64>, // model_id -> bytes
 }
 
 impl DeviceResources {
@@ -58,7 +58,9 @@ impl DeviceResources {
     }
 
     pub fn available(&self) -> u64 {
-        self.total_memory.saturating_sub(self.reserved).saturating_sub(self.allocated)
+        self.total_memory
+            .saturating_sub(self.reserved)
+            .saturating_sub(self.allocated)
     }
 
     pub fn can_fit(&self, bytes: u64) -> bool {

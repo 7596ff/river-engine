@@ -61,7 +61,10 @@ mod tests {
         }));
 
         let event = rx.recv().await.unwrap();
-        assert!(matches!(event, CoordinatorEvent::Agent(AgentEvent::TurnStarted { .. })));
+        assert!(matches!(
+            event,
+            CoordinatorEvent::Agent(AgentEvent::TurnStarted { .. })
+        ));
     }
 
     #[tokio::test]
@@ -72,8 +75,14 @@ mod tests {
 
         bus.publish(CoordinatorEvent::Shutdown);
 
-        assert!(matches!(rx1.recv().await.unwrap(), CoordinatorEvent::Shutdown));
-        assert!(matches!(rx2.recv().await.unwrap(), CoordinatorEvent::Shutdown));
+        assert!(matches!(
+            rx1.recv().await.unwrap(),
+            CoordinatorEvent::Shutdown
+        ));
+        assert!(matches!(
+            rx2.recv().await.unwrap(),
+            CoordinatorEvent::Shutdown
+        ));
     }
 
     #[test]

@@ -90,11 +90,7 @@ impl ModelScanner {
 
                 // Add to results
                 seen_ids.insert(id.clone());
-                models.push(LocalModel {
-                    id,
-                    path,
-                    metadata,
-                });
+                models.push(LocalModel { id, path, metadata });
             }
         }
 

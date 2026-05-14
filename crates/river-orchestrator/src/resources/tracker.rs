@@ -13,7 +13,7 @@ pub struct ResourceConfig {
 impl Default for ResourceConfig {
     fn default() -> Self {
         Self {
-            reserve_vram_bytes: 500 * 1024 * 1024,  // 500MB
+            reserve_vram_bytes: 500 * 1024 * 1024,     // 500MB
             reserve_ram_bytes: 2 * 1024 * 1024 * 1024, // 2GB
         }
     }
@@ -50,17 +50,17 @@ impl ResourceTracker {
 
         // Add CPU as fallback
         let system_memory = SystemMemory::current();
-        tracing::info!(
-            "CPU available with {} bytes RAM",
-            system_memory.total_ram
-        );
+        tracing::info!("CPU available with {} bytes RAM", system_memory.total_ram);
         devices.push(DeviceResources::new(
             DeviceId::Cpu,
             system_memory.total_ram,
             config.reserve_ram_bytes,
         ));
 
-        tracing::info!("ResourceTracker initialized with {} device(s)", devices.len());
+        tracing::info!(
+            "ResourceTracker initialized with {} device(s)",
+            devices.len()
+        );
 
         Self {
             devices: RwLock::new(devices),
@@ -151,7 +151,9 @@ impl From<&DeviceResources> for DeviceResourcesSnapshot {
             total_memory: resources.total_memory,
             allocated: resources.allocated,
             available: resources.available(),
-            allocations: resources.allocations.iter()
+            allocations: resources
+                .allocations
+                .iter()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect(),
         }
@@ -172,7 +174,9 @@ mod tests {
     #[tokio::test]
     async fn test_resource_allocation() {
         let tracker = ResourceTracker::new(ResourceConfig::default());
-        let allocated = tracker.allocate("test-model", DeviceId::Cpu, 1_000_000_000).await;
+        let allocated = tracker
+            .allocate("test-model", DeviceId::Cpu, 1_000_000_000)
+            .await;
         assert!(allocated);
         assert_eq!(tracker.cpu_allocated().await, 1_000_000_000);
         tracker.release("test-model", DeviceId::Cpu).await;
@@ -194,11 +198,16 @@ mod tests {
 
         // Get available memory on CPU
         let resources = tracker.get_all_resources().await;
-        let cpu_resource = resources.iter().find(|r| r.device == DeviceId::Cpu).unwrap();
+        let cpu_resource = resources
+            .iter()
+            .find(|r| r.device == DeviceId::Cpu)
+            .unwrap();
         let available = cpu_resource.available;
 
         // Try to allocate more than available
-        let allocated = tracker.allocate("too-large", DeviceId::Cpu, available + 1).await;
+        let allocated = tracker
+            .allocate("too-large", DeviceId::Cpu, available + 1)
+            .await;
         assert!(!allocated);
 
         // Should still have 0 allocated
@@ -210,7 +219,11 @@ mod tests {
         let tracker = ResourceTracker::new(ResourceConfig::default());
 
         // Allocate multiple models
-        assert!(tracker.allocate("model1", DeviceId::Cpu, 1_000_000_000).await);
+        assert!(
+            tracker
+                .allocate("model1", DeviceId::Cpu, 1_000_000_000)
+                .await
+        );
         assert!(tracker.allocate("model2", DeviceId::Cpu, 500_000_000).await);
 
         assert_eq!(tracker.cpu_allocated().await, 1_500_000_000);
@@ -229,11 +242,16 @@ mod tests {
         let tracker = ResourceTracker::new(ResourceConfig::default());
 
         // Allocate something
-        tracker.allocate("test-model", DeviceId::Cpu, 1_000_000_000).await;
+        tracker
+            .allocate("test-model", DeviceId::Cpu, 1_000_000_000)
+            .await;
 
         // Get snapshot
         let snapshots = tracker.get_all_resources().await;
-        let cpu_snapshot = snapshots.iter().find(|s| s.device == DeviceId::Cpu).unwrap();
+        let cpu_snapshot = snapshots
+            .iter()
+            .find(|s| s.device == DeviceId::Cpu)
+            .unwrap();
 
         assert_eq!(cpu_snapshot.allocated, 1_000_000_000);
         assert_eq!(cpu_snapshot.allocations.len(), 1);

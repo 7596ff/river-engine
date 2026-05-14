@@ -3,7 +3,7 @@
 //! Translates config structs into the exact args that river-gateway
 //! and river-discord expect.
 
-use crate::config_file::{AgentConfig, AdapterConfig, ModelConfig};
+use crate::config_file::{AdapterConfig, AgentConfig, ModelConfig};
 use std::collections::HashMap;
 
 /// Resolved model endpoint info
@@ -21,12 +21,18 @@ pub fn gateway_args(
     resolved_models: &HashMap<String, ResolvedModel>,
 ) -> Vec<String> {
     let mut args = vec![
-        "--workspace".to_string(), agent.workspace.display().to_string(),
-        "--data-dir".to_string(), agent.data_dir.display().to_string(),
-        "--port".to_string(), agent.port.to_string(),
-        "--agent-name".to_string(), agent_name.to_string(),
-        "--context-limit".to_string(), agent.context.limit.to_string(),
-        "--orchestrator-url".to_string(), format!("http://127.0.0.1:{}", orchestrator_port),
+        "--workspace".to_string(),
+        agent.workspace.display().to_string(),
+        "--data-dir".to_string(),
+        agent.data_dir.display().to_string(),
+        "--port".to_string(),
+        agent.port.to_string(),
+        "--agent-name".to_string(),
+        agent_name.to_string(),
+        "--context-limit".to_string(),
+        agent.context.limit.to_string(),
+        "--orchestrator-url".to_string(),
+        format!("http://127.0.0.1:{}", orchestrator_port),
     ];
 
     // Primary model
@@ -104,13 +110,12 @@ pub fn gateway_args(
 }
 
 /// Build CLI args for a discord adapter process
-pub fn discord_args(
-    adapter: &AdapterConfig,
-    gateway_port: u16,
-) -> Vec<String> {
+pub fn discord_args(adapter: &AdapterConfig, gateway_port: u16) -> Vec<String> {
     let mut args = vec![
-        "--gateway-url".to_string(), format!("http://127.0.0.1:{}", gateway_port),
-        "--listen-port".to_string(), adapter.port.to_string(),
+        "--gateway-url".to_string(),
+        format!("http://127.0.0.1:{}", gateway_port),
+        "--listen-port".to_string(),
+        adapter.port.to_string(),
     ];
 
     if let Some(ref token_file) = adapter.token_file {
@@ -138,7 +143,8 @@ mod tests {
     use crate::config_file::*;
 
     fn test_agent() -> AgentConfig {
-        serde_json::from_str(r#"{
+        serde_json::from_str(
+            r#"{
             "workspace": "/home/test/stream",
             "data_dir": "/var/lib/river/iris",
             "port": 3000,
@@ -154,19 +160,27 @@ mod tests {
                 "guild_id": "123456",
                 "channels": [111, 222]
             }]
-        }"#).unwrap()
+        }"#,
+        )
+        .unwrap()
     }
 
     fn test_resolved() -> HashMap<String, ResolvedModel> {
         let mut m = HashMap::new();
-        m.insert("claude".to_string(), ResolvedModel {
-            endpoint: "https://api.anthropic.com/v1".to_string(),
-            name: Some("claude-sonnet-4-20250514".to_string()),
-        });
-        m.insert("embed".to_string(), ResolvedModel {
-            endpoint: "http://localhost:11434/v1".to_string(),
-            name: None,
-        });
+        m.insert(
+            "claude".to_string(),
+            ResolvedModel {
+                endpoint: "https://api.anthropic.com/v1".to_string(),
+                name: Some("claude-sonnet-4-20250514".to_string()),
+            },
+        );
+        m.insert(
+            "embed".to_string(),
+            ResolvedModel {
+                endpoint: "http://localhost:11434/v1".to_string(),
+                name: None,
+            },
+        );
         m
     }
 
@@ -198,18 +212,23 @@ mod tests {
         let args = gateway_args("iris", &agent, &HashMap::new(), 5000, &resolved);
 
         assert!(args.contains(&"--adapter".to_string()));
-        assert!(args.contains(&"discord:http://127.0.0.1:8081/send:http://127.0.0.1:8081/read".to_string()));
+        assert!(args.contains(
+            &"discord:http://127.0.0.1:8081/send:http://127.0.0.1:8081/read".to_string()
+        ));
     }
 
     #[test]
     fn test_discord_args() {
-        let adapter: AdapterConfig = serde_json::from_str(r#"{
+        let adapter: AdapterConfig = serde_json::from_str(
+            r#"{
             "type": "discord",
             "port": 8081,
             "token_file": "/run/secrets/discord",
             "guild_id": "123456",
             "channels": [111, 222]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let args = discord_args(&adapter, 3000);
         assert!(args.contains(&"--gateway-url".to_string()));
@@ -224,10 +243,13 @@ mod tests {
 
     #[test]
     fn test_discord_args_minimal() {
-        let adapter: AdapterConfig = serde_json::from_str(r#"{
+        let adapter: AdapterConfig = serde_json::from_str(
+            r#"{
             "type": "discord",
             "port": 8081
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let args = discord_args(&adapter, 3000);
         assert!(args.contains(&"--listen-port".to_string()));

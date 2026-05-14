@@ -21,7 +21,11 @@ pub fn load_env_file(path: &Path) -> anyhow::Result<()> {
 
         // Parse KEY=VALUE
         let Some((key, value)) = line.split_once('=') else {
-            tracing::warn!(line = line_num + 1, "Skipping malformed env line (no '='): {}", line);
+            tracing::warn!(
+                line = line_num + 1,
+                "Skipping malformed env line (no '='): {}",
+                line
+            );
             continue;
         };
 
@@ -122,7 +126,10 @@ mod tests {
     fn test_expand_vars_undefined_is_error() {
         let result = expand_vars("$DEFINITELY_NOT_SET_EVER_12345");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("DEFINITELY_NOT_SET_EVER_12345"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DEFINITELY_NOT_SET_EVER_12345"));
     }
 
     #[test]

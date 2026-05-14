@@ -210,16 +210,36 @@ impl Default for ResourcesConfig {
 }
 
 // Defaults
-fn default_port() -> u16 { 5000 }
-fn default_context_limit() -> u64 { 128_000 }
-fn default_compaction_threshold() -> f64 { 0.80 }
-fn default_fill_target() -> f64 { 0.40 }
-fn default_min_messages() -> u32 { 20 }
-fn default_log_level() -> String { "info".to_string() }
-fn default_reserve_vram_mb() -> u64 { 500 }
-fn default_reserve_ram_mb() -> u64 { 2000 }
-fn default_llama_server_path() -> PathBuf { PathBuf::from("llama-server") }
-fn default_port_range() -> String { "8080-8180".to_string() }
+fn default_port() -> u16 {
+    5000
+}
+fn default_context_limit() -> u64 {
+    128_000
+}
+fn default_compaction_threshold() -> f64 {
+    0.80
+}
+fn default_fill_target() -> f64 {
+    0.40
+}
+fn default_min_messages() -> u32 {
+    20
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_reserve_vram_mb() -> u64 {
+    500
+}
+fn default_reserve_ram_mb() -> u64 {
+    2000
+}
+fn default_llama_server_path() -> PathBuf {
+    PathBuf::from("llama-server")
+}
+fn default_port_range() -> String {
+    "8080-8180".to_string()
+}
 
 impl ModelConfig {
     /// Returns true if this is an embedding model
@@ -236,9 +256,9 @@ impl ModelConfig {
 impl AdapterConfig {
     /// Get the binary path, defaulting to river-{type}
     pub fn bin_path(&self) -> PathBuf {
-        self.bin.clone().unwrap_or_else(|| {
-            PathBuf::from(format!("river-{}", self.adapter_type))
-        })
+        self.bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("river-{}", self.adapter_type)))
     }
 }
 
@@ -327,7 +347,10 @@ mod tests {
             guild_id: None,
             channels: vec![],
         };
-        assert_eq!(adapter.bin_path(), PathBuf::from("/usr/local/bin/my-discord"));
+        assert_eq!(
+            adapter.bin_path(),
+            PathBuf::from("/usr/local/bin/my-discord")
+        );
     }
 
     #[test]
@@ -350,9 +373,11 @@ mod tests {
         // Set required env vars for expansion
         unsafe { std::env::set_var("DISCORD_GUILD_ID", "999888777") };
 
-        let raw = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy/river.example.json")
-        ).unwrap();
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../deploy/river.example.json"
+        ))
+        .unwrap();
         let expanded = crate::env::expand_vars(&raw).unwrap();
         let config: RiverConfig = serde_json::from_str(&expanded).unwrap();
 

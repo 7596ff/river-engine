@@ -1,7 +1,7 @@
 //! Vector similarity search for semantic memory
 
-use river_core::{RiverResult, Snowflake};
 use crate::db::{Database, Memory};
+use river_core::{RiverResult, Snowflake};
 
 /// Search result with similarity score
 #[derive(Debug, Clone)]
@@ -132,9 +132,9 @@ mod tests {
 
         // Insert test memories with different embeddings
         let embeddings = vec![
-            vec![1.0, 0.0, 0.0],  // "north"
-            vec![0.0, 1.0, 0.0],  // "east"
-            vec![0.7, 0.7, 0.0],  // "northeast"
+            vec![1.0, 0.0, 0.0], // "north"
+            vec![0.0, 1.0, 0.0], // "east"
+            vec![0.7, 0.7, 0.0], // "northeast"
         ];
 
         for (i, emb) in embeddings.iter().enumerate() {

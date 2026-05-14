@@ -10,7 +10,9 @@ pub async fn health_check_loop(manager: Arc<ProcessManager>, interval: Duration)
         tokio::time::sleep(interval).await;
 
         // Get all model IDs to check
-        let model_ids: Vec<String> = manager.get_all_processes().await
+        let model_ids: Vec<String> = manager
+            .get_all_processes()
+            .await
             .into_iter()
             .map(|p| p.model_id)
             .collect();
@@ -19,7 +21,9 @@ pub async fn health_check_loop(manager: Arc<ProcessManager>, interval: Duration)
             if let Some(snapshot) = manager.get_process(&model_id).await {
                 let healthy = check_endpoint_health(snapshot.port).await;
                 if !healthy {
-                    manager.mark_unhealthy(&model_id, "Health check failed").await;
+                    manager
+                        .mark_unhealthy(&model_id, "Health check failed")
+                        .await;
                 }
             }
         }

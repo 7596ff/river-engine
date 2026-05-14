@@ -61,7 +61,9 @@ impl TuiConfig {
             None
         };
 
-        let log_file = args.log_file.unwrap_or_else(|| PathBuf::from("river-tui.log"));
+        let log_file = args
+            .log_file
+            .unwrap_or_else(|| PathBuf::from("river-tui.log"));
 
         Ok(Self {
             gateway_url: args.gateway_url,
@@ -91,9 +93,12 @@ mod tests {
     fn test_args_custom() {
         let args = Args::parse_from([
             "river-tui",
-            "--name", "cassie",
-            "--channel", "dev",
-            "--listen-port", "8082",
+            "--name",
+            "cassie",
+            "--channel",
+            "dev",
+            "--listen-port",
+            "8082",
         ]);
         assert_eq!(args.name, Some("cassie".to_string()));
         assert_eq!(args.channel, "dev");

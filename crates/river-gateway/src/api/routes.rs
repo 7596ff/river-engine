@@ -3,7 +3,6 @@
 use crate::metrics::{get_rss_bytes, LoopStateLabel};
 use crate::policy::HealthStatus;
 use crate::state::AppState;
-use river_adapter::{RegisterRequest, RegisterResponse};
 use axum::{
     extract::State,
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
@@ -11,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use river_adapter::{RegisterRequest, RegisterResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -146,38 +146,41 @@ async fn health_check(State(state): State<Arc<AppState>>) -> (StatusCode, Json<H
         HealthStatus::NeedsAttention => "needs_attention",
     };
 
-    (http_status, Json(HealthResponse {
-        status: status_str,
-        version: env!("CARGO_PKG_VERSION"),
-        uptime_seconds: uptime,
-        agent: AgentInfo {
-            name: metrics.agent_name.clone(),
-            birth: metrics.agent_birth,
-        },
-        loop_state: LoopInfo {
-            state: metrics.loop_state,
-            last_wake: metrics.last_wake,
-            last_settle: metrics.last_settle,
-            turns_since_restart: metrics.turns_since_restart,
-        },
-        context: ContextInfo {
-            current_tokens: metrics.context_tokens,
-            limit_tokens: metrics.context_limit,
-            usage_percent: metrics.context_usage_percent(),
-            context_id: metrics.context_id.clone(),
-            rotations: metrics.rotations_since_restart,
-        },
-        resources: ResourceInfo {
-            db_size_bytes: db_size,
-            rss_bytes: rss,
-        },
-        counters: CounterInfo {
-            model_calls: metrics.model_calls,
-            tool_calls: metrics.tool_calls,
-            tool_errors: metrics.tool_errors,
-        },
-        policy: policy_info,
-    }))
+    (
+        http_status,
+        Json(HealthResponse {
+            status: status_str,
+            version: env!("CARGO_PKG_VERSION"),
+            uptime_seconds: uptime,
+            agent: AgentInfo {
+                name: metrics.agent_name.clone(),
+                birth: metrics.agent_birth,
+            },
+            loop_state: LoopInfo {
+                state: metrics.loop_state,
+                last_wake: metrics.last_wake,
+                last_settle: metrics.last_settle,
+                turns_since_restart: metrics.turns_since_restart,
+            },
+            context: ContextInfo {
+                current_tokens: metrics.context_tokens,
+                limit_tokens: metrics.context_limit,
+                usage_percent: metrics.context_usage_percent(),
+                context_id: metrics.context_id.clone(),
+                rotations: metrics.rotations_since_restart,
+            },
+            resources: ResourceInfo {
+                db_size_bytes: db_size,
+                rss_bytes: rss,
+            },
+            counters: CounterInfo {
+                model_calls: metrics.model_calls,
+                tool_calls: metrics.tool_calls,
+                tool_errors: metrics.tool_errors,
+            },
+            policy: policy_info,
+        }),
+    )
 }
 
 async fn handle_incoming(
@@ -199,8 +202,10 @@ async fn handle_incoming(
     }
 
     // Generate snowflake ID
-    let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
-    
+    let snowflake = state
+        .snowflake_gen
+        .next_id(river_core::SnowflakeType::Message);
+
     // Write to home channel first (write-ahead)
     if let Some(ref writer) = state.home_channel_writer {
         let home_entry = crate::channels::entry::MessageEntry::user_home(
@@ -213,9 +218,11 @@ async fn handle_incoming(
             msg.channel_name.clone(),
             Some(msg.message_id.clone()),
         );
-        writer.write(
-            crate::channels::entry::HomeChannelEntry::Message(home_entry)
-        ).await;
+        writer
+            .write(crate::channels::entry::HomeChannelEntry::Message(
+                home_entry,
+            ))
+            .await;
     }
 
     // Build channel log entry (secondary projection)
@@ -275,15 +282,15 @@ async fn handle_bystander(
         }
     };
 
-    let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
-    
-    let entry = crate::channels::entry::MessageEntry::bystander(
-        snowflake, msg.content,
-    );
+    let snowflake = state
+        .snowflake_gen
+        .next_id(river_core::SnowflakeType::Message);
 
-    writer.write(
-        crate::channels::entry::HomeChannelEntry::Message(entry)
-    ).await;
+    let entry = crate::channels::entry::MessageEntry::bystander(snowflake, msg.content);
+
+    writer
+        .write(crate::channels::entry::HomeChannelEntry::Message(entry))
+        .await;
 
     state.message_queue.push(crate::queue::ChannelNotification {
         channel: "home".to_string(),
@@ -292,7 +299,9 @@ async fn handle_bystander(
 
     tracing::info!(id = %snowflake, "Bystander message received");
 
-    Ok(Json(serde_json::json!({ "ok": true, "id": snowflake.to_string() })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": snowflake.to_string() }),
+    ))
 }
 
 async fn list_tools(
@@ -396,7 +405,19 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/test"),
         )));
-        Arc::new(AppState::new(config, db, registry, None, None, message_queue, "test-token".to_string(), reqwest::Client::new(), subagent_manager, metrics, policy))
+        Arc::new(AppState::new(
+            config,
+            db,
+            registry,
+            None,
+            None,
+            message_queue,
+            "test-token".to_string(),
+            reqwest::Client::new(),
+            subagent_manager,
+            metrics,
+            policy,
+        ))
     }
 
     #[tokio::test]
@@ -405,7 +426,12 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -423,7 +449,7 @@ mod tests {
                     .uri("/tools")
                     .header("authorization", "Bearer test-token")
                     .body(Body::empty())
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -455,7 +481,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .header("authorization", "Bearer test-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -488,7 +514,7 @@ mod tests {
                     .uri("/incoming")
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -521,7 +547,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .header("authorization", "Bearer test-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -554,7 +580,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .header("authorization", "Bearer wrong-token")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
-                    .unwrap()
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -568,13 +594,20 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(health["status"], "healthy");
@@ -591,13 +624,20 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         // Check policy info is present with expected structure
@@ -622,13 +662,20 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(health["status"], "needs_attention");
@@ -649,14 +696,21 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         // Degraded still returns 200, just with degraded status
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(health["status"], "degraded");

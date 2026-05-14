@@ -1,10 +1,10 @@
 //! GGUF model metadata and resource estimation
 
+use river_core::RiverError;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use river_core::RiverError;
 
 /// Quantization types supported in GGUF models
 /// Names match GGUF specification naming convention
@@ -191,10 +191,7 @@ fn read_metadata_kv<R: Read>(reader: &mut R) -> Result<(String, GgufValue), Rive
 
 /// Extract quantization type from filename
 fn extract_quantization_from_filename(path: &PathBuf) -> QuantizationType {
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     // Common GGUF quantization patterns in filenames
     let patterns = [
@@ -352,12 +349,24 @@ mod tests {
     fn test_quantization_type_from_str_lowercase() {
         assert_eq!(QuantizationType::from_str("q4_0"), QuantizationType::Q4_0);
         assert_eq!(QuantizationType::from_str("q4_1"), QuantizationType::Q4_1);
-        assert_eq!(QuantizationType::from_str("q4_k_m"), QuantizationType::Q4_K_M);
-        assert_eq!(QuantizationType::from_str("q4_k_s"), QuantizationType::Q4_K_S);
+        assert_eq!(
+            QuantizationType::from_str("q4_k_m"),
+            QuantizationType::Q4_K_M
+        );
+        assert_eq!(
+            QuantizationType::from_str("q4_k_s"),
+            QuantizationType::Q4_K_S
+        );
         assert_eq!(QuantizationType::from_str("q5_0"), QuantizationType::Q5_0);
         assert_eq!(QuantizationType::from_str("q5_1"), QuantizationType::Q5_1);
-        assert_eq!(QuantizationType::from_str("q5_k_m"), QuantizationType::Q5_K_M);
-        assert_eq!(QuantizationType::from_str("q5_k_s"), QuantizationType::Q5_K_S);
+        assert_eq!(
+            QuantizationType::from_str("q5_k_m"),
+            QuantizationType::Q5_K_M
+        );
+        assert_eq!(
+            QuantizationType::from_str("q5_k_s"),
+            QuantizationType::Q5_K_S
+        );
         assert_eq!(QuantizationType::from_str("q6_k"), QuantizationType::Q6_K);
         assert_eq!(QuantizationType::from_str("q8_0"), QuantizationType::Q8_0);
         assert_eq!(QuantizationType::from_str("f16"), QuantizationType::F16);
@@ -367,14 +376,23 @@ mod tests {
     #[test]
     fn test_quantization_type_from_str_uppercase() {
         assert_eq!(QuantizationType::from_str("Q4_0"), QuantizationType::Q4_0);
-        assert_eq!(QuantizationType::from_str("Q5_K_M"), QuantizationType::Q5_K_M);
+        assert_eq!(
+            QuantizationType::from_str("Q5_K_M"),
+            QuantizationType::Q5_K_M
+        );
         assert_eq!(QuantizationType::from_str("F16"), QuantizationType::F16);
     }
 
     #[test]
     fn test_quantization_type_from_str_mixed_case() {
-        assert_eq!(QuantizationType::from_str("Q4_k_M"), QuantizationType::Q4_K_M);
-        assert_eq!(QuantizationType::from_str("q5_K_s"), QuantizationType::Q5_K_S);
+        assert_eq!(
+            QuantizationType::from_str("Q4_k_M"),
+            QuantizationType::Q4_K_M
+        );
+        assert_eq!(
+            QuantizationType::from_str("q5_K_s"),
+            QuantizationType::Q5_K_S
+        );
     }
 
     #[test]

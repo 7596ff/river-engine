@@ -2,8 +2,8 @@
 //!
 //! These tools allow the agent to send messages through configured communication adapters.
 
+use super::adapters::{send_to_adapter, AdapterRegistry};
 use super::registry::{Tool, ToolResult};
-use super::adapters::{AdapterRegistry, send_to_adapter};
 use river_core::{RiverError, SnowflakeGenerator};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -168,18 +168,14 @@ impl Tool for ReadChannelTool {
             "ReadChannelTool::execute called"
         );
 
-        let adapter = args["adapter"]
-            .as_str()
-            .ok_or_else(|| {
-                error!("ReadChannelTool: Missing 'adapter' parameter");
-                RiverError::tool("Missing 'adapter' parameter")
-            })?;
-        let channel = args["channel"]
-            .as_str()
-            .ok_or_else(|| {
-                error!("ReadChannelTool: Missing 'channel' parameter");
-                RiverError::tool("Missing 'channel' parameter")
-            })?;
+        let adapter = args["adapter"].as_str().ok_or_else(|| {
+            error!("ReadChannelTool: Missing 'adapter' parameter");
+            RiverError::tool("Missing 'adapter' parameter")
+        })?;
+        let channel = args["channel"].as_str().ok_or_else(|| {
+            error!("ReadChannelTool: Missing 'channel' parameter");
+            RiverError::tool("Missing 'channel' parameter")
+        })?;
         let limit = args["limit"].as_u64().unwrap_or(20);
 
         info!(
@@ -197,50 +193,42 @@ impl Tool for ReadChannelTool {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = registry.read().await;
-                let config = registry
-                    .get(&adapter)
-                    .ok_or_else(|| {
-                        error!(
-                            adapter = %adapter,
-                            available = ?registry.names(),
-                            "ReadChannelTool: Unknown adapter"
-                        );
-                        RiverError::tool(format!("Unknown adapter: {}", adapter))
-                    })?;
+                let config = registry.get(&adapter).ok_or_else(|| {
+                    error!(
+                        adapter = %adapter,
+                        available = ?registry.names(),
+                        "ReadChannelTool: Unknown adapter"
+                    );
+                    RiverError::tool(format!("Unknown adapter: {}", adapter))
+                })?;
 
-                let read_url = config.read_url.as_ref()
-                    .ok_or_else(|| {
-                        warn!(
-                            adapter = %adapter,
-                            "ReadChannelTool: Adapter does not support reading"
-                        );
-                        RiverError::tool(format!(
-                            "Adapter '{}' does not support reading channel history",
-                            adapter
-                        ))
-                    })?;
+                let read_url = config.read_url.as_ref().ok_or_else(|| {
+                    warn!(
+                        adapter = %adapter,
+                        "ReadChannelTool: Adapter does not support reading"
+                    );
+                    RiverError::tool(format!(
+                        "Adapter '{}' does not support reading channel history",
+                        adapter
+                    ))
+                })?;
 
                 let url = format!("{}?channel={}&limit={}", read_url, channel, limit);
                 debug!(url = %url, "ReadChannelTool: Sending HTTP request");
 
-                let response = http_client
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        error!(error = %e, url = %url, "ReadChannelTool: HTTP request failed");
-                        RiverError::tool(format!("Failed to read channel: {}", e))
-                    })?;
+                let response = http_client.get(&url).send().await.map_err(|e| {
+                    error!(error = %e, url = %url, "ReadChannelTool: HTTP request failed");
+                    RiverError::tool(format!("Failed to read channel: {}", e))
+                })?;
 
                 let status = response.status();
                 debug!(status = %status, "ReadChannelTool: Received HTTP response");
 
                 if status.is_success() {
-                    let body = response.text().await
-                        .map_err(|e| {
-                            error!(error = %e, "ReadChannelTool: Failed to read response body");
-                            RiverError::tool(format!("Failed to read response: {}", e))
-                        })?;
+                    let body = response.text().await.map_err(|e| {
+                        error!(error = %e, "ReadChannelTool: Failed to read response body");
+                        RiverError::tool(format!("Failed to read response: {}", e))
+                    })?;
 
                     info!(
                         adapter = %adapter,
@@ -251,7 +239,9 @@ impl Tool for ReadChannelTool {
 
                     // Try to parse as JSON and format nicely
                     if let Ok(json) = serde_json::from_str::<Value>(&body) {
-                        Ok(ToolResult::success(serde_json::to_string_pretty(&json).unwrap()))
+                        Ok(ToolResult::success(
+                            serde_json::to_string_pretty(&json).unwrap(),
+                        ))
                     } else {
                         Ok(ToolResult::success(body))
                     }
@@ -278,8 +268,8 @@ impl Tool for ReadChannelTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::adapters::AdapterConfig;
+    use super::*;
     use river_core::AgentBirth;
 
     fn test_snowflake_gen() -> Arc<SnowflakeGenerator> {
@@ -302,11 +292,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_message_tool_schema() {
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let tool = SendMessageTool::new(
-            registry,
-            PathBuf::from("."),
-            test_snowflake_gen(),
-        );
+        let tool = SendMessageTool::new(registry, PathBuf::from("."), test_snowflake_gen());
 
         assert_eq!(tool.name(), "send_message");
         let params = tool.parameters();

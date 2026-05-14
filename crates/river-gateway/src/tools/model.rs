@@ -144,12 +144,13 @@ impl Tool for RequestModelTool {
                     .json(&payload)
                     .send()
                     .await
-                    .map_err(|e| RiverError::tool(format!("Failed to contact orchestrator: {}", e)))?;
+                    .map_err(|e| {
+                        RiverError::tool(format!("Failed to contact orchestrator: {}", e))
+                    })?;
 
-                let resp: ModelRequestResponse = response
-                    .json()
-                    .await
-                    .map_err(|e| RiverError::tool(format!("Invalid response from orchestrator: {}", e)))?;
+                let resp: ModelRequestResponse = response.json().await.map_err(|e| {
+                    RiverError::tool(format!("Invalid response from orchestrator: {}", e))
+                })?;
 
                 match resp.status.as_str() {
                     "ready" => {
@@ -175,24 +176,18 @@ impl Tool for RequestModelTool {
 
                         Ok(ToolResult::success(output))
                     }
-                    "loading" => {
-                        Ok(ToolResult::success(format!(
-                            "Model '{}' is loading. Try again in a moment.",
-                            model
-                        )))
-                    }
-                    "error" => {
-                        Err(RiverError::tool(format!(
-                            "Failed to load model: {}",
-                            resp.error.unwrap_or_else(|| "unknown error".to_string())
-                        )))
-                    }
-                    _ => {
-                        Err(RiverError::tool(format!(
-                            "Unknown response status: {}",
-                            resp.status
-                        )))
-                    }
+                    "loading" => Ok(ToolResult::success(format!(
+                        "Model '{}' is loading. Try again in a moment.",
+                        model
+                    ))),
+                    "error" => Err(RiverError::tool(format!(
+                        "Failed to load model: {}",
+                        resp.error.unwrap_or_else(|| "unknown error".to_string())
+                    ))),
+                    _ => Err(RiverError::tool(format!(
+                        "Unknown response status: {}",
+                        resp.status
+                    ))),
                 }
             })
         });
@@ -417,6 +412,9 @@ mod tests {
 
         let state = state.read().await;
         assert_eq!(state.active_model_name, Some("test-model".to_string()));
-        assert_eq!(state.active_model_endpoint, Some("http://localhost:8080".to_string()));
+        assert_eq!(
+            state.active_model_endpoint,
+            Some("http://localhost:8080".to_string())
+        );
     }
 }

@@ -100,10 +100,7 @@ pub fn parse_reaction_line(line: &str) -> Option<Reaction> {
         })
     } else {
         // Format: "users"
-        let users: Vec<String> = rest
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+        let users: Vec<String> = rest.split(',').map(|s| s.trim().to_string()).collect();
 
         Some(Reaction {
             emoji,
@@ -219,10 +216,19 @@ mod tests {
 
     #[test]
     fn test_parse_direction_marker() {
-        assert_eq!(parse_direction_marker("[ ]"), Some(MessageDirection::Unread));
+        assert_eq!(
+            parse_direction_marker("[ ]"),
+            Some(MessageDirection::Unread)
+        );
         assert_eq!(parse_direction_marker("[x]"), Some(MessageDirection::Read));
-        assert_eq!(parse_direction_marker("[>]"), Some(MessageDirection::Outgoing));
-        assert_eq!(parse_direction_marker("[!]"), Some(MessageDirection::Failed));
+        assert_eq!(
+            parse_direction_marker("[>]"),
+            Some(MessageDirection::Outgoing)
+        );
+        assert_eq!(
+            parse_direction_marker("[!]"),
+            Some(MessageDirection::Failed)
+        );
         assert_eq!(parse_direction_marker("???"), None);
     }
 
@@ -319,7 +325,8 @@ mod tests {
         let msg = parse_message_line("[>] 2026-03-23 14:30:00 msg123 <alice:111> test").unwrap();
         assert_eq!(msg.direction, MessageDirection::Outgoing);
 
-        let msg = parse_message_line("[!] 2026-03-23 14:30:00 - <river:999> (failed: error) test").unwrap();
+        let msg = parse_message_line("[!] 2026-03-23 14:30:00 - <river:999> (failed: error) test")
+            .unwrap();
         assert_eq!(msg.direction, MessageDirection::Failed);
         assert_eq!(msg.id, "-");
     }
@@ -339,7 +346,10 @@ mod tests {
         };
 
         let formatted = format_message(&msg);
-        assert_eq!(formatted, "[ ] 2026-03-23 14:30:00 msg123 <alice:111> hey, can you help?");
+        assert_eq!(
+            formatted,
+            "[ ] 2026-03-23 14:30:00 msg123 <alice:111> hey, can you help?"
+        );
     }
 
     #[test]

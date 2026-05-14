@@ -122,7 +122,8 @@ impl Snowflake {
         let absolute_micros = birth_micros + self.timestamp_micros();
         let secs = (absolute_micros / 1_000_000) as i64;
         let nanos = ((absolute_micros % 1_000_000) * 1000) as u32;
-        Utc.timestamp_opt(secs, nanos).single()
+        Utc.timestamp_opt(secs, nanos)
+            .single()
             .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap())
     }
 
@@ -351,20 +352,29 @@ mod tests {
     #[test]
     fn test_snowflake_to_datetime() {
         let birth = test_birth(); // 2024-03-15 14:30:45
-        // 0 microseconds after birth = birth time
+                                  // 0 microseconds after birth = birth time
         let id = Snowflake::new(0, birth, SnowflakeType::Message, 0);
         let dt = id.to_datetime();
-        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 14:30:45");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-03-15 14:30:45"
+        );
 
         // 1 second after birth
         let id2 = Snowflake::new(1_000_000, birth, SnowflakeType::Message, 0);
         let dt2 = id2.to_datetime();
-        assert_eq!(dt2.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 14:30:46");
+        assert_eq!(
+            dt2.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-03-15 14:30:46"
+        );
 
         // 1 hour after birth
         let id3 = Snowflake::new(3_600_000_000, birth, SnowflakeType::Message, 0);
         let dt3 = id3.to_datetime();
-        assert_eq!(dt3.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 15:30:45");
+        assert_eq!(
+            dt3.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2024-03-15 15:30:45"
+        );
     }
 
     #[test]

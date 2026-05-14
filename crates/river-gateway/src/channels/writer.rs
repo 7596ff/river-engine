@@ -110,7 +110,7 @@ mod tests {
         Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
     }
 
-    use crate::channels::entry::{MessageEntry, ToolEntry, HeartbeatEntry};
+    use crate::channels::entry::{HeartbeatEntry, MessageEntry, ToolEntry};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -125,8 +125,10 @@ mod tests {
 
         // Write a tool call
         let tool = ToolEntry::call(
-            test_snowflake_seq(2), "bash".into(),
-            serde_json::json!({"cmd": "ls"}), "tc1".into(),
+            test_snowflake_seq(2),
+            "bash".into(),
+            serde_json::json!({"cmd": "ls"}),
+            "tc1".into(),
         );
         writer.write(HomeChannelEntry::Tool(tool)).await;
 
@@ -156,7 +158,10 @@ mod tests {
         // Write 100 entries rapidly
         for i in 0..100 {
             let msg = MessageEntry::agent(
-                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32),
+                format!("msg {}", i),
+                "home".into(),
+                None,
             );
             writer.write(HomeChannelEntry::Message(msg)).await;
         }

@@ -22,29 +22,33 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = DiscordConfig::from_args(args)?;
 
-    let auth_token = river_core::require_auth_token()
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let auth_token = river_core::require_auth_token().map_err(|e| anyhow::anyhow!("{}", e))?;
     let authed_client = river_core::build_authed_client(&auth_token);
 
     tracing::info!("Starting River Discord Adapter");
 
     // Load channel state
-    let channels = ChannelState::load(
-        config.initial_channels.clone(),
-        config.state_file.clone(),
-    )
-    .await;
+    let channels =
+        ChannelState::load(config.initial_channels.clone(), config.state_file.clone()).await;
     tracing::info!("Loaded channel state");
 
     // Create gateway client (with auth)
-    let gateway_client = Arc::new(GatewayClient::new(authed_client.clone(), config.gateway_url.clone()));
+    let gateway_client = Arc::new(GatewayClient::new(
+        authed_client.clone(),
+        config.gateway_url.clone(),
+    ));
 
     // Create Discord client
     let mut discord = DiscordClient::new(&config.token, config.guild_id).await?;
     tracing::info!("Connected to Discord");
 
     // Get application ID for slash commands
-    let app_info = discord.http().current_user_application().await?.model().await?;
+    let app_info = discord
+        .http()
+        .current_user_application()
+        .await?
+        .model()
+        .await?;
     let application_id = app_info.id;
 
     // Register slash commands
@@ -82,7 +86,11 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to register with gateway (attempt {}): {}", attempt, e);
+                    tracing::warn!(
+                        "Failed to register with gateway (attempt {}): {}",
+                        attempt,
+                        e
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64)).await;
                 }
             }

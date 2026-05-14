@@ -75,8 +75,10 @@ mod tests {
         // Verify clap parsing works with minimal args
         let args = Args::parse_from([
             "river-discord",
-            "--token-file", "/tmp/token",
-            "--guild-id", "123456",
+            "--token-file",
+            "/tmp/token",
+            "--guild-id",
+            "123456",
         ]);
         assert_eq!(args.gateway_url, "http://localhost:3000");
         assert_eq!(args.listen_port, 3002);
@@ -87,9 +89,12 @@ mod tests {
     fn test_args_with_channels() {
         let args = Args::parse_from([
             "river-discord",
-            "--token-file", "/tmp/token",
-            "--guild-id", "123456",
-            "--channels", "111,222,333",
+            "--token-file",
+            "/tmp/token",
+            "--guild-id",
+            "123456",
+            "--channels",
+            "111,222,333",
         ]);
         assert_eq!(args.channels, vec![111, 222, 333]);
     }

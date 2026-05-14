@@ -160,7 +160,11 @@ mod tests {
 
         #[test]
         fn test_priority_roundtrip() {
-            for priority in [Priority::Background, Priority::Scheduled, Priority::Interactive] {
+            for priority in [
+                Priority::Background,
+                Priority::Scheduled,
+                Priority::Interactive,
+            ] {
                 let json = serde_json::to_string(&priority).unwrap();
                 let deserialized: Priority = serde_json::from_str(&json).unwrap();
                 assert_eq!(priority, deserialized);

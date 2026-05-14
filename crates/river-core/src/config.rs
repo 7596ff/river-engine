@@ -220,7 +220,9 @@ mod tests {
             context_limit: 100_000,
             gateway_port: 8000,
             auth_token_file: Some(PathBuf::from("/token")),
-            heartbeat: HeartbeatConfig { default_minutes: 60 },
+            heartbeat: HeartbeatConfig {
+                default_minutes: 60,
+            },
             embedding: EmbeddingConfig {
                 auto_embed_ttl_days: 30,
             },

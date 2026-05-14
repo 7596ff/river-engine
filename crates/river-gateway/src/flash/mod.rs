@@ -62,7 +62,11 @@ impl FlashQueue {
         let mut inner = self.inner.write().await;
 
         // Check for duplicate source — refresh TTL
-        if let Some(existing) = inner.flashes.iter_mut().find(|e| e.flash.source == flash.source) {
+        if let Some(existing) = inner
+            .flashes
+            .iter_mut()
+            .find(|e| e.flash.source == flash.source)
+        {
             existing.flash = flash.clone();
             existing.remaining_turns = match &flash.ttl {
                 FlashTTL::Turns(n) => Some(*n),
@@ -70,7 +74,9 @@ impl FlashQueue {
             };
             existing.expires_at = match &flash.ttl {
                 FlashTTL::Turns(_) => None,
-                FlashTTL::Duration(d) => Some(Utc::now() + chrono::Duration::from_std(*d).unwrap_or_default()),
+                FlashTTL::Duration(d) => {
+                    Some(Utc::now() + chrono::Duration::from_std(*d).unwrap_or_default())
+                }
             };
             return;
         }
@@ -87,7 +93,9 @@ impl FlashQueue {
             },
             expires_at: match &flash.ttl {
                 FlashTTL::Turns(_) => None,
-                FlashTTL::Duration(d) => Some(Utc::now() + chrono::Duration::from_std(*d).unwrap_or_default()),
+                FlashTTL::Duration(d) => {
+                    Some(Utc::now() + chrono::Duration::from_std(*d).unwrap_or_default())
+                }
             },
             flash,
         };
@@ -100,13 +108,19 @@ impl FlashQueue {
         let inner = self.inner.read().await;
         let now = Utc::now();
 
-        inner.flashes.iter()
+        inner
+            .flashes
+            .iter()
             .filter(|e| {
                 if let Some(remaining) = e.remaining_turns {
-                    if remaining == 0 { return false; }
+                    if remaining == 0 {
+                        return false;
+                    }
                 }
                 if let Some(expires_at) = e.expires_at {
-                    if now >= expires_at { return false; }
+                    if now >= expires_at {
+                        return false;
+                    }
                 }
                 true
             })
@@ -130,10 +144,14 @@ impl FlashQueue {
         // Remove expired
         inner.flashes.retain(|e| {
             if let Some(remaining) = e.remaining_turns {
-                if remaining == 0 { return false; }
+                if remaining == 0 {
+                    return false;
+                }
             }
             if let Some(expires_at) = e.expires_at {
-                if now >= expires_at { return false; }
+                if now >= expires_at {
+                    return false;
+                }
             }
             true
         });
@@ -163,13 +181,15 @@ mod tests {
     async fn test_push_and_active() {
         let queue = FlashQueue::new(20);
 
-        queue.push(Flash {
-            id: "f1".into(),
-            content: "Note about z-index".into(),
-            source: "notes/z-index.md".into(),
-            ttl: FlashTTL::Turns(3),
-            created: Utc::now(),
-        }).await;
+        queue
+            .push(Flash {
+                id: "f1".into(),
+                content: "Note about z-index".into(),
+                source: "notes/z-index.md".into(),
+                ttl: FlashTTL::Turns(3),
+                created: Utc::now(),
+            })
+            .await;
 
         let active = queue.active().await;
         assert_eq!(active.len(), 1);
@@ -180,13 +200,15 @@ mod tests {
     async fn test_turn_ttl_expiry() {
         let queue = FlashQueue::new(20);
 
-        queue.push(Flash {
-            id: "f1".into(),
-            content: "Short-lived".into(),
-            source: "notes/temp.md".into(),
-            ttl: FlashTTL::Turns(2),
-            created: Utc::now(),
-        }).await;
+        queue
+            .push(Flash {
+                id: "f1".into(),
+                content: "Short-lived".into(),
+                source: "notes/temp.md".into(),
+                ttl: FlashTTL::Turns(2),
+                created: Utc::now(),
+            })
+            .await;
 
         queue.tick_turn().await; // remaining: 1
         assert_eq!(queue.active().await.len(), 1);
@@ -199,24 +221,28 @@ mod tests {
     async fn test_duplicate_refreshes_ttl() {
         let queue = FlashQueue::new(20);
 
-        queue.push(Flash {
-            id: "f1".into(),
-            content: "Original".into(),
-            source: "notes/x.md".into(),
-            ttl: FlashTTL::Turns(2),
-            created: Utc::now(),
-        }).await;
+        queue
+            .push(Flash {
+                id: "f1".into(),
+                content: "Original".into(),
+                source: "notes/x.md".into(),
+                ttl: FlashTTL::Turns(2),
+                created: Utc::now(),
+            })
+            .await;
 
         queue.tick_turn().await; // remaining: 1
 
         // Push duplicate source — should refresh
-        queue.push(Flash {
-            id: "f1-refreshed".into(),
-            content: "Updated".into(),
-            source: "notes/x.md".into(),
-            ttl: FlashTTL::Turns(3),
-            created: Utc::now(),
-        }).await;
+        queue
+            .push(Flash {
+                id: "f1-refreshed".into(),
+                content: "Updated".into(),
+                source: "notes/x.md".into(),
+                ttl: FlashTTL::Turns(3),
+                created: Utc::now(),
+            })
+            .await;
 
         // Should still be 1 flash, but with refreshed TTL
         assert_eq!(queue.len().await, 1);
@@ -234,13 +260,15 @@ mod tests {
         let queue = FlashQueue::new(2);
 
         for i in 0..3 {
-            queue.push(Flash {
-                id: format!("f{}", i),
-                content: format!("Flash {}", i),
-                source: format!("notes/{}.md", i),
-                ttl: FlashTTL::Turns(10),
-                created: Utc::now(),
-            }).await;
+            queue
+                .push(Flash {
+                    id: format!("f{}", i),
+                    content: format!("Flash {}", i),
+                    source: format!("notes/{}.md", i),
+                    ttl: FlashTTL::Turns(10),
+                    created: Utc::now(),
+                })
+                .await;
         }
 
         // Only 2 should remain (oldest dropped)
@@ -254,13 +282,15 @@ mod tests {
     async fn test_duration_ttl() {
         let queue = FlashQueue::new(20);
 
-        queue.push(Flash {
-            id: "f1".into(),
-            content: "Time-based".into(),
-            source: "notes/time.md".into(),
-            ttl: FlashTTL::Duration(std::time::Duration::from_millis(50)),
-            created: Utc::now(),
-        }).await;
+        queue
+            .push(Flash {
+                id: "f1".into(),
+                content: "Time-based".into(),
+                source: "notes/time.md".into(),
+                ttl: FlashTTL::Duration(std::time::Duration::from_millis(50)),
+                created: Utc::now(),
+            })
+            .await;
 
         assert_eq!(queue.active().await.len(), 1);
 

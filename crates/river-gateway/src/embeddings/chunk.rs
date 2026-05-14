@@ -53,7 +53,13 @@ impl Chunker {
             }];
         }
 
-        self.split_by_sections(&note.source_path, &note.content, chunk_type, note.frontmatter.channel.clone(), max_chars)
+        self.split_by_sections(
+            &note.source_path,
+            &note.content,
+            chunk_type,
+            note.frontmatter.channel.clone(),
+            max_chars,
+        )
     }
 
     /// Chunk a raw markdown file (no frontmatter)
@@ -71,7 +77,14 @@ impl Chunker {
         self.split_by_sections(path, content, ChunkType::Fragment, None, max_chars)
     }
 
-    fn split_by_sections(&self, path: &str, content: &str, chunk_type: ChunkType, channel: Option<String>, max_chars: usize) -> Vec<Chunk> {
+    fn split_by_sections(
+        &self,
+        path: &str,
+        content: &str,
+        chunk_type: ChunkType,
+        channel: Option<String>,
+        max_chars: usize,
+    ) -> Vec<Chunk> {
         let mut chunks = Vec::new();
         let mut current = String::new();
         let mut idx = 0;
@@ -141,9 +154,16 @@ mod tests {
     #[test]
     fn test_large_content_multiple_chunks() {
         let chunker = Chunker::new(10); // Very small for testing (max_chars = 40)
-        // Create multiline content that exceeds max_chars
-        let content = (0..10).map(|i| format!("Line {} with some text", i)).collect::<Vec<_>>().join("\n");
+                                        // Create multiline content that exceeds max_chars
+        let content = (0..10)
+            .map(|i| format!("Line {} with some text", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunker.chunk_raw("test.md", &content);
-        assert!(chunks.len() > 1, "Expected multiple chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() > 1,
+            "Expected multiple chunks, got {}",
+            chunks.len()
+        );
     }
 }

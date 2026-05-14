@@ -8,7 +8,9 @@ use twilight_model::application::interaction::application_command::CommandOption
 use twilight_model::application::interaction::{Interaction, InteractionData};
 use twilight_model::channel::message::MessageFlags;
 use twilight_model::guild::Permissions;
-use twilight_model::http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType};
+use twilight_model::http::interaction::{
+    InteractionResponse, InteractionResponseData, InteractionResponseType,
+};
 use twilight_model::id::marker::{ApplicationMarker, GuildMarker};
 use twilight_model::id::Id;
 use twilight_util::builder::command::{ChannelBuilder, CommandBuilder};
@@ -20,10 +22,14 @@ pub async fn register_commands(
     guild_id: Id<GuildMarker>,
 ) -> anyhow::Result<()> {
     let commands = vec![
-        CommandBuilder::new("listen", "Add a channel to the listen set", CommandType::ChatInput)
-            .option(ChannelBuilder::new("channel", "The channel to listen to").required(true))
-            .default_member_permissions(Permissions::MANAGE_CHANNELS)
-            .build(),
+        CommandBuilder::new(
+            "listen",
+            "Add a channel to the listen set",
+            CommandType::ChatInput,
+        )
+        .option(ChannelBuilder::new("channel", "The channel to listen to").required(true))
+        .default_member_permissions(Permissions::MANAGE_CHANNELS)
+        .build(),
         CommandBuilder::new(
             "unlisten",
             "Remove a channel from the listen set",
@@ -103,7 +109,8 @@ pub async fn handle_interaction(
             if list.is_empty() {
                 "Not listening to any channels".to_string()
             } else {
-                let channel_mentions: Vec<String> = list.iter().map(|id| format!("<#{}>", id)).collect();
+                let channel_mentions: Vec<String> =
+                    list.iter().map(|id| format!("<#{}>", id)).collect();
                 format!("Listening to: {}", channel_mentions.join(", "))
             }
         }

@@ -1,6 +1,8 @@
 //! HTTP-based adapter client
 
-use crate::{Adapter, AdapterError, AdapterInfo, Feature, IncomingEvent, SendRequest, SendResponse};
+use crate::{
+    Adapter, AdapterError, AdapterInfo, Feature, IncomingEvent, SendRequest, SendResponse,
+};
 use async_trait::async_trait;
 
 /// Gateway-side client for external adapters
@@ -30,7 +32,8 @@ impl Adapter for HttpAdapter {
 
     async fn send(&self, request: SendRequest) -> Result<SendResponse, AdapterError> {
         let url = format!("{}/send", self.info.url);
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&request)
             .send()
@@ -40,28 +43,25 @@ impl Adapter for HttpAdapter {
         Ok(response)
     }
 
-    async fn read_history(&self, channel: &str, limit: usize) -> Result<Vec<IncomingEvent>, AdapterError> {
+    async fn read_history(
+        &self,
+        channel: &str,
+        limit: usize,
+    ) -> Result<Vec<IncomingEvent>, AdapterError> {
         if !self.supports(&Feature::ReadHistory) {
             return Err(AdapterError::FeatureNotSupported(Feature::ReadHistory));
         }
         let url = format!("{}/history/{}?limit={}", self.info.url, channel, limit);
-        let response = self.client
-            .get(&url)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let response = self.client.get(&url).send().await?.json().await?;
         Ok(response)
     }
 
     async fn health(&self) -> Result<bool, AdapterError> {
         let url = format!("{}/health", self.info.url);
-        let response: serde_json::Value = self.client
-            .get(&url)
-            .send()
-            .await?
-            .json()
-            .await?;
-        Ok(response.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false))
+        let response: serde_json::Value = self.client.get(&url).send().await?.json().await?;
+        Ok(response
+            .get("healthy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 }

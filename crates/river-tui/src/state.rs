@@ -48,19 +48,23 @@ impl SharedState {
     }
 
     pub fn is_gateway_connected(&self) -> bool {
-        self.gateway_connected.load(std::sync::atomic::Ordering::Relaxed)
+        self.gateway_connected
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_gateway_connected(&self, connected: bool) {
-        self.gateway_connected.store(connected, std::sync::atomic::Ordering::Relaxed);
+        self.gateway_connected
+            .store(connected, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn is_server_healthy(&self) -> bool {
-        self.server_healthy.load(std::sync::atomic::Ordering::Relaxed)
+        self.server_healthy
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_server_healthy(&self, healthy: bool) {
-        self.server_healthy.store(healthy, std::sync::atomic::Ordering::Relaxed);
+        self.server_healthy
+            .store(healthy, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

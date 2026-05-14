@@ -1,10 +1,10 @@
 //! Shell tool
 
-use river_core::RiverError;
 use super::registry::{Tool, ToolResult};
+use river_core::RiverError;
 use serde_json::{json, Value};
-use std::time::Duration;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 /// Default command timeout (2 minutes)
@@ -34,9 +34,13 @@ impl BashTool {
 }
 
 impl Tool for BashTool {
-    fn name(&self) -> &str { "bash" }
+    fn name(&self) -> &str {
+        "bash"
+    }
 
-    fn description(&self) -> &str { "Execute shell command" }
+    fn description(&self) -> &str {
+        "Execute shell command"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -56,14 +60,16 @@ impl Tool for BashTool {
             "BashTool::execute called"
         );
 
-        let command = args.get("command")
+        let command = args
+            .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("BashTool: Missing required parameter 'command'");
                 RiverError::tool("Missing required parameter: command")
             })?;
 
-        let timeout_ms = args.get("timeout")
+        let timeout_ms = args
+            .get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .min(MAX_TIMEOUT_MS);
@@ -153,29 +159,37 @@ impl Tool for BashTool {
             // Canonicalize and verify within workspace
             // For new files, check parent exists and is within workspace
             let check_path = if full_out_path.exists() {
-                full_out_path.canonicalize()
+                full_out_path
+                    .canonicalize()
                     .map_err(|e| RiverError::tool(format!("Invalid output path: {}", e)))?
             } else {
-                let parent = full_out_path.parent()
+                let parent = full_out_path
+                    .parent()
                     .ok_or_else(|| RiverError::tool("Invalid output path: no parent directory"))?;
                 if parent.exists() {
-                    let canonical_parent = parent.canonicalize()
+                    let canonical_parent = parent
+                        .canonicalize()
                         .map_err(|e| RiverError::tool(format!("Invalid output path: {}", e)))?;
                     canonical_parent.join(full_out_path.file_name().unwrap_or_default())
                 } else {
                     // Parent doesn't exist - just use workspace + relative path
-                    self.workspace.canonicalize()
+                    self.workspace
+                        .canonicalize()
                         .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?
                         .join(path)
                 }
             };
 
             // Verify path is within workspace
-            let workspace_canonical = self.workspace.canonicalize()
+            let workspace_canonical = self
+                .workspace
+                .canonicalize()
                 .map_err(|e| RiverError::tool(format!("Workspace error: {}", e)))?;
 
             if !check_path.starts_with(&workspace_canonical) {
-                return Err(RiverError::tool("Output file path escapes workspace boundary"));
+                return Err(RiverError::tool(
+                    "Output file path escapes workspace boundary",
+                ));
             }
 
             std::fs::write(&full_out_path, &combined)
@@ -184,7 +198,7 @@ impl Tool for BashTool {
             if success {
                 Ok(ToolResult::with_file(
                     format!("Output written to {} (exit code: {})", out_path, exit_code),
-                    out_path
+                    out_path,
                 ))
             } else {
                 Err(RiverError::tool(format!(
@@ -203,7 +217,11 @@ impl Tool for BashTool {
                 Err(RiverError::tool(format!(
                     "Command failed (exit code: {}): {}",
                     exit_code,
-                    if combined.is_empty() { "(no output)" } else { &combined }
+                    if combined.is_empty() {
+                        "(no output)"
+                    } else {
+                        &combined
+                    }
                 )))
             }
         }
@@ -241,7 +259,9 @@ mod tests {
         let tool = BashTool::new(dir.path());
 
         let result = tool.execute(json!({"command": "pwd"})).unwrap();
-        assert!(result.output.contains(&dir.path().to_string_lossy().to_string()));
+        assert!(result
+            .output
+            .contains(&dir.path().to_string_lossy().to_string()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -249,10 +269,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tool = BashTool::new(dir.path());
 
-        let result = tool.execute(json!({
-            "command": "echo 'test output'",
-            "output_file": "output.txt"
-        })).unwrap();
+        let result = tool
+            .execute(json!({
+                "command": "echo 'test output'",
+                "output_file": "output.txt"
+            }))
+            .unwrap();
 
         assert!(result.output_file.is_some());
         let content = std::fs::read_to_string(dir.path().join("output.txt")).unwrap();
@@ -284,7 +306,10 @@ mod tests {
         }));
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("escapes workspace"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("escapes workspace"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

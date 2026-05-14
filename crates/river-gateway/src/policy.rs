@@ -161,7 +161,8 @@ impl HealthPolicy {
     pub fn tool_backoff(&self, tool: &str) -> Duration {
         if let Some((count, last_fail)) = self.tool_failures.get(tool) {
             // Decay: if no failures for 1 hour, reset
-            if Utc::now().signed_duration_since(*last_fail).num_seconds() > TOOL_FAILURE_DECAY_SECS {
+            if Utc::now().signed_duration_since(*last_fail).num_seconds() > TOOL_FAILURE_DECAY_SECS
+            {
                 return Duration::ZERO;
             }
             match count {
@@ -184,7 +185,10 @@ impl HealthPolicy {
         if success {
             self.tool_failures.remove(tool);
         } else {
-            let entry = self.tool_failures.entry(tool.to_string()).or_insert((0, Utc::now()));
+            let entry = self
+                .tool_failures
+                .entry(tool.to_string())
+                .or_insert((0, Utc::now()));
             entry.0 += 1;
             entry.1 = Utc::now();
         }
@@ -197,7 +201,10 @@ impl HealthPolicy {
         }
         let base = 60u64; // 1 minute
         let multiplier = 2u64.saturating_pow(self.consecutive_errors.saturating_sub(1));
-        Duration::from_secs(std::cmp::min(base.saturating_mul(multiplier), BACKOFF_CAP_SECS))
+        Duration::from_secs(std::cmp::min(
+            base.saturating_mul(multiplier),
+            BACKOFF_CAP_SECS,
+        ))
     }
 
     /// Called at end of turn with call counts (not binary had_errors)
@@ -420,7 +427,10 @@ impl HealthPolicy {
             // Human deleted the file — allow recovery on next clean turn
             self.status = HealthStatus::Degraded;
             self.attention_created_at = None;
-            tracing::info!(event = "attention.cleared", "ATTENTION.md removed, allowing recovery");
+            tracing::info!(
+                event = "attention.cleared",
+                "ATTENTION.md removed, allowing recovery"
+            );
             return None;
         }
 

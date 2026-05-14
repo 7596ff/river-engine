@@ -16,7 +16,7 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallResponse {
     pub tool_call_id: String,
-    pub result: Result<ToolResult, String>,  // String error for serialization
+    pub result: Result<ToolResult, String>, // String error for serialization
 }
 
 /// Executes tools
@@ -26,9 +26,7 @@ pub struct ToolExecutor {
 
 impl ToolExecutor {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self {
-            registry,
-        }
+        Self { registry }
     }
 
     /// Execute a tool call

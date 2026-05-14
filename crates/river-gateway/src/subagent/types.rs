@@ -94,12 +94,7 @@ pub struct SubagentInfo {
 }
 
 impl SubagentInfo {
-    pub fn new(
-        id: Snowflake,
-        subagent_type: SubagentType,
-        task: String,
-        model: String,
-    ) -> Self {
+    pub fn new(id: Snowflake, subagent_type: SubagentType, task: String, model: String) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -2,7 +2,7 @@
 
 use crate::channels::entry::{HomeChannelEntry, MessageEntry};
 use crate::channels::log::ChannelLog;
-use crate::model::{ChatMessage, ToolCallRequest, FunctionCall};
+use crate::model::{ChatMessage, FunctionCall, ToolCallRequest};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -12,7 +12,9 @@ pub struct HomeContextConfig {
 
 impl Default for HomeContextConfig {
     fn default() -> Self {
-        Self { max_tail_entries: 200 }
+        Self {
+            max_tail_entries: 200,
+        }
     }
 }
 
@@ -40,21 +42,19 @@ pub async fn build_context(
     let mut i = 0;
     while i < tail.len() {
         match &tail[i] {
-            HomeChannelEntry::Message(m) => {
-                match m.role.as_str() {
-                    "agent" => messages.push(ChatMessage::assistant(Some(m.content.clone()), None)),
-                    "user" => {
-                        let tagged = format_user_tag(m);
-                        messages.push(ChatMessage::user(tagged));
-                    }
-                    "bystander" => {
-                        let tagged = format!("[bystander] {}", m.content);
-                        messages.push(ChatMessage::user(tagged));
-                    }
-                    "system" => messages.push(ChatMessage::system(m.content.clone())),
-                    _ => {}
+            HomeChannelEntry::Message(m) => match m.role.as_str() {
+                "agent" => messages.push(ChatMessage::assistant(Some(m.content.clone()), None)),
+                "user" => {
+                    let tagged = format_user_tag(m);
+                    messages.push(ChatMessage::user(tagged));
                 }
-            }
+                "bystander" => {
+                    let tagged = format!("[bystander] {}", m.content);
+                    messages.push(ChatMessage::user(tagged));
+                }
+                "system" => messages.push(ChatMessage::system(m.content.clone())),
+                _ => {}
+            },
             HomeChannelEntry::Tool(t) => {
                 match t.kind.as_str() {
                     "tool_call" => {
@@ -68,9 +68,12 @@ pub async fn build_context(
                                         r#type: "function".to_string(),
                                         function: FunctionCall {
                                             name: tc.tool_name.clone(),
-                                            arguments: tc.arguments
+                                            arguments: tc
+                                                .arguments
                                                 .as_ref()
-                                                .map(|a| serde_json::to_string(a).unwrap_or_default())
+                                                .map(|a| {
+                                                    serde_json::to_string(a).unwrap_or_default()
+                                                })
                                                 .unwrap_or_default(),
                                         },
                                     });
@@ -87,7 +90,8 @@ pub async fn build_context(
                         let content = if let Some(ref result) = t.result {
                             result.clone()
                         } else if let Some(ref file) = t.result_file {
-                            tokio::fs::read_to_string(file).await
+                            tokio::fs::read_to_string(file)
+                                .await
                                 .unwrap_or_else(|_| format!("[tool result file missing: {}]", file))
                         } else {
                             "[empty tool result]".to_string()
@@ -111,9 +115,16 @@ pub async fn build_context(
 /// Format a user message with source adapter/channel tag
 fn format_user_tag(m: &MessageEntry) -> String {
     let author = m.author.as_deref().unwrap_or("unknown");
-    match (&m.source_adapter, &m.source_channel_id, &m.source_channel_name) {
+    match (
+        &m.source_adapter,
+        &m.source_channel_id,
+        &m.source_channel_name,
+    ) {
         (Some(adapter), Some(ch_id), Some(ch_name)) => {
-            format!("[user:{}:{}/{}] {}: {}", adapter, ch_id, ch_name, author, m.content)
+            format!(
+                "[user:{}:{}/{}] {}: {}",
+                adapter, ch_id, ch_name, author, m.content
+            )
         }
         (Some(adapter), Some(ch_id), None) => {
             format!("[user:{}:{}] {}: {}", adapter, ch_id, author, m.content)
@@ -155,19 +166,34 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::user_home(
-                test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
-                "discord".into(), "general".into(), Some("general".into()), None,
+                test_snowflake_seq(1),
+                "cassie".into(),
+                "u1".into(),
+                "hello".into(),
+                "discord".into(),
+                "general".into(),
+                Some("general".into()),
+                None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(2), "hi there!".into(), "home".into(), None,
+                test_snowflake_seq(2),
+                "hi there!".into(),
+                "home".into(),
+                None,
             )),
         ];
         let path = write_entries(&dir, &entries).await;
 
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
-        assert!(msgs[0].content.as_ref().unwrap().contains("[user:discord:general/general]"));
+        assert!(msgs[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("[user:discord:general/general]"));
         assert!(msgs[0].content.as_ref().unwrap().contains("cassie: hello"));
         assert_eq!(msgs[1].role, "assistant");
         assert_eq!(msgs[1].content.as_ref().unwrap(), "hi there!");
@@ -179,24 +205,36 @@ mod tests {
         let entries = vec![
             // Two consecutive tool calls should become one assistant message
             HomeChannelEntry::Tool(ToolEntry::call(
-                test_snowflake_seq(1), "read_file".into(),
-                serde_json::json!({"path": "/tmp/a.txt"}), "tc1".into(),
+                test_snowflake_seq(1),
+                "read_file".into(),
+                serde_json::json!({"path": "/tmp/a.txt"}),
+                "tc1".into(),
             )),
             HomeChannelEntry::Tool(ToolEntry::call(
-                test_snowflake_seq(2), "read_file".into(),
-                serde_json::json!({"path": "/tmp/b.txt"}), "tc2".into(),
+                test_snowflake_seq(2),
+                "read_file".into(),
+                serde_json::json!({"path": "/tmp/b.txt"}),
+                "tc2".into(),
             )),
             // Then two tool results
             HomeChannelEntry::Tool(ToolEntry::result(
-                test_snowflake_seq(3), "read_file".into(), "content a".into(), "tc1".into(),
+                test_snowflake_seq(3),
+                "read_file".into(),
+                "content a".into(),
+                "tc1".into(),
             )),
             HomeChannelEntry::Tool(ToolEntry::result(
-                test_snowflake_seq(4), "read_file".into(), "content b".into(), "tc2".into(),
+                test_snowflake_seq(4),
+                "read_file".into(),
+                "content b".into(),
+                "tc2".into(),
             )),
         ];
         let path = write_entries(&dir, &entries).await;
 
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         // 1 assistant (with 2 tool calls) + 2 tool results = 3 messages
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].role, "assistant");
@@ -217,32 +255,40 @@ mod tests {
     #[tokio::test]
     async fn test_build_context_with_moves() {
         let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(1), "working on it".into(), "home".into(), None,
-            )),
-        ];
+        let entries = vec![HomeChannelEntry::Message(MessageEntry::agent(
+            test_snowflake_seq(1),
+            "working on it".into(),
+            "home".into(),
+            None,
+        ))];
         let path = write_entries(&dir, &entries).await;
 
         let moves = vec!["Turn 1-5: Agent set up the project.".to_string()];
-        let msgs = build_context(&path, &moves, &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &moves, &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "system");
-        assert!(msgs[0].content.as_ref().unwrap().contains("set up the project"));
+        assert!(msgs[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("set up the project"));
         assert_eq!(msgs[1].role, "assistant");
     }
 
     #[tokio::test]
     async fn test_build_context_bystander() {
         let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Message(MessageEntry::bystander(
-                test_snowflake_seq(1), "nice work".into(),
-            )),
-        ];
+        let entries = vec![HomeChannelEntry::Message(MessageEntry::bystander(
+            test_snowflake_seq(1),
+            "nice work".into(),
+        ))];
         let path = write_entries(&dir, &entries).await;
 
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].role, "user");
         assert!(msgs[0].content.as_ref().unwrap().contains("[bystander]"));
@@ -251,14 +297,15 @@ mod tests {
     #[tokio::test]
     async fn test_build_context_heartbeat() {
         let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Heartbeat(HeartbeatEntry::new(
-                test_snowflake_seq(1), "2026-05-12T12:00:00Z".into(),
-            )),
-        ];
+        let entries = vec![HomeChannelEntry::Heartbeat(HeartbeatEntry::new(
+            test_snowflake_seq(1),
+            "2026-05-12T12:00:00Z".into(),
+        ))];
         let path = write_entries(&dir, &entries).await;
 
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].role, "system");
         assert!(msgs[0].content.as_ref().unwrap().contains("[heartbeat]"));
@@ -270,12 +317,17 @@ mod tests {
         let entries = vec![
             HomeChannelEntry::Cursor(CursorEntry::new(test_snowflake_seq(1))),
             HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(2), "hi".into(), "home".into(), None,
+                test_snowflake_seq(2),
+                "hi".into(),
+                "home".into(),
+                None,
             )),
         ];
         let path = write_entries(&dir, &entries).await;
 
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert_eq!(msgs.len(), 1); // cursor skipped
     }
 
@@ -285,12 +337,17 @@ mod tests {
         let mut entries = Vec::new();
         for i in 0..10 {
             entries.push(HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32),
+                format!("msg {}", i),
+                "home".into(),
+                None,
             )));
         }
         let path = write_entries(&dir, &entries).await;
 
-        let config = HomeContextConfig { max_tail_entries: 3 };
+        let config = HomeContextConfig {
+            max_tail_entries: 3,
+        };
         let msgs = build_context(&path, &[], &config).await.unwrap();
         assert_eq!(msgs.len(), 3);
         // Should be the last 3
@@ -303,15 +360,23 @@ mod tests {
     async fn test_build_context_empty_log() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("empty.jsonl");
-        let msgs = build_context(&path, &[], &HomeContextConfig::default()).await.unwrap();
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
         assert!(msgs.is_empty());
     }
 
     #[tokio::test]
     async fn test_format_user_tag_with_all_fields() {
         let m = MessageEntry::user_home(
-            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
-            "discord".into(), "123456".into(), Some("general".into()), None,
+            test_snowflake_seq(1),
+            "cassie".into(),
+            "u1".into(),
+            "hello".into(),
+            "discord".into(),
+            "123456".into(),
+            Some("general".into()),
+            None,
         );
         let tag = format_user_tag(&m);
         assert_eq!(tag, "[user:discord:123456/general] cassie: hello");
@@ -320,8 +385,14 @@ mod tests {
     #[tokio::test]
     async fn test_format_user_tag_without_channel_name() {
         let m = MessageEntry::user_home(
-            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
-            "discord".into(), "123456".into(), None, None,
+            test_snowflake_seq(1),
+            "cassie".into(),
+            "u1".into(),
+            "hello".into(),
+            "discord".into(),
+            "123456".into(),
+            None,
+            None,
         );
         let tag = format_user_tag(&m);
         assert_eq!(tag, "[user:discord:123456] cassie: hello");
@@ -330,8 +401,12 @@ mod tests {
     #[tokio::test]
     async fn test_format_user_tag_no_source() {
         let m = MessageEntry::incoming(
-            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
-            "discord".into(), None,
+            test_snowflake_seq(1),
+            "cassie".into(),
+            "u1".into(),
+            "hello".into(),
+            "discord".into(),
+            None,
         );
         let tag = format_user_tag(&m);
         assert_eq!(tag, "cassie: hello");

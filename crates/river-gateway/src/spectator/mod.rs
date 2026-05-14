@@ -8,10 +8,10 @@ pub mod format;
 pub mod moves;
 pub mod prompt;
 
+use crate::channels::entry::HomeChannelEntry;
 use crate::channels::log::ChannelLog;
 use crate::channels::writer::HomeChannelWriter;
-use crate::channels::entry::HomeChannelEntry;
-use crate::coordinator::{EventBus, CoordinatorEvent, AgentEvent, SpectatorEvent};
+use crate::coordinator::{AgentEvent, CoordinatorEvent, EventBus, SpectatorEvent};
 use crate::model::ModelClient;
 use chrono::Utc;
 use river_core::{SnowflakeGenerator, SnowflakeType};
@@ -96,18 +96,17 @@ impl SpectatorTask {
                 id
             }
             None => {
-                tracing::error!("Spectator identity.md not found at {:?} — cannot start", identity_path);
+                tracing::error!(
+                    "Spectator identity.md not found at {:?} — cannot start",
+                    identity_path
+                );
                 return;
             }
         };
 
         // Load prompts
-        self.on_sweep = prompt::load_prompt(
-            &self.config.spectator_dir.join("on-sweep.md"),
-        );
-        self.on_pressure = prompt::load_prompt(
-            &self.config.spectator_dir.join("on-pressure.md"),
-        );
+        self.on_sweep = prompt::load_prompt(&self.config.spectator_dir.join("on-sweep.md"));
+        self.on_pressure = prompt::load_prompt(&self.config.spectator_dir.join("on-pressure.md"));
 
         tracing::info!(
             sweep = self.on_sweep.is_some(),
@@ -123,7 +122,9 @@ impl SpectatorTask {
                 Ok(CoordinatorEvent::Agent(AgentEvent::TurnComplete { .. })) => {
                     self.maybe_sweep().await;
                 }
-                Ok(CoordinatorEvent::Agent(AgentEvent::ContextPressure { usage_percent, .. })) => {
+                Ok(CoordinatorEvent::Agent(AgentEvent::ContextPressure {
+                    usage_percent, ..
+                })) => {
                     self.handle_pressure(usage_percent).await;
                 }
                 Ok(CoordinatorEvent::Shutdown) => {
@@ -190,16 +191,18 @@ impl SpectatorTask {
         }
 
         // Format with token budget
-        let (transcript, last_idx) = format::format_entries_budgeted(
-            &entries, self.config.sweep_token_budget,
-        );
+        let (transcript, last_idx) =
+            format::format_entries_budgeted(&entries, self.config.sweep_token_budget);
 
         if transcript.is_empty() {
             // All entries were filtered (heartbeats/cursors/spectator messages)
             // Write a no-activity move to advance the cursor past them
             let first_id = entries[0].id();
             let last_id = entries.last().unwrap().id();
-            if let Err(e) = moves::append_move(&self.config.moves_path, first_id, last_id, "[no activity]").await {
+            if let Err(e) =
+                moves::append_move(&self.config.moves_path, first_id, last_id, "[no activity]")
+                    .await
+            {
                 tracing::error!(error = %e, "Failed to write no-activity move");
             }
             self.last_sweep = Some(std::time::Instant::now());
@@ -214,18 +217,23 @@ impl SpectatorTask {
         let has_more = remaining.iter().any(|e| format::format_entry(e).is_some());
 
         // Read recent moves for continuity
-        let recent_moves = moves::read_moves_tail(&self.config.moves_path, self.config.moves_tail).await;
+        let recent_moves =
+            moves::read_moves_tail(&self.config.moves_path, self.config.moves_tail).await;
         let moves_text = if recent_moves.is_empty() {
             "No previous moves.".to_string()
         } else {
-            recent_moves.iter().map(|m| m.summary.as_str()).collect::<Vec<_>>().join("\n\n")
+            recent_moves
+                .iter()
+                .map(|m| m.summary.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
         };
 
         // Build prompt
-        let user_prompt = prompt::substitute(&template, &[
-            ("recent_moves", &moves_text),
-            ("entries", &transcript),
-        ]);
+        let user_prompt = prompt::substitute(
+            &template,
+            &[("recent_moves", &moves_text), ("entries", &transcript)],
+        );
 
         // Call LLM
         let summary = match self.call_model(&user_prompt).await {
@@ -237,7 +245,9 @@ impl SpectatorTask {
         };
 
         // Write move
-        if let Err(e) = moves::append_move(&self.config.moves_path, first_id, last_id, &summary).await {
+        if let Err(e) =
+            moves::append_move(&self.config.moves_path, first_id, last_id, &summary).await
+        {
             tracing::error!(error = %e, "Failed to write move");
             return false;
         }
@@ -245,20 +255,25 @@ impl SpectatorTask {
         // Write observability message to home channel
         let obs_msg = crate::channels::entry::MessageEntry::system_msg(
             self.snowflake_gen.next_id(SnowflakeType::Message),
-            format!("[spectator] move written covering entries {}-{}", first_id, last_id),
+            format!(
+                "[spectator] move written covering entries {}-{}",
+                first_id, last_id
+            ),
         );
-        self.home_channel_writer.write(HomeChannelEntry::Message(obs_msg)).await;
+        self.home_channel_writer
+            .write(HomeChannelEntry::Message(obs_msg))
+            .await;
 
         // Clean up tool result files
-        HomeChannelWriter::cleanup_tool_results(
-            &self.config.home_channel_path, first_id, last_id,
-        ).await;
+        HomeChannelWriter::cleanup_tool_results(&self.config.home_channel_path, first_id, last_id)
+            .await;
 
         // Emit event
-        self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
-            channel: "home".to_string(),
-            timestamp: Utc::now(),
-        }));
+        self.bus
+            .publish(CoordinatorEvent::Spectator(SpectatorEvent::MovesUpdated {
+                channel: "home".to_string(),
+                timestamp: Utc::now(),
+            }));
 
         self.last_sweep = Some(std::time::Instant::now());
 
@@ -279,15 +294,17 @@ impl SpectatorTask {
             None => return,
         };
 
-        let user_prompt = prompt::substitute(template, &[
-            ("usage_percent", &format!("{:.1}", usage_percent)),
-        ]);
+        let user_prompt = prompt::substitute(
+            template,
+            &[("usage_percent", &format!("{:.1}", usage_percent))],
+        );
 
         if let Ok(warning) = self.call_model(&user_prompt).await {
-            self.bus.publish(CoordinatorEvent::Spectator(SpectatorEvent::Warning {
-                content: warning,
-                timestamp: Utc::now(),
-            }));
+            self.bus
+                .publish(CoordinatorEvent::Spectator(SpectatorEvent::Warning {
+                    content: warning,
+                    timestamp: Utc::now(),
+                }));
         }
     }
 

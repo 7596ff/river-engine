@@ -56,7 +56,13 @@ impl ModelClient {
 
         tracing::info!(provider = ?provider, url = %url, model = %model, "ModelClient initialized");
 
-        Ok(Self { url, model, api_key, provider, http })
+        Ok(Self {
+            url,
+            model,
+            api_key,
+            provider,
+            http,
+        })
     }
 
     /// Get the provider type
@@ -106,7 +112,11 @@ impl ModelClient {
         let request = ChatCompletionRequest {
             model: &self.model,
             messages,
-            tools: if tools.is_empty() { None } else { Some(openai_tools) },
+            tools: if tools.is_empty() {
+                None
+            } else {
+                Some(openai_tools)
+            },
         };
 
         tracing::debug!(
@@ -168,14 +178,19 @@ impl ModelClient {
         let (system, anthropic_messages) = self.convert_to_anthropic_messages(messages);
 
         // Convert tools to Anthropic format
-        let anthropic_tools: Vec<AnthropicTool> = tools.iter().map(AnthropicTool::from_schema).collect();
+        let anthropic_tools: Vec<AnthropicTool> =
+            tools.iter().map(AnthropicTool::from_schema).collect();
 
         let request = AnthropicRequest {
             model: &self.model,
             max_tokens: 8192,
             system,
             messages: anthropic_messages,
-            tools: if tools.is_empty() { None } else { Some(anthropic_tools) },
+            tools: if tools.is_empty() {
+                None
+            } else {
+                Some(anthropic_tools)
+            },
         };
 
         tracing::debug!(
@@ -231,12 +246,17 @@ impl ModelClient {
 
     /// Convert internal messages to Anthropic format with cache_control
     /// Adds cache_control to first system prompt and last non-tool message (max 2 breakpoints)
-    fn convert_to_anthropic_messages(&self, messages: &[ChatMessage]) -> (Option<Vec<AnthropicContentBlock>>, Vec<AnthropicMessage>) {
+    fn convert_to_anthropic_messages(
+        &self,
+        messages: &[ChatMessage],
+    ) -> (Option<Vec<AnthropicContentBlock>>, Vec<AnthropicMessage>) {
         let mut system_content: Option<Vec<AnthropicContentBlock>> = None;
         let mut anthropic_messages: Vec<AnthropicMessage> = Vec::new();
 
         // Find the last non-tool message index for caching
-        let last_cacheable_idx = messages.iter().rposition(|m| m.role != "tool" && m.role != "system");
+        let last_cacheable_idx = messages
+            .iter()
+            .rposition(|m| m.role != "tool" && m.role != "system");
 
         for (i, msg) in messages.iter().enumerate() {
             let should_cache = Some(i) == last_cacheable_idx;
@@ -247,7 +267,13 @@ impl ModelClient {
                     let is_first_system = system_content.is_none();
                     let block = AnthropicContentBlock::Text {
                         text: content.clone(),
-                        cache_control: if is_first_system { Some(CacheControl { r#type: "ephemeral" }) } else { None },
+                        cache_control: if is_first_system {
+                            Some(CacheControl {
+                                r#type: "ephemeral",
+                            })
+                        } else {
+                            None
+                        },
                     };
                     system_content.get_or_insert_with(Vec::new).push(block);
                 }
@@ -258,7 +284,13 @@ impl ModelClient {
                     if !text.is_empty() {
                         content.push(AnthropicContentBlock::Text {
                             text: text.clone(),
-                            cache_control: if should_cache { Some(CacheControl { r#type: "ephemeral" }) } else { None },
+                            cache_control: if should_cache {
+                                Some(CacheControl {
+                                    r#type: "ephemeral",
+                                })
+                            } else {
+                                None
+                            },
                         });
                     }
                 }
@@ -299,7 +331,13 @@ impl ModelClient {
                         role: "user".to_string(),
                         content: vec![AnthropicContentBlock::Text {
                             text: text.clone(),
-                            cache_control: if should_cache { Some(CacheControl { r#type: "ephemeral" }) } else { None },
+                            cache_control: if should_cache {
+                                Some(CacheControl {
+                                    r#type: "ephemeral",
+                                })
+                            } else {
+                                None
+                            },
                         }],
                     });
                 }
@@ -501,8 +539,14 @@ struct AnthropicResponse {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicResponseContent {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -563,9 +607,10 @@ pub struct ModelResponse {
 
 impl ModelResponse {
     fn from_openai_completion(resp: ChatCompletionResponse) -> Result<Self, RiverError> {
-        let choice = resp.choices.into_iter().next().ok_or_else(|| {
-            RiverError::model("API response contained no choices".to_string())
-        })?;
+        let choice =
+            resp.choices.into_iter().next().ok_or_else(|| {
+                RiverError::model("API response contained no choices".to_string())
+            })?;
 
         let tool_calls = choice
             .message
@@ -705,7 +750,9 @@ mod tests {
     fn test_anthropic_content_block_serialization() {
         let block = AnthropicContentBlock::Text {
             text: "Hello".to_string(),
-            cache_control: Some(CacheControl { r#type: "ephemeral" }),
+            cache_control: Some(CacheControl {
+                r#type: "ephemeral",
+            }),
         };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"type\":\"text\""));

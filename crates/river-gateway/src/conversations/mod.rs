@@ -95,7 +95,11 @@ impl Message {
 
         // Reactions: merge per-emoji
         for other_reaction in &other.reactions {
-            if let Some(existing) = self.reactions.iter_mut().find(|r| r.emoji == other_reaction.emoji) {
+            if let Some(existing) = self
+                .reactions
+                .iter_mut()
+                .find(|r| r.emoji == other_reaction.emoji)
+            {
                 existing.merge(other_reaction);
             } else {
                 self.reactions.push(other_reaction.clone());
@@ -169,7 +173,8 @@ impl Conversation {
         }
 
         // Emit messages
-        let messages: Vec<String> = self.messages
+        let messages: Vec<String> = self
+            .messages
             .iter()
             .map(|msg| format::format_message(msg))
             .collect();
@@ -252,7 +257,9 @@ impl Conversation {
 
             Ok((Some(meta), body))
         } else {
-            Err(ParseError("Unclosed frontmatter (missing closing ---)".to_string()))
+            Err(ParseError(
+                "Unclosed frontmatter (missing closing ---)".to_string(),
+            ))
         }
     }
 
@@ -271,9 +278,8 @@ impl Conversation {
 
     pub fn load(path: &std::path::Path) -> Result<Self, std::io::Error> {
         let content = std::fs::read_to_string(path)?;
-        Self::from_str(&content).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.0)
-        })
+        Self::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.0))
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
@@ -289,10 +295,28 @@ pub struct ParseError(pub String);
 
 #[derive(Debug, Clone)]
 pub enum WriteOp {
-    Message { path: PathBuf, msg: Message },
-    ReactionAdd { path: PathBuf, message_id: String, emoji: String, user: String },
-    ReactionRemove { path: PathBuf, message_id: String, emoji: String, user: String },
-    ReactionCount { path: PathBuf, message_id: String, emoji: String, count: usize },
+    Message {
+        path: PathBuf,
+        msg: Message,
+    },
+    ReactionAdd {
+        path: PathBuf,
+        message_id: String,
+        emoji: String,
+        user: String,
+    },
+    ReactionRemove {
+        path: PathBuf,
+        message_id: String,
+        emoji: String,
+        user: String,
+    },
+    ReactionCount {
+        path: PathBuf,
+        message_id: String,
+        emoji: String,
+        count: usize,
+    },
 }
 
 impl WriteOp {
@@ -429,7 +453,14 @@ mod tests {
 
         let op1 = WriteOp::Message {
             path: path.clone(),
-            msg: Message::outgoing("1", Author { name: "A".to_string(), id: "1".to_string() }, "test"),
+            msg: Message::outgoing(
+                "1",
+                Author {
+                    name: "A".to_string(),
+                    id: "1".to_string(),
+                },
+                "test",
+            ),
         };
         assert_eq!(op1.path(), &path);
 

@@ -36,7 +36,10 @@ mod tests {
             litellm_model: "claude-sonnet-4-20250514".to_string(),
             api_base: "http://localhost:4000".to_string(),
         };
-        assert_eq!(model.endpoint(), "http://localhost:4000/v1/chat/completions");
+        assert_eq!(
+            model.endpoint(),
+            "http://localhost:4000/v1/chat/completions"
+        );
     }
 
     #[test]

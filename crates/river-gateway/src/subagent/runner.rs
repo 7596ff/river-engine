@@ -8,8 +8,8 @@
 //! - Uses internal queue for parent communication
 
 use super::{InternalQueue, SubagentResult, SubagentStatus, SubagentType};
-use crate::preferences::{Preferences, format_current_time};
 use crate::model::{ChatMessage, ModelClient, ToolCallRequest};
+use crate::preferences::{format_current_time, Preferences};
 use crate::tools::{ToolCall, ToolExecutor, ToolRegistry, ToolSchema};
 use river_core::{RiverError, Snowflake};
 use std::path::PathBuf;
@@ -143,14 +143,13 @@ impl SubagentRunner {
              - You can send messages to parent using internal_send tool\n\
              - When done, simply stop making tool calls\n\n\
              Current time: {}",
-            self.id,
-            self.task,
-            time_str
+            self.id, self.task, time_str
         );
         self.messages.push(ChatMessage::system(system_prompt));
 
         // Add the task as a user message
-        self.messages.push(ChatMessage::user(format!("Execute task: {}", self.task)));
+        self.messages
+            .push(ChatMessage::user(format!("Execute task: {}", self.task)));
 
         // Set available tools
         self.tools = self.tool_executor.schemas();
@@ -183,7 +182,8 @@ impl SubagentRunner {
             } else {
                 Some(response.tool_calls.clone())
             };
-            self.messages.push(ChatMessage::assistant(response.content.clone(), tool_calls));
+            self.messages
+                .push(ChatMessage::assistant(response.content.clone(), tool_calls));
 
             // Save content for result
             if let Some(content) = &response.content {
@@ -242,7 +242,8 @@ impl SubagentRunner {
             } else {
                 Some(response.tool_calls.clone())
             };
-            self.messages.push(ChatMessage::assistant(response.content.clone(), tool_calls));
+            self.messages
+                .push(ChatMessage::assistant(response.content.clone(), tool_calls));
 
             if let Some(content) = &response.content {
                 last_content = content.clone();
@@ -324,7 +325,8 @@ impl SubagentRunner {
                 Ok(r) => r.output,
                 Err(e) => format!("Error: {}", e),
             };
-            self.messages.push(ChatMessage::tool(result.tool_call_id, content));
+            self.messages
+                .push(ChatMessage::tool(result.tool_call_id, content));
         }
 
         Ok(())
@@ -339,9 +341,7 @@ pub fn create_subagent_registry(
     subagent_id: Snowflake,
     queue: Arc<InternalQueue>,
 ) -> ToolRegistry {
-    use crate::tools::{
-        BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool,
-    };
+    use crate::tools::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
 
     let mut registry = ToolRegistry::new();
 
@@ -398,10 +398,7 @@ impl crate::tools::Tool for InternalSendToParentTool {
         })
     }
 
-    fn execute(
-        &self,
-        args: serde_json::Value,
-    ) -> Result<crate::tools::ToolResult, RiverError> {
+    fn execute(&self, args: serde_json::Value) -> Result<crate::tools::ToolResult, RiverError> {
         let content = args
             .get("content")
             .and_then(|v| v.as_str())

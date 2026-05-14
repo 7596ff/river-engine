@@ -27,7 +27,13 @@ fn days_in_month(year: u16, month: u8) -> u8 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if is_leap_year(year) { 29 } else { 28 },
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
         _ => 0, // Invalid month
     }
 }
@@ -54,8 +60,16 @@ impl fmt::Display for AgentBirthError {
         match self {
             AgentBirthError::InvalidYear(y) => write!(f, "invalid year: {} (must be 2000-2999)", y),
             AgentBirthError::InvalidMonth(m) => write!(f, "invalid month: {} (must be 1-12)", m),
-            AgentBirthError::InvalidDay { day, month, max_days } => {
-                write!(f, "invalid day: {} for month {} (must be 1-{})", day, month, max_days)
+            AgentBirthError::InvalidDay {
+                day,
+                month,
+                max_days,
+            } => {
+                write!(
+                    f,
+                    "invalid day: {} for month {} (must be 1-{})",
+                    day, month, max_days
+                )
             }
             AgentBirthError::InvalidHour(h) => write!(f, "invalid hour: {} (must be 0-23)", h),
             AgentBirthError::InvalidMinute(m) => write!(f, "invalid minute: {} (must be 0-59)", m),
@@ -113,7 +127,11 @@ impl AgentBirth {
         // Validate day (calendar-aware)
         let max_days = days_in_month(year, month);
         if day < 1 || day > max_days {
-            return Err(AgentBirthError::InvalidDay { day, month, max_days });
+            return Err(AgentBirthError::InvalidDay {
+                day,
+                month,
+                max_days,
+            });
         }
 
         // Validate hour (0-23)
@@ -195,7 +213,11 @@ impl AgentBirth {
 
         let mut days: i64 = 0;
         for y in 1970..year {
-            days += if (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) { 366 } else { 365 };
+            days += if (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) {
+                366
+            } else {
+                365
+            };
         }
 
         let days_in_months = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -208,8 +230,10 @@ impl AgentBirth {
 
         days += (day - 1) as i64;
 
-        let total_seconds =
-            days as u64 * 86400 + self.hour() as u64 * 3600 + self.minute() as u64 * 60 + self.second() as u64;
+        let total_seconds = days as u64 * 86400
+            + self.hour() as u64 * 3600
+            + self.minute() as u64 * 60
+            + self.second() as u64;
 
         total_seconds * 1_000_000
     }
@@ -311,7 +335,11 @@ mod tests {
         let result = AgentBirth::new(2024, 1, 0, 0, 0, 0);
         assert!(matches!(
             result,
-            Err(AgentBirthError::InvalidDay { day: 0, month: 1, max_days: 31 })
+            Err(AgentBirthError::InvalidDay {
+                day: 0,
+                month: 1,
+                max_days: 31
+            })
         ));
     }
 
@@ -320,7 +348,11 @@ mod tests {
         let result = AgentBirth::new(2024, 1, 32, 0, 0, 0);
         assert!(matches!(
             result,
-            Err(AgentBirthError::InvalidDay { day: 32, month: 1, max_days: 31 })
+            Err(AgentBirthError::InvalidDay {
+                day: 32,
+                month: 1,
+                max_days: 31
+            })
         ));
     }
 
@@ -338,7 +370,11 @@ mod tests {
         let result = AgentBirth::new(2023, 2, 29, 0, 0, 0);
         assert!(matches!(
             result,
-            Err(AgentBirthError::InvalidDay { day: 29, month: 2, max_days: 28 })
+            Err(AgentBirthError::InvalidDay {
+                day: 29,
+                month: 2,
+                max_days: 28
+            })
         ));
     }
 
@@ -355,7 +391,11 @@ mod tests {
         let result = AgentBirth::new(2024, 4, 31, 0, 0, 0);
         assert!(matches!(
             result,
-            Err(AgentBirthError::InvalidDay { day: 31, month: 4, max_days: 30 })
+            Err(AgentBirthError::InvalidDay {
+                day: 31,
+                month: 4,
+                max_days: 30
+            })
         ));
     }
 
@@ -376,7 +416,11 @@ mod tests {
         let result = AgentBirth::new(2100, 2, 29, 0, 0, 0);
         assert!(matches!(
             result,
-            Err(AgentBirthError::InvalidDay { day: 29, month: 2, max_days: 28 })
+            Err(AgentBirthError::InvalidDay {
+                day: 29,
+                month: 2,
+                max_days: 28
+            })
         ));
     }
 

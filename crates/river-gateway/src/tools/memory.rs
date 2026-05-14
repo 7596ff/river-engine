@@ -4,9 +4,9 @@ use river_core::{RiverError, Snowflake, SnowflakeGenerator, SnowflakeType};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
+use super::registry::{Tool, ToolResult};
 use crate::db::{Database, Memory};
 use crate::memory::{EmbeddingClient, MemorySearcher};
-use super::registry::{Tool, ToolResult};
 
 /// Embed tool - create embedding and store in memory
 pub struct EmbedTool {
@@ -80,11 +80,14 @@ impl Tool for EmbedTool {
             embedding,
             source: source.to_string(),
             timestamp,
-            expires_at: None,  // Agent-created embeddings are permanent
+            expires_at: None, // Agent-created embeddings are permanent
             metadata,
         };
 
-        let db = self.db.lock().map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
         db.insert_memory(&memory)?;
 
         Ok(ToolResult {
@@ -160,7 +163,10 @@ impl Tool for MemorySearchTool {
         })?;
 
         // Search
-        let db = self.db.lock().map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
         let results = MemorySearcher::search(&db, &query_embedding, limit, source, after, before)?;
 
         // Format results
@@ -227,7 +233,10 @@ impl Tool for MemoryDeleteTool {
         let id = Snowflake::from_hex(id_str)
             .map_err(|e| RiverError::tool(format!("Invalid snowflake ID: {}", e)))?;
 
-        let db = self.db.lock().map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
         let deleted = db.delete_memory(id)?;
 
         if deleted {
@@ -287,7 +296,10 @@ impl Tool for MemoryDeleteBySourceTool {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.timestamp());
 
-        let db = self.db.lock().map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
         let deleted = db.delete_memories_by_source(source, before)?;
 
         Ok(ToolResult {
@@ -309,7 +321,9 @@ mod tests {
     #[test]
     fn test_embed_tool_schema() {
         let db = Arc::new(Mutex::new(Database::open_in_memory().unwrap()));
-        let client = Arc::new(EmbeddingClient::new(crate::memory::EmbeddingConfig::default()));
+        let client = Arc::new(EmbeddingClient::new(
+            crate::memory::EmbeddingConfig::default(),
+        ));
         let birth = river_core::AgentBirth::new(2026, 3, 16, 12, 0, 0).unwrap();
         let gen = Arc::new(SnowflakeGenerator::new(birth));
 

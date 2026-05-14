@@ -18,7 +18,13 @@ pub struct ChannelLog {
 /// Sanitize a string for use in a filename — alphanumeric, dash, underscore only
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -105,7 +111,9 @@ impl ChannelLog {
 
         while let Some(line) = lines.next_line().await? {
             line_num += 1;
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             match serde_json::from_str::<HomeChannelEntry>(&line) {
                 Ok(entry) => entries.push(entry),
                 Err(e) => {
@@ -118,13 +126,19 @@ impl ChannelLog {
 
     /// Read home channel entries after a given snowflake ID.
     /// Entries are compared lexicographically (bare hex snowflakes sort correctly).
-    pub async fn read_home_since(&self, after_id: river_core::Snowflake) -> std::io::Result<Vec<HomeChannelEntry>> {
+    pub async fn read_home_since(
+        &self,
+        after_id: river_core::Snowflake,
+    ) -> std::io::Result<Vec<HomeChannelEntry>> {
         let all = self.read_all_home().await?;
         Ok(all.into_iter().filter(|e| e.id() > after_id).collect())
     }
 
     /// Read home channel entries after a given snowflake ID, or all entries if None.
-    pub async fn read_home_since_opt(&self, after_id: Option<river_core::Snowflake>) -> std::io::Result<Vec<HomeChannelEntry>> {
+    pub async fn read_home_since_opt(
+        &self,
+        after_id: Option<river_core::Snowflake>,
+    ) -> std::io::Result<Vec<HomeChannelEntry>> {
         match after_id {
             Some(id) => self.read_home_since(id).await,
             None => self.read_all_home().await,
@@ -135,7 +149,10 @@ impl ChannelLog {
     ///
     /// Scans backward for the last role:agent entry, returns everything after it.
     /// If no agent entry exists, returns the last `default_window` entries.
-    pub async fn read_since_cursor(&self, default_window: usize) -> std::io::Result<Vec<ChannelEntry>> {
+    pub async fn read_since_cursor(
+        &self,
+        default_window: usize,
+    ) -> std::io::Result<Vec<ChannelEntry>> {
         let all = self.read_all().await?;
 
         // Find the last agent entry (message or cursor)
@@ -232,23 +249,63 @@ mod tests {
 
         // 3 messages from others, then agent speaks, then 2 more from others
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(1), "alice".into(), "a1".into(), "hi".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(1),
+            "alice".into(),
+            "a1".into(),
+            "hi".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(2), "bob".into(), "b1".into(), "hey".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(2),
+            "bob".into(),
+            "b1".into(),
+            "hey".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(3), "carol".into(), "c1".into(), "sup".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(3),
+            "carol".into(),
+            "c1".into(),
+            "sup".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::agent(
-            test_snowflake_seq(4), "hello everyone".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(4),
+            "hello everyone".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(5), "alice".into(), "a1".into(), "nice".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(5),
+            "alice".into(),
+            "a1".into(),
+            "nice".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(6), "bob".into(), "b1".into(), "cool".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(6),
+            "bob".into(),
+            "b1".into(),
+            "cool".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
 
         let new = log.read_since_cursor(50).await.unwrap();
         assert_eq!(new.len(), 2);
@@ -262,12 +319,28 @@ mod tests {
         let log = test_log(&dir);
 
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(1), "alice".into(), "a1".into(), "hi".into(), "discord".into(), None,
-        )).await.unwrap();
-        log.append_entry(&CursorEntry::new(test_snowflake_seq(2))).await.unwrap();
+            test_snowflake_seq(1),
+            "alice".into(),
+            "a1".into(),
+            "hi".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
+        log.append_entry(&CursorEntry::new(test_snowflake_seq(2)))
+            .await
+            .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(3), "bob".into(), "b1".into(), "hey".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(3),
+            "bob".into(),
+            "b1".into(),
+            "hey".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
 
         let new = log.read_since_cursor(50).await.unwrap();
         assert_eq!(new.len(), 1);
@@ -282,9 +355,15 @@ mod tests {
         // 100 messages, no agent entry
         for i in 0..100 {
             log.append_entry(&MessageEntry::incoming(
-                test_snowflake_seq(i as u32), "user".into(), "u1".into(),
-                format!("msg {}", i), "discord".into(), None,
-            )).await.unwrap();
+                test_snowflake_seq(i as u32),
+                "user".into(),
+                "u1".into(),
+                format!("msg {}", i),
+                "discord".into(),
+                None,
+            ))
+            .await
+            .unwrap();
         }
 
         // Default window of 50
@@ -301,18 +380,35 @@ mod tests {
 
         // Write a valid entry
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(1), "alice".into(), "a1".into(), "hi".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(1),
+            "alice".into(),
+            "a1".into(),
+            "hi".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
 
         // Write a malformed line directly using std::fs (sync, for test setup)
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new().append(true).open(log.path()).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(log.path())
+            .unwrap();
         writeln!(file, "{{this is not valid json").unwrap();
 
         // Write another valid entry
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(3), "bob".into(), "b1".into(), "hey".into(), "discord".into(), None,
-        )).await.unwrap();
+            test_snowflake_seq(3),
+            "bob".into(),
+            "b1".into(),
+            "hey".into(),
+            "discord".into(),
+            None,
+        ))
+        .await
+        .unwrap();
 
         let entries = log.read_all().await.unwrap();
         assert_eq!(entries.len(), 2);
@@ -327,17 +423,35 @@ mod tests {
 
         // Simulate: 3 messages arrive, agent reads (cursor), 2 more arrive
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(1), "alice".into(), "a1".into(),
-            "hello".into(), "discord".into(), Some("d001".into()),
-        )).await.unwrap();
+            test_snowflake_seq(1),
+            "alice".into(),
+            "a1".into(),
+            "hello".into(),
+            "discord".into(),
+            Some("d001".into()),
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(2), "bob".into(), "b1".into(),
-            "hi there".into(), "discord".into(), Some("d002".into()),
-        )).await.unwrap();
+            test_snowflake_seq(2),
+            "bob".into(),
+            "b1".into(),
+            "hi there".into(),
+            "discord".into(),
+            Some("d002".into()),
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(3), "carol".into(), "c1".into(),
-            "hey all".into(), "discord".into(), Some("d003".into()),
-        )).await.unwrap();
+            test_snowflake_seq(3),
+            "carol".into(),
+            "c1".into(),
+            "hey all".into(),
+            "discord".into(),
+            Some("d003".into()),
+        ))
+        .await
+        .unwrap();
 
         // Agent reads — should get all 3 (no prior cursor)
         let new = log.read_since_cursor(50).await.unwrap();
@@ -345,19 +459,35 @@ mod tests {
 
         // Agent speaks — implicit cursor
         log.append_entry(&MessageEntry::agent(
-            test_snowflake_seq(4), "hello everyone!".into(),
-            "discord".into(), Some("d004".into()),
-        )).await.unwrap();
+            test_snowflake_seq(4),
+            "hello everyone!".into(),
+            "discord".into(),
+            Some("d004".into()),
+        ))
+        .await
+        .unwrap();
 
         // Two more messages arrive
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(5), "alice".into(), "a1".into(),
-            "how are you?".into(), "discord".into(), Some("d005".into()),
-        )).await.unwrap();
+            test_snowflake_seq(5),
+            "alice".into(),
+            "a1".into(),
+            "how are you?".into(),
+            "discord".into(),
+            Some("d005".into()),
+        ))
+        .await
+        .unwrap();
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(6), "bob".into(), "b1".into(),
-            "doing great".into(), "discord".into(), Some("d006".into()),
-        )).await.unwrap();
+            test_snowflake_seq(6),
+            "bob".into(),
+            "b1".into(),
+            "doing great".into(),
+            "discord".into(),
+            Some("d006".into()),
+        ))
+        .await
+        .unwrap();
 
         // Agent reads again — should only get the 2 new messages
         let new = log.read_since_cursor(50).await.unwrap();
@@ -366,13 +496,21 @@ mod tests {
         assert_eq!(new[1].id(), test_snowflake_seq(6));
 
         // Agent reads but doesn't speak — writes cursor
-        log.append_entry(&CursorEntry::new(test_snowflake_seq(7))).await.unwrap();
+        log.append_entry(&CursorEntry::new(test_snowflake_seq(7)))
+            .await
+            .unwrap();
 
         // One more message
         log.append_entry(&MessageEntry::incoming(
-            test_snowflake_seq(8), "carol".into(), "c1".into(),
-            "late message".into(), "discord".into(), Some("d008".into()),
-        )).await.unwrap();
+            test_snowflake_seq(8),
+            "carol".into(),
+            "c1".into(),
+            "late message".into(),
+            "discord".into(),
+            Some("d008".into()),
+        ))
+        .await
+        .unwrap();
 
         // Agent reads — should get 1 new message (after cursor)
         let new = log.read_since_cursor(50).await.unwrap();
@@ -390,7 +528,10 @@ mod tests {
 
         for i in 0..5 {
             let entry = HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32),
+                format!("msg {}", i),
+                "home".into(),
+                None,
             ));
             log.append_entry(&entry).await.unwrap();
         }
@@ -413,7 +554,10 @@ mod tests {
 
         for i in 0..3 {
             let entry = HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32),
+                format!("msg {}", i),
+                "home".into(),
+                None,
             ));
             log.append_entry(&entry).await.unwrap();
         }

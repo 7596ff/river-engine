@@ -39,7 +39,8 @@ pub struct LogGuard {
 /// Returns a guard that must be kept alive for the duration of the program.
 pub fn init_logging(config: &LogConfig) -> Result<LogGuard, std::io::Error> {
     // Ensure log directory exists
-    let log_dir = config.log_file
+    let log_dir = config
+        .log_file
         .as_ref()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
@@ -52,8 +53,8 @@ pub fn init_logging(config: &LogConfig) -> Result<LogGuard, std::io::Error> {
     let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
 
     // Build filter from config or env
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     // File layer: always JSON
     let file_layer = fmt::layer()
@@ -67,9 +68,7 @@ pub fn init_logging(config: &LogConfig) -> Result<LogGuard, std::io::Error> {
 
     if use_json_stdout {
         let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
-        let stdout_layer = fmt::layer()
-            .json()
-            .with_writer(stdout_writer);
+        let stdout_layer = fmt::layer().json().with_writer(stdout_writer);
 
         tracing_subscriber::registry()
             .with(env_filter)
@@ -82,8 +81,7 @@ pub fn init_logging(config: &LogConfig) -> Result<LogGuard, std::io::Error> {
             _stdout_guard: Some(stdout_guard),
         })
     } else {
-        let stdout_layer = fmt::layer()
-            .pretty();
+        let stdout_layer = fmt::layer().pretty();
 
         tracing_subscriber::registry()
             .with(env_filter)

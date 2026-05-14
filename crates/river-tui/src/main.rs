@@ -30,9 +30,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn HTTP server — bind to configured port (0 = OS-assigned)
     let http_state = state.clone();
-    let listener = tokio::net::TcpListener::bind(
-        format!("127.0.0.1:{}", config.listen_port)
-    ).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.listen_port)).await?;
     let actual_port = listener.local_addr()?.port();
     tracing::info!("HTTP server listening on 127.0.0.1:{}", actual_port);
 
@@ -55,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to register with gateway (attempt {}): {}", attempt, e);
+                    tracing::warn!(
+                        "Failed to register with gateway (attempt {}): {}",
+                        attempt,
+                        e
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64)).await;
                 }
             }

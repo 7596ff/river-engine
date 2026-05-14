@@ -1,8 +1,8 @@
-use clap::{Parser, Subcommand};
-use river_gateway::server::{run, ServerConfig};
-use river_gateway::db::{init_db, Memory};
-use river_core::{AgentBirth, SnowflakeGenerator, SnowflakeType};
 use chrono::{Datelike, Timelike};
+use clap::{Parser, Subcommand};
+use river_core::{AgentBirth, SnowflakeGenerator, SnowflakeType};
+use river_gateway::db::{init_db, Memory};
+use river_gateway::server::{run, ServerConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -153,7 +153,10 @@ fn birth_agent(data_dir: PathBuf, name: String) -> anyhow::Result<()> {
         source: "system:birth".to_string(),
         timestamp: now.timestamp(),
         expires_at: None,
-        metadata: Some(format!("{{\"birth\":\"{}\",\"name\":\"{}\"}}", agent_birth, name)),
+        metadata: Some(format!(
+            "{{\"birth\":\"{}\",\"name\":\"{}\"}}",
+            agent_birth, name
+        )),
     };
 
     db.insert_memory(&birth_memory)?;
@@ -176,14 +179,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Normal startup - requires workspace and data_dir
-    let workspace = args.workspace.ok_or_else(|| {
-        anyhow::anyhow!("--workspace is required for normal operation")
-    })?;
-    let data_dir = args.data_dir.ok_or_else(|| {
-        anyhow::anyhow!("--data-dir is required for normal operation")
-    })?;
+    let workspace = args
+        .workspace
+        .ok_or_else(|| anyhow::anyhow!("--workspace is required for normal operation"))?;
+    let data_dir = args
+        .data_dir
+        .ok_or_else(|| anyhow::anyhow!("--data-dir is required for normal operation"))?;
 
-    use river_gateway::logging::{LogConfig, init_logging};
+    use river_gateway::logging::{init_logging, LogConfig};
 
     let log_config = LogConfig {
         log_dir: args.log_dir.unwrap_or_else(|| data_dir.join("logs")),
@@ -226,13 +229,14 @@ async fn main() -> anyhow::Result<()> {
         // Find where outbound URL ends and read URL begins (if present)
         // Look for the pattern where we have another http:// or https://
         let rest = &adapter_str[name.len() + 1..]; // Skip "name:"
-        let (outbound_url, read_url) = if let Some(idx) = rest.find(":http://").or_else(|| rest.find(":https://")) {
-            let outbound = rest[..idx].to_string();
-            let read = rest[idx + 1..].to_string();
-            (outbound, Some(read))
-        } else {
-            (rest.to_string(), None)
-        };
+        let (outbound_url, read_url) =
+            if let Some(idx) = rest.find(":http://").or_else(|| rest.find(":https://")) {
+                let outbound = rest[..idx].to_string();
+                let read = rest[idx + 1..].to_string();
+                (outbound, Some(read))
+            } else {
+                (rest.to_string(), None)
+            };
 
         tracing::info!(
             name = %name,

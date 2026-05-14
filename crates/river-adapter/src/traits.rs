@@ -15,7 +15,11 @@ pub trait Adapter: Send + Sync {
     async fn send(&self, request: SendRequest) -> Result<SendResponse, AdapterError>;
 
     /// Read channel history (if supported)
-    async fn read_history(&self, channel: &str, limit: usize) -> Result<Vec<IncomingEvent>, AdapterError>;
+    async fn read_history(
+        &self,
+        channel: &str,
+        limit: usize,
+    ) -> Result<Vec<IncomingEvent>, AdapterError>;
 
     /// Health check
     async fn health(&self) -> Result<bool, AdapterError>;

@@ -18,8 +18,7 @@ impl Database {
 
     /// Open in-memory database (for testing)
     pub fn open_in_memory() -> RiverResult<Self> {
-        let conn =
-            Connection::open_in_memory().map_err(|e| RiverError::database(e.to_string()))?;
+        let conn = Connection::open_in_memory().map_err(|e| RiverError::database(e.to_string()))?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)

@@ -7,7 +7,7 @@ use std::process::Command;
 pub struct GpuInfo {
     pub id: u32,
     pub name: String,
-    pub total_vram: u64,  // bytes
+    pub total_vram: u64, // bytes
 }
 
 /// Discover available GPUs
@@ -25,7 +25,10 @@ pub fn detect_gpus() -> Vec<GpuInfo> {
 
 fn detect_nvidia_gpus() -> Option<Vec<GpuInfo>> {
     let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=index,name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -44,7 +47,11 @@ fn detect_nvidia_gpus() -> Option<Vec<GpuInfo>> {
                 // nvidia-smi reports in MiB
                 let vram_mib: u64 = parts[2].trim().parse().ok()?;
                 let total_vram = vram_mib * 1024 * 1024;
-                Some(GpuInfo { id, name, total_vram })
+                Some(GpuInfo {
+                    id,
+                    name,
+                    total_vram,
+                })
             } else {
                 None
             }

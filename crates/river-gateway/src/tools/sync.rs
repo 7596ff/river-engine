@@ -68,9 +68,11 @@ impl Tool for SyncConversationTool {
     }
 
     fn execute(&self, args: Value) -> Result<ToolResult, RiverError> {
-        let adapter = args["adapter"].as_str()
+        let adapter = args["adapter"]
+            .as_str()
             .ok_or_else(|| RiverError::tool("Missing 'adapter' parameter"))?;
-        let channel = args["channel"].as_str()
+        let channel = args["channel"]
+            .as_str()
             .ok_or_else(|| RiverError::tool("Missing 'channel' parameter"))?;
         let limit = args["limit"].as_u64().unwrap_or(50);
         let before = args["before"].as_str().map(String::from);
@@ -88,10 +90,13 @@ impl Tool for SyncConversationTool {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = registry.read().await;
-                let config = registry.get(&adapter)
+                let config = registry
+                    .get(&adapter)
                     .ok_or_else(|| RiverError::tool(format!("Unknown adapter: {}", adapter)))?;
 
-                let read_url = config.read_url.as_ref()
+                let read_url = config
+                    .read_url
+                    .as_ref()
                     .ok_or_else(|| RiverError::tool("Adapter doesn't support reading"))?;
 
                 // Build URL with params
@@ -103,7 +108,10 @@ impl Tool for SyncConversationTool {
                 debug!(url = %url, "Fetching messages from adapter");
 
                 // Fetch messages
-                let response = http_client.get(&url).send().await
+                let response = http_client
+                    .get(&url)
+                    .send()
+                    .await
                     .map_err(|e| RiverError::tool(format!("HTTP error: {}", e)))?;
 
                 if !response.status().is_success() {
@@ -111,7 +119,9 @@ impl Tool for SyncConversationTool {
                     return Err(RiverError::tool(format!("Adapter error: {}", body)));
                 }
 
-                let messages: Vec<FetchedMessage> = response.json().await
+                let messages: Vec<FetchedMessage> = response
+                    .json()
+                    .await
                     .map_err(|e| RiverError::tool(format!("Parse error: {}", e)))?;
 
                 // Write messages to channel log
@@ -147,12 +157,19 @@ impl Tool for SyncConversationTool {
                     processed_count += 1;
                 }
 
-                info!(fetched = messages.len(), processed = processed_count, "Sync complete");
+                info!(
+                    fetched = messages.len(),
+                    processed = processed_count,
+                    "Sync complete"
+                );
 
-                Ok(ToolResult::success(serde_json::json!({
-                    "fetched": messages.len(),
-                    "processed": processed_count,
-                }).to_string()))
+                Ok(ToolResult::success(
+                    serde_json::json!({
+                        "fetched": messages.len(),
+                        "processed": processed_count,
+                    })
+                    .to_string(),
+                ))
             })
         })
     }

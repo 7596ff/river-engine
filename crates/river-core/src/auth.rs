@@ -77,7 +77,10 @@ mod tests {
 
     #[test]
     fn test_validate_bearer_case_sensitive_prefix() {
-        assert!(!validate_bearer("bearer my-secret-token", "my-secret-token"));
+        assert!(!validate_bearer(
+            "bearer my-secret-token",
+            "my-secret-token"
+        ));
     }
 
     #[test]

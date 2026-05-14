@@ -1,6 +1,6 @@
 //! Message CRUD operations
 
-use river_core::{Snowflake, RiverError, RiverResult};
+use river_core::{RiverError, RiverResult, Snowflake};
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 
@@ -42,11 +42,11 @@ pub struct Message {
     pub session_id: String,
     pub role: MessageRole,
     pub content: Option<String>,
-    pub tool_calls: Option<String>,  // JSON
+    pub tool_calls: Option<String>, // JSON
     pub tool_call_id: Option<String>,
     pub name: Option<String>,
     pub created_at: i64,
-    pub metadata: Option<String>,    // JSON
+    pub metadata: Option<String>, // JSON
     pub turn_number: u64,
 }
 
@@ -57,7 +57,10 @@ impl Message {
             rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Blob,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid snowflake ID length"))
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid snowflake ID length",
+                )),
             )
         })?;
         let id = Snowflake::from_bytes(id_array);
@@ -66,7 +69,10 @@ impl Message {
         let role = match MessageRole::from_str(&role_str) {
             Some(r) => r,
             None => {
-                tracing::warn!("Invalid message role in database: {}, defaulting to User", role_str);
+                tracing::warn!(
+                    "Invalid message role in database: {}, defaulting to User",
+                    role_str
+                );
                 MessageRole::User
             }
         };
@@ -109,7 +115,11 @@ impl Database {
     }
 
     /// Get messages for a session, ordered by creation time
-    pub fn get_session_messages(&self, session_id: &str, limit: usize) -> RiverResult<Vec<Message>> {
+    pub fn get_session_messages(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
              FROM messages
@@ -118,7 +128,8 @@ impl Database {
              LIMIT ?"
         ).map_err(|e| RiverError::database(e.to_string()))?;
 
-        let messages = stmt.query_map(params![session_id, limit as i64], Message::from_row)
+        let messages = stmt
+            .query_map(params![session_id, limit as i64], Message::from_row)
             .map_err(|e| RiverError::database(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| RiverError::database(e.to_string()))?;
@@ -136,7 +147,8 @@ impl Database {
              LIMIT ?"
         ).map_err(|e| RiverError::database(e.to_string()))?;
 
-        let messages = stmt.query_map(params![limit as i64], Message::from_row)
+        let messages = stmt
+            .query_map(params![limit as i64], Message::from_row)
             .map_err(|e| RiverError::database(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| RiverError::database(e.to_string()))?;
@@ -145,7 +157,11 @@ impl Database {
     }
 
     /// Get messages with turn_number > the given turn, ordered chronologically
-    pub fn get_messages_above_turn(&self, session_id: &str, turn: u64) -> RiverResult<Vec<Message>> {
+    pub fn get_messages_above_turn(
+        &self,
+        session_id: &str,
+        turn: u64,
+    ) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
              FROM messages
@@ -153,7 +169,8 @@ impl Database {
              ORDER BY created_at ASC"
         ).map_err(|e| RiverError::database(e.to_string()))?;
 
-        let messages = stmt.query_map(params![session_id, turn as i64], Message::from_row)
+        let messages = stmt
+            .query_map(params![session_id, turn as i64], Message::from_row)
             .map_err(|e| RiverError::database(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| RiverError::database(e.to_string()))?;
@@ -162,7 +179,11 @@ impl Database {
     }
 
     /// Get messages for specific turn numbers, ordered chronologically
-    pub fn get_messages_for_turns(&self, session_id: &str, turns: &[u64]) -> RiverResult<Vec<Message>> {
+    pub fn get_messages_for_turns(
+        &self,
+        session_id: &str,
+        turns: &[u64],
+    ) -> RiverResult<Vec<Message>> {
         if turns.is_empty() {
             return Ok(Vec::new());
         }
@@ -176,7 +197,9 @@ impl Database {
             placeholders.join(", ")
         );
 
-        let mut stmt = self.conn().prepare(&sql)
+        let mut stmt = self
+            .conn()
+            .prepare(&sql)
             .map_err(|e| RiverError::database(e.to_string()))?;
 
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -184,9 +207,11 @@ impl Database {
         for t in turns {
             params_vec.push(Box::new(*t as i64));
         }
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
 
-        let messages = stmt.query_map(params_refs.as_slice(), Message::from_row)
+        let messages = stmt
+            .query_map(params_refs.as_slice(), Message::from_row)
             .map_err(|e| RiverError::database(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| RiverError::database(e.to_string()))?;
@@ -195,26 +220,40 @@ impl Database {
     }
 
     /// Get distinct turn numbers below a threshold, ordered newest first
-    pub fn get_distinct_turns_below(&self, session_id: &str, below_turn: u64, limit: usize) -> RiverResult<Vec<u64>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT DISTINCT turn_number FROM messages
+    pub fn get_distinct_turns_below(
+        &self,
+        session_id: &str,
+        below_turn: u64,
+        limit: usize,
+    ) -> RiverResult<Vec<u64>> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT DISTINCT turn_number FROM messages
              WHERE session_id = ? AND turn_number < ?
              ORDER BY turn_number DESC
-             LIMIT ?"
-        ).map_err(|e| RiverError::database(e.to_string()))?;
+             LIMIT ?",
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?;
 
-        let turns = stmt.query_map(params![session_id, below_turn as i64, limit as i64], |row| {
-            row.get::<_, i64>(0).map(|n| n as u64)
-        })
-        .map_err(|e| RiverError::database(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| RiverError::database(e.to_string()))?;
+        let turns = stmt
+            .query_map(
+                params![session_id, below_turn as i64, limit as i64],
+                |row| row.get::<_, i64>(0).map(|n| n as u64),
+            )
+            .map_err(|e| RiverError::database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| RiverError::database(e.to_string()))?;
 
         Ok(turns)
     }
 
     /// Get messages for a specific turn in a session
-    pub fn get_turn_messages(&self, session_id: &str, turn_number: u64) -> RiverResult<Vec<Message>> {
+    pub fn get_turn_messages(
+        &self,
+        session_id: &str,
+        turn_number: u64,
+    ) -> RiverResult<Vec<Message>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, session_id, role, content, tool_calls, tool_call_id, name, created_at, metadata, turn_number
              FROM messages
@@ -222,7 +261,8 @@ impl Database {
              ORDER BY created_at"
         ).map_err(|e| RiverError::database(e.to_string()))?;
 
-        let messages = stmt.query_map(params![session_id, turn_number as i64], Message::from_row)
+        let messages = stmt
+            .query_map(params![session_id, turn_number as i64], Message::from_row)
             .map_err(|e| RiverError::database(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| RiverError::database(e.to_string()))?;
@@ -408,7 +448,9 @@ mod tests {
                 session_id: "sess".into(),
                 role: MessageRole::User,
                 content: Some(format!("Turn 5 msg {}", i)),
-                tool_calls: None, tool_call_id: None, name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
                 created_at: 500 + i,
                 metadata: None,
                 turn_number: 5,
@@ -421,7 +463,9 @@ mod tests {
                 session_id: "sess".into(),
                 role: MessageRole::User,
                 content: Some(format!("Turn 6 msg {}", i)),
-                tool_calls: None, tool_call_id: None, name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
                 created_at: 600 + i,
                 metadata: None,
                 turn_number: 6,
@@ -451,7 +495,9 @@ mod tests {
                 session_id: "sess".into(),
                 role: MessageRole::User,
                 content: Some(format!("Turn {}", turn)),
-                tool_calls: None, tool_call_id: None, name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
                 created_at: turn as i64 * 100,
                 metadata: None,
                 turn_number: turn,

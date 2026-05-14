@@ -75,7 +75,6 @@ mod tests {
         Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
     }
 
-
     #[test]
     fn test_new_queue_is_empty() {
         let queue = MessageQueue::new();

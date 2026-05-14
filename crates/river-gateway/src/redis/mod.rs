@@ -4,4 +4,4 @@ mod client;
 mod medium_term;
 
 pub use client::{RedisClient, RedisConfig};
-pub use medium_term::{MediumTermSetTool, MediumTermGetTool};
+pub use medium_term::{MediumTermGetTool, MediumTermSetTool};

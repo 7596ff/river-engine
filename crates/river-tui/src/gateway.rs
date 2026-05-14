@@ -46,7 +46,11 @@ impl GatewayClient {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client, base_url, auth_token }
+        Self {
+            client,
+            base_url,
+            auth_token,
+        }
     }
 
     /// Send a user message to the gateway
@@ -96,7 +100,8 @@ impl GatewayClient {
             metadata: serde_json::json!({}),
         };
 
-        let mut req = self.client
+        let mut req = self
+            .client
             .post(&url)
             .json(&RegisterRequest { adapter: info });
 
@@ -115,7 +120,9 @@ impl GatewayClient {
         if response.accepted {
             Ok(())
         } else {
-            Err(response.error.unwrap_or_else(|| "registration rejected".into()))
+            Err(response
+                .error
+                .unwrap_or_else(|| "registration rejected".into()))
         }
     }
 }

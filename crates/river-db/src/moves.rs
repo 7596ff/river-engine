@@ -1,6 +1,6 @@
 //! Move CRUD operations
 
-use river_core::{Snowflake, RiverError, RiverResult};
+use river_core::{RiverError, RiverResult, Snowflake};
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 

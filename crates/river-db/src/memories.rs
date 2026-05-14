@@ -98,8 +98,13 @@ impl Database {
             .query(params![id.to_bytes().to_vec()])
             .map_err(|e| RiverError::database(e.to_string()))?;
 
-        match rows.next().map_err(|e| RiverError::database(e.to_string()))? {
-            Some(row) => Ok(Some(Memory::from_row(row).map_err(|e| RiverError::database(e.to_string()))?)),
+        match rows
+            .next()
+            .map_err(|e| RiverError::database(e.to_string()))?
+        {
+            Some(row) => Ok(Some(
+                Memory::from_row(row).map_err(|e| RiverError::database(e.to_string()))?,
+            )),
             None => Ok(None),
         }
     }
@@ -117,7 +122,11 @@ impl Database {
     }
 
     /// Delete memories by source, optionally before a timestamp
-    pub fn delete_memories_by_source(&self, source: &str, before: Option<i64>) -> RiverResult<usize> {
+    pub fn delete_memories_by_source(
+        &self,
+        source: &str,
+        before: Option<i64>,
+    ) -> RiverResult<usize> {
         let rows = match before {
             Some(ts) => self
                 .conn()
@@ -155,7 +164,9 @@ impl Database {
     pub fn get_all_memory_embeddings(&self) -> RiverResult<Vec<(Snowflake, Vec<f32>)>> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT id, embedding FROM memories WHERE expires_at IS NULL OR expires_at > ?")
+            .prepare(
+                "SELECT id, embedding FROM memories WHERE expires_at IS NULL OR expires_at > ?",
+            )
             .map_err(|e| RiverError::database(e.to_string()))?;
 
         let now = std::time::SystemTime::now()
@@ -177,7 +188,10 @@ impl Database {
                     )
                 })?;
                 let embedding_bytes: Vec<u8> = row.get(1)?;
-                Ok((Snowflake::from_bytes(id_array), bytes_to_f32_vec(&embedding_bytes)))
+                Ok((
+                    Snowflake::from_bytes(id_array),
+                    bytes_to_f32_vec(&embedding_bytes),
+                ))
             })
             .map_err(|e| RiverError::database(e.to_string()))?;
 
@@ -200,8 +214,13 @@ impl Database {
             .query([])
             .map_err(|e| RiverError::database(e.to_string()))?;
 
-        match rows.next().map_err(|e| RiverError::database(e.to_string()))? {
-            Some(row) => Ok(Some(Memory::from_row(row).map_err(|e| RiverError::database(e.to_string()))?)),
+        match rows
+            .next()
+            .map_err(|e| RiverError::database(e.to_string()))?
+        {
+            Some(row) => Ok(Some(
+                Memory::from_row(row).map_err(|e| RiverError::database(e.to_string()))?,
+            )),
             None => Ok(None),
         }
     }
@@ -225,10 +244,8 @@ impl Database {
             .map_err(|e| RiverError::database(e.to_string()))?;
 
         let params: Vec<Vec<u8>> = ids.iter().map(|id| id.to_bytes().to_vec()).collect();
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params
-            .iter()
-            .map(|p| p as &dyn rusqlite::ToSql)
-            .collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
 
         let rows = stmt
             .query_map(params_refs.as_slice(), Memory::from_row)

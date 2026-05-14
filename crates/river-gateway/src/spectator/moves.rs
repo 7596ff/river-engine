@@ -55,7 +55,8 @@ pub async fn read_moves(path: &Path) -> Vec<MoveEntry> {
         Err(_) => return Vec::new(),
     };
 
-    content.lines()
+    content
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<MoveEntry>(l).ok())
         .collect()
@@ -96,8 +97,22 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("moves.jsonl");
 
-        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "The agent set up the project.").await.unwrap();
-        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "The user asked about auth.").await.unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(1),
+            test_snowflake_seq(2),
+            "The agent set up the project.",
+        )
+        .await
+        .unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(3),
+            test_snowflake_seq(4),
+            "The user asked about auth.",
+        )
+        .await
+        .unwrap();
 
         let moves = read_moves(&path).await;
         assert_eq!(moves.len(), 2);
@@ -120,7 +135,14 @@ mod tests {
         let path = dir.path().join("moves.jsonl");
 
         for i in 0..20 {
-            append_move(&path, test_snowflake_seq(i * 2), test_snowflake_seq(i * 2 + 1), &format!("Move {}", i)).await.unwrap();
+            append_move(
+                &path,
+                test_snowflake_seq(i * 2),
+                test_snowflake_seq(i * 2 + 1),
+                &format!("Move {}", i),
+            )
+            .await
+            .unwrap();
         }
 
         let tail = read_moves_tail(&path, 5).await;
@@ -136,10 +158,24 @@ mod tests {
 
         assert_eq!(read_cursor(&path).await, None);
 
-        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "First move.").await.unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(1),
+            test_snowflake_seq(2),
+            "First move.",
+        )
+        .await
+        .unwrap();
         assert_eq!(read_cursor(&path).await, Some(test_snowflake_seq(2)));
 
-        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "Second move.").await.unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(3),
+            test_snowflake_seq(4),
+            "Second move.",
+        )
+        .await
+        .unwrap();
         assert_eq!(read_cursor(&path).await, Some(test_snowflake_seq(4)));
     }
 
@@ -148,11 +184,29 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("moves.jsonl");
 
-        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "Good move.").await.unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(1),
+            test_snowflake_seq(2),
+            "Good move.",
+        )
+        .await
+        .unwrap();
         // Write a malformed line
-        let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.unwrap();
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
         f.write_all(b"{bad json\n").await.unwrap();
-        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "Another good move.").await.unwrap();
+        append_move(
+            &path,
+            test_snowflake_seq(3),
+            test_snowflake_seq(4),
+            "Another good move.",
+        )
+        .await
+        .unwrap();
 
         let moves = read_moves(&path).await;
         assert_eq!(moves.len(), 2); // malformed line skipped

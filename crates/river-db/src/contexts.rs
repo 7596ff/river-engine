@@ -89,8 +89,13 @@ impl Database {
             .query([])
             .map_err(|e| RiverError::database(e.to_string()))?;
 
-        match rows.next().map_err(|e| RiverError::database(e.to_string()))? {
-            Some(row) => Ok(Some(Context::from_row(row).map_err(|e| RiverError::database(e.to_string()))?)),
+        match rows
+            .next()
+            .map_err(|e| RiverError::database(e.to_string()))?
+        {
+            Some(row) => Ok(Some(
+                Context::from_row(row).map_err(|e| RiverError::database(e.to_string()))?,
+            )),
             None => Ok(None),
         }
     }

@@ -11,20 +11,24 @@ use crate::channels::entry::{HomeChannelEntry, MessageEntry};
 pub fn format_entry(entry: &HomeChannelEntry) -> Option<String> {
     match entry {
         HomeChannelEntry::Message(m) => format_message(m),
-        HomeChannelEntry::Tool(t) => {
-            match t.kind.as_str() {
-                "tool_call" => Some(format!("[{}] tool_call: {}", t.id, t.tool_name)),
-                "tool_result" => {
-                    if let Some(ref file_path) = t.result_file {
-                        Some(format!("[{}] tool_result({}): [file: {}]", t.id, t.tool_name, file_path))
-                    } else {
-                        let byte_count = t.result.as_ref().map_or(0, |r| r.len());
-                        Some(format!("[{}] tool_result({}): [{} bytes]", t.id, t.tool_name, byte_count))
-                    }
+        HomeChannelEntry::Tool(t) => match t.kind.as_str() {
+            "tool_call" => Some(format!("[{}] tool_call: {}", t.id, t.tool_name)),
+            "tool_result" => {
+                if let Some(ref file_path) = t.result_file {
+                    Some(format!(
+                        "[{}] tool_result({}): [file: {}]",
+                        t.id, t.tool_name, file_path
+                    ))
+                } else {
+                    let byte_count = t.result.as_ref().map_or(0, |r| r.len());
+                    Some(format!(
+                        "[{}] tool_result({}): [{} bytes]",
+                        t.id, t.tool_name, byte_count
+                    ))
                 }
-                _ => None,
             }
-        }
+            _ => None,
+        },
         HomeChannelEntry::Heartbeat(_) => None,
         HomeChannelEntry::Cursor(_) => None,
     }
@@ -41,12 +45,22 @@ fn format_message(m: &MessageEntry) -> Option<String> {
     Some(match m.role.as_str() {
         "user" => {
             let author = m.author.as_deref().unwrap_or("unknown");
-            match (&m.source_adapter, &m.source_channel_id, &m.source_channel_name) {
+            match (
+                &m.source_adapter,
+                &m.source_channel_id,
+                &m.source_channel_name,
+            ) {
                 (Some(adapter), Some(ch_id), Some(ch_name)) => {
-                    format!("[{}] user:{}:{}/{} {}: {}", m.id, adapter, ch_id, ch_name, author, m.content)
+                    format!(
+                        "[{}] user:{}:{}/{} {}: {}",
+                        m.id, adapter, ch_id, ch_name, author, m.content
+                    )
                 }
                 (Some(adapter), Some(ch_id), None) => {
-                    format!("[{}] user:{}:{} {}: {}", m.id, adapter, ch_id, author, m.content)
+                    format!(
+                        "[{}] user:{}:{} {}: {}",
+                        m.id, adapter, ch_id, author, m.content
+                    )
                 }
                 _ => format!("[{}] user: {}: {}", m.id, author, m.content),
             }
@@ -60,7 +74,9 @@ fn format_message(m: &MessageEntry) -> Option<String> {
 
 /// Estimate tokens for a string (same heuristic as the rest of the codebase)
 fn estimate_tokens(s: &str) -> usize {
-    if s.is_empty() { return 0; }
+    if s.is_empty() {
+        return 0;
+    }
     (s.len() + 3) / 4
 }
 
@@ -69,7 +85,10 @@ fn estimate_tokens(s: &str) -> usize {
 /// Returns (transcript, last_index) where last_index is the index of the
 /// last entry included in the transcript. Entries are included oldest-first
 /// until the budget is reached. At least one entry is always included.
-pub fn format_entries_budgeted(entries: &[HomeChannelEntry], token_budget: usize) -> (String, usize) {
+pub fn format_entries_budgeted(
+    entries: &[HomeChannelEntry],
+    token_budget: usize,
+) -> (String, usize) {
     let mut lines = Vec::new();
     let mut tokens_used = 0;
     let mut last_idx = 0;
@@ -115,18 +134,33 @@ mod tests {
     #[test]
     fn test_format_user_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::user_home(
-            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello world".into(),
-            "discord".into(), "general".into(), Some("general".into()), None,
+            test_snowflake_seq(1),
+            "cassie".into(),
+            "u1".into(),
+            "hello world".into(),
+            "discord".into(),
+            "general".into(),
+            Some("general".into()),
+            None,
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(1);
-        assert_eq!(result, Some(format!("[{}] user:discord:general/general cassie: hello world", sf)));
+        assert_eq!(
+            result,
+            Some(format!(
+                "[{}] user:discord:general/general cassie: hello world",
+                sf
+            ))
+        );
     }
 
     #[test]
     fn test_format_agent_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::agent(
-            test_snowflake_seq(2), "hi there!".into(), "home".into(), None,
+            test_snowflake_seq(2),
+            "hi there!".into(),
+            "home".into(),
+            None,
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(2);
@@ -136,27 +170,36 @@ mod tests {
     #[test]
     fn test_format_bystander_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::bystander(
-            test_snowflake_seq(3), "interesting work".into(),
+            test_snowflake_seq(3),
+            "interesting work".into(),
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(3);
-        assert_eq!(result, Some(format!("[{}] bystander: interesting work", sf)));
+        assert_eq!(
+            result,
+            Some(format!("[{}] bystander: interesting work", sf))
+        );
     }
 
     #[test]
     fn test_format_system_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::system_msg(
-            test_snowflake_seq(4), "context pressure warning".into(),
+            test_snowflake_seq(4),
+            "context pressure warning".into(),
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(4);
-        assert_eq!(result, Some(format!("[{}] system: context pressure warning", sf)));
+        assert_eq!(
+            result,
+            Some(format!("[{}] system: context pressure warning", sf))
+        );
     }
 
     #[test]
     fn test_format_spectator_message_filtered() {
         let entry = HomeChannelEntry::Message(MessageEntry::system_msg(
-            test_snowflake_seq(10), "[spectator] move written covering entries abc001-abc009".into(),
+            test_snowflake_seq(10),
+            "[spectator] move written covering entries abc001-abc009".into(),
         ));
         let result = format_entry(&entry);
         assert_eq!(result, None);
@@ -165,8 +208,10 @@ mod tests {
     #[test]
     fn test_format_tool_call() {
         let entry = HomeChannelEntry::Tool(ToolEntry::call(
-            test_snowflake_seq(5), "read_file".into(),
-            serde_json::json!({"path": "/tmp/test.txt"}), "tc1".into(),
+            test_snowflake_seq(5),
+            "read_file".into(),
+            serde_json::json!({"path": "/tmp/test.txt"}),
+            "tc1".into(),
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(5);
@@ -176,29 +221,43 @@ mod tests {
     #[test]
     fn test_format_tool_result() {
         let entry = HomeChannelEntry::Tool(ToolEntry::result(
-            test_snowflake_seq(6), "read_file".into(),
-            "file contents here, this is some data".into(), "tc1".into(),
+            test_snowflake_seq(6),
+            "read_file".into(),
+            "file contents here, this is some data".into(),
+            "tc1".into(),
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(6);
-        assert_eq!(result, Some(format!("[{}] tool_result(read_file): [37 bytes]", sf)));
+        assert_eq!(
+            result,
+            Some(format!("[{}] tool_result(read_file): [37 bytes]", sf))
+        );
     }
 
     #[test]
     fn test_format_tool_result_file() {
         let entry = HomeChannelEntry::Tool(ToolEntry::result_file(
-            test_snowflake_seq(7), "bash".into(),
-            "/tmp/results/abc007.txt".into(), "tc2".into(),
+            test_snowflake_seq(7),
+            "bash".into(),
+            "/tmp/results/abc007.txt".into(),
+            "tc2".into(),
         ));
         let result = format_entry(&entry);
         let sf = test_snowflake_seq(7);
-        assert_eq!(result, Some(format!("[{}] tool_result(bash): [file: /tmp/results/abc007.txt]", sf)));
+        assert_eq!(
+            result,
+            Some(format!(
+                "[{}] tool_result(bash): [file: /tmp/results/abc007.txt]",
+                sf
+            ))
+        );
     }
 
     #[test]
     fn test_format_heartbeat_filtered() {
         let entry = HomeChannelEntry::Heartbeat(HeartbeatEntry::new(
-            test_snowflake_seq(8), "2026-05-12T12:00:00Z".into(),
+            test_snowflake_seq(8),
+            "2026-05-12T12:00:00Z".into(),
         ));
         let result = format_entry(&entry);
         assert_eq!(result, None);
@@ -215,13 +274,22 @@ mod tests {
     fn test_format_entries_with_budget() {
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(1), "short".into(), "home".into(), None,
+                test_snowflake_seq(1),
+                "short".into(),
+                "home".into(),
+                None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(2), "also short".into(), "home".into(), None,
+                test_snowflake_seq(2),
+                "also short".into(),
+                "home".into(),
+                None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(3), "third message".into(), "home".into(), None,
+                test_snowflake_seq(3),
+                "third message".into(),
+                "home".into(),
+                None,
             )),
         ];
 

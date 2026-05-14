@@ -1,7 +1,7 @@
 //! File tools
 
-use river_core::RiverError;
 use super::registry::{Tool, ToolResult};
+use river_core::RiverError;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,25 +33,22 @@ fn validate_path(workspace: &Path, path: &str) -> Result<PathBuf, RiverError> {
     // For new files that don't exist yet, validate parent
     let check_path = if full_path.exists() {
         debug!(full_path = %full_path.display(), "Path exists, canonicalizing");
-        full_path.canonicalize()
-            .map_err(|e| {
-                error!(error = %e, path = %full_path.display(), "Failed to canonicalize existing path");
-                RiverError::tool(format!("Invalid path: {}", e))
-            })?
+        full_path.canonicalize().map_err(|e| {
+            error!(error = %e, path = %full_path.display(), "Failed to canonicalize existing path");
+            RiverError::tool(format!("Invalid path: {}", e))
+        })?
     } else {
         // For new files, check the parent directory
-        let parent = full_path.parent()
-            .ok_or_else(|| {
-                error!(path = %full_path.display(), "Path has no parent directory");
-                RiverError::tool("Invalid path: no parent directory")
-            })?;
+        let parent = full_path.parent().ok_or_else(|| {
+            error!(path = %full_path.display(), "Path has no parent directory");
+            RiverError::tool("Invalid path: no parent directory")
+        })?;
         if parent.exists() {
             debug!(parent = %parent.display(), "Parent exists, canonicalizing");
-            let canonical_parent = parent.canonicalize()
-                .map_err(|e| {
-                    error!(error = %e, parent = %parent.display(), "Failed to canonicalize parent");
-                    RiverError::tool(format!("Invalid path: {}", e))
-                })?;
+            let canonical_parent = parent.canonicalize().map_err(|e| {
+                error!(error = %e, parent = %parent.display(), "Failed to canonicalize parent");
+                RiverError::tool(format!("Invalid path: {}", e))
+            })?;
             canonical_parent.join(full_path.file_name().unwrap_or_default())
         } else {
             // Parent doesn't exist, we'll create it - just join with workspace
@@ -96,7 +93,8 @@ fn check_file_size(path: &Path) -> Result<(), RiverError> {
     if metadata.len() > MAX_FILE_SIZE {
         return Err(RiverError::tool(format!(
             "File too large: {} bytes (max: {} bytes)",
-            metadata.len(), MAX_FILE_SIZE
+            metadata.len(),
+            MAX_FILE_SIZE
         )));
     }
     Ok(())
@@ -109,13 +107,19 @@ pub struct ReadTool {
 
 impl ReadTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
-        Self { workspace: workspace.into() }
+        Self {
+            workspace: workspace.into(),
+        }
     }
 }
 
 impl Tool for ReadTool {
-    fn name(&self) -> &str { "read" }
-    fn description(&self) -> &str { "Read file contents" }
+    fn name(&self) -> &str {
+        "read"
+    }
+    fn description(&self) -> &str {
+        "Read file contents"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -137,12 +141,10 @@ impl Tool for ReadTool {
             "ReadTool::execute called"
         );
 
-        let path_str = args.get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                error!("ReadTool: Missing required parameter 'path'");
-                RiverError::tool("Missing required parameter: path")
-            })?;
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            error!("ReadTool: Missing required parameter 'path'");
+            RiverError::tool("Missing required parameter: path")
+        })?;
 
         info!(path = %path_str, "ReadTool: Reading file");
 
@@ -161,11 +163,10 @@ impl Tool for ReadTool {
             "ReadTool: Reading with options"
         );
 
-        let content = fs::read_to_string(&path)
-            .map_err(|e| {
-                error!(error = %e, path = %path.display(), "ReadTool: Failed to read file");
-                RiverError::tool(format!("Failed to read file: {}", e))
-            })?;
+        let content = fs::read_to_string(&path).map_err(|e| {
+            error!(error = %e, path = %path.display(), "ReadTool: Failed to read file");
+            RiverError::tool(format!("Failed to read file: {}", e))
+        })?;
 
         let lines: Vec<&str> = content.lines().collect();
         let start = offset.min(lines.len());
@@ -191,13 +192,15 @@ impl Tool for ReadTool {
 
         if let Some(out_path) = output_file {
             let validated_out_path = validate_path(&self.workspace, out_path)?;
-            fs::write(&validated_out_path, &result)
-                .map_err(|e| {
-                    error!(error = %e, out_path = %out_path, "ReadTool: Failed to write output file");
-                    RiverError::tool(format!("Failed to write output file: {}", e))
-                })?;
+            fs::write(&validated_out_path, &result).map_err(|e| {
+                error!(error = %e, out_path = %out_path, "ReadTool: Failed to write output file");
+                RiverError::tool(format!("Failed to write output file: {}", e))
+            })?;
             info!(out_path = %out_path, "ReadTool: Output written to file");
-            Ok(ToolResult::with_file(format!("Output written to {}", out_path), out_path))
+            Ok(ToolResult::with_file(
+                format!("Output written to {}", out_path),
+                out_path,
+            ))
         } else {
             debug!(result_len = result.len(), "ReadTool: Returning content");
             Ok(ToolResult::success(result))
@@ -212,13 +215,19 @@ pub struct WriteTool {
 
 impl WriteTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
-        Self { workspace: workspace.into() }
+        Self {
+            workspace: workspace.into(),
+        }
     }
 }
 
 impl Tool for WriteTool {
-    fn name(&self) -> &str { "write" }
-    fn description(&self) -> &str { "Write content to file (creates or overwrites)" }
+    fn name(&self) -> &str {
+        "write"
+    }
+    fn description(&self) -> &str {
+        "Write content to file (creates or overwrites)"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -237,12 +246,13 @@ impl Tool for WriteTool {
             "WriteTool::execute called"
         );
 
-        let path_str = args.get("path").and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                error!("WriteTool: Missing required parameter 'path'");
-                RiverError::tool("Missing required parameter: path")
-            })?;
-        let content = args.get("content").and_then(|v| v.as_str())
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            error!("WriteTool: Missing required parameter 'path'");
+            RiverError::tool("Missing required parameter: path")
+        })?;
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("WriteTool: Missing required parameter 'content'");
                 RiverError::tool("Missing required parameter: content")
@@ -267,18 +277,21 @@ impl Tool for WriteTool {
         }
 
         debug!(path = %path.display(), "WriteTool: Writing content to file");
-        fs::write(&path, content)
-            .map_err(|e| {
-                error!(error = %e, path = %path.display(), "WriteTool: Failed to write file");
-                RiverError::tool(format!("Failed to write file: {}", e))
-            })?;
+        fs::write(&path, content).map_err(|e| {
+            error!(error = %e, path = %path.display(), "WriteTool: Failed to write file");
+            RiverError::tool(format!("Failed to write file: {}", e))
+        })?;
 
         info!(
             path = %path.display(),
             bytes = content.len(),
             "WriteTool: File written successfully"
         );
-        Ok(ToolResult::success(format!("Wrote {} bytes to {:?}", content.len(), path)))
+        Ok(ToolResult::success(format!(
+            "Wrote {} bytes to {:?}",
+            content.len(),
+            path
+        )))
     }
 }
 
@@ -289,13 +302,19 @@ pub struct EditTool {
 
 impl EditTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
-        Self { workspace: workspace.into() }
+        Self {
+            workspace: workspace.into(),
+        }
     }
 }
 
 impl Tool for EditTool {
-    fn name(&self) -> &str { "edit" }
-    fn description(&self) -> &str { "Replace text in file" }
+    fn name(&self) -> &str {
+        "edit"
+    }
+    fn description(&self) -> &str {
+        "Replace text in file"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -316,22 +335,28 @@ impl Tool for EditTool {
             "EditTool::execute called"
         );
 
-        let path_str = args.get("path").and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                error!("EditTool: Missing required parameter 'path'");
-                RiverError::tool("Missing required parameter: path")
-            })?;
-        let old_string = args.get("old_string").and_then(|v| v.as_str())
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            error!("EditTool: Missing required parameter 'path'");
+            RiverError::tool("Missing required parameter: path")
+        })?;
+        let old_string = args
+            .get("old_string")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("EditTool: Missing required parameter 'old_string'");
                 RiverError::tool("Missing required parameter: old_string")
             })?;
-        let new_string = args.get("new_string").and_then(|v| v.as_str())
+        let new_string = args
+            .get("new_string")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("EditTool: Missing required parameter 'new_string'");
                 RiverError::tool("Missing required parameter: new_string")
             })?;
-        let replace_all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+        let replace_all = args
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         info!(
             path = %path_str,
@@ -345,11 +370,10 @@ impl Tool for EditTool {
         let path = validate_path(&self.workspace, path_str)?;
         check_file_size(&path)?;
 
-        let content = fs::read_to_string(&path)
-            .map_err(|e| {
-                error!(error = %e, path = %path.display(), "EditTool: Failed to read file");
-                RiverError::tool(format!("Failed to read file: {}", e))
-            })?;
+        let content = fs::read_to_string(&path).map_err(|e| {
+            error!(error = %e, path = %path.display(), "EditTool: Failed to read file");
+            RiverError::tool(format!("Failed to read file: {}", e))
+        })?;
 
         let occurrences = content.matches(old_string).count();
         debug!(
@@ -374,7 +398,8 @@ impl Tool for EditTool {
                 "EditTool: old_string found multiple times but replace_all=false"
             );
             return Err(RiverError::tool(format!(
-                "old_string found {} times - use replace_all or make it more specific", occurrences
+                "old_string found {} times - use replace_all or make it more specific",
+                occurrences
             )));
         }
 
@@ -384,18 +409,20 @@ impl Tool for EditTool {
             content.replacen(old_string, new_string, 1)
         };
 
-        fs::write(&path, new_content)
-            .map_err(|e| {
-                error!(error = %e, path = %path.display(), "EditTool: Failed to write file");
-                RiverError::tool(format!("Failed to write file: {}", e))
-            })?;
+        fs::write(&path, new_content).map_err(|e| {
+            error!(error = %e, path = %path.display(), "EditTool: Failed to write file");
+            RiverError::tool(format!("Failed to write file: {}", e))
+        })?;
 
         info!(
             path = %path.display(),
             occurrences = occurrences,
             "EditTool: File edited successfully"
         );
-        Ok(ToolResult::success(format!("Replaced {} occurrence(s) in {:?}", occurrences, path)))
+        Ok(ToolResult::success(format!(
+            "Replaced {} occurrence(s) in {:?}",
+            occurrences, path
+        )))
     }
 }
 
@@ -406,13 +433,19 @@ pub struct GlobTool {
 
 impl GlobTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
-        Self { workspace: workspace.into() }
+        Self {
+            workspace: workspace.into(),
+        }
     }
 }
 
 impl Tool for GlobTool {
-    fn name(&self) -> &str { "glob" }
-    fn description(&self) -> &str { "Find files matching pattern" }
+    fn name(&self) -> &str {
+        "glob"
+    }
+    fn description(&self) -> &str {
+        "Find files matching pattern"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -432,7 +465,9 @@ impl Tool for GlobTool {
             "GlobTool::execute called"
         );
 
-        let pattern = args.get("pattern").and_then(|v| v.as_str())
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("GlobTool: Missing required parameter 'pattern'");
                 RiverError::tool("Missing required parameter: pattern")
@@ -455,17 +490,15 @@ impl Tool for GlobTool {
             "GlobTool: Searching with pattern"
         );
 
-        let workspace_canonical = self.workspace.canonicalize()
-            .map_err(|e| {
-                error!(error = %e, "GlobTool: Failed to canonicalize workspace");
-                RiverError::tool(format!("Workspace error: {}", e))
-            })?;
+        let workspace_canonical = self.workspace.canonicalize().map_err(|e| {
+            error!(error = %e, "GlobTool: Failed to canonicalize workspace");
+            RiverError::tool(format!("Workspace error: {}", e))
+        })?;
 
-        let paths = glob::glob(&pattern_str)
-            .map_err(|e| {
-                error!(error = %e, pattern = %pattern_str, "GlobTool: Invalid glob pattern");
-                RiverError::tool(format!("Invalid glob pattern: {}", e))
-            })?;
+        let paths = glob::glob(&pattern_str).map_err(|e| {
+            error!(error = %e, pattern = %pattern_str, "GlobTool: Invalid glob pattern");
+            RiverError::tool(format!("Invalid glob pattern: {}", e))
+        })?;
 
         let files: Vec<String> = paths
             .filter_map(|p| p.ok())
@@ -499,13 +532,19 @@ pub struct GrepTool {
 
 impl GrepTool {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> Self {
-        Self { workspace: workspace.into() }
+        Self {
+            workspace: workspace.into(),
+        }
     }
 }
 
 impl Tool for GrepTool {
-    fn name(&self) -> &str { "grep" }
-    fn description(&self) -> &str { "Search file contents with regex" }
+    fn name(&self) -> &str {
+        "grep"
+    }
+    fn description(&self) -> &str {
+        "Search file contents with regex"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -528,7 +567,9 @@ impl Tool for GrepTool {
             "GrepTool::execute called"
         );
 
-        let pattern = args.get("pattern").and_then(|v| v.as_str())
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 error!("GrepTool: Missing required parameter 'pattern'");
                 RiverError::tool("Missing required parameter: pattern")
@@ -544,19 +585,17 @@ impl Tool for GrepTool {
             "GrepTool: Searching"
         );
 
-        let regex = regex::Regex::new(pattern)
-            .map_err(|e| {
-                error!(error = %e, pattern = %pattern, "GrepTool: Invalid regex pattern");
-                RiverError::tool(format!("Invalid regex: {}", e))
-            })?;
+        let regex = regex::Regex::new(pattern).map_err(|e| {
+            error!(error = %e, pattern = %pattern, "GrepTool: Invalid regex pattern");
+            RiverError::tool(format!("Invalid regex: {}", e))
+        })?;
 
         // Compile glob pattern if provided
         let glob_matcher = if let Some(gp) = glob_pattern {
-            Some(glob::Pattern::new(gp)
-                .map_err(|e| {
-                    error!(error = %e, glob = %gp, "GrepTool: Invalid glob pattern");
-                    RiverError::tool(format!("Invalid glob pattern: {}", e))
-                })?)
+            Some(glob::Pattern::new(gp).map_err(|e| {
+                error!(error = %e, glob = %gp, "GrepTool: Invalid glob pattern");
+                RiverError::tool(format!("Invalid glob pattern: {}", e))
+            })?)
         } else {
             None
         };
@@ -592,7 +631,8 @@ impl Tool for GrepTool {
             if path.is_file() {
                 // Check glob filter if provided
                 if let Some(matcher) = glob_matcher {
-                    let file_name = path.file_name()
+                    let file_name = path
+                        .file_name()
                         .map(|n| n.to_string_lossy())
                         .unwrap_or_default();
                     if !matcher.matches(&file_name) {
@@ -641,7 +681,13 @@ impl Tool for GrepTool {
                             }
                             for i in *start..*end {
                                 let marker = if regex.is_match(lines[i]) { ":" } else { "-" };
-                                results.push(format!("{}:{}{} {}", path.display(), i + 1, marker, lines[i]));
+                                results.push(format!(
+                                    "{}:{}{} {}",
+                                    path.display(),
+                                    i + 1,
+                                    marker,
+                                    lines[i]
+                                ));
                             }
                         }
                     }
@@ -652,14 +698,28 @@ impl Tool for GrepTool {
                         let entry_path = entry.path();
                         let name = entry_path.file_name().map(|n| n.to_string_lossy());
                         if name.map(|n| !n.starts_with('.')).unwrap_or(false) {
-                            walk_and_search(&entry_path, regex, glob_matcher, context_lines, results, depth + 1);
+                            walk_and_search(
+                                &entry_path,
+                                regex,
+                                glob_matcher,
+                                context_lines,
+                                results,
+                                depth + 1,
+                            );
                         }
                     }
                 }
             }
         }
 
-        walk_and_search(&search_path, &regex, glob_matcher.as_ref(), context_lines, &mut results, 0);
+        walk_and_search(
+            &search_path,
+            &regex,
+            glob_matcher.as_ref(),
+            context_lines,
+            &mut results,
+            0,
+        );
 
         info!(
             pattern = %pattern,
@@ -677,13 +737,15 @@ impl Tool for GrepTool {
 
         if let Some(out_path) = output_file {
             let validated_out_path = validate_path(&self.workspace, out_path)?;
-            fs::write(&validated_out_path, &output)
-                .map_err(|e| {
-                    error!(error = %e, out_path = %out_path, "GrepTool: Failed to write output file");
-                    RiverError::tool(format!("Failed to write output: {}", e))
-                })?;
+            fs::write(&validated_out_path, &output).map_err(|e| {
+                error!(error = %e, out_path = %out_path, "GrepTool: Failed to write output file");
+                RiverError::tool(format!("Failed to write output: {}", e))
+            })?;
             info!(out_path = %out_path, matches = results.len(), "GrepTool: Output written to file");
-            Ok(ToolResult::with_file(format!("{} matches written to {}", results.len(), out_path), out_path))
+            Ok(ToolResult::with_file(
+                format!("{} matches written to {}", results.len(), out_path),
+                out_path,
+            ))
         } else {
             Ok(ToolResult::success(output))
         }
@@ -702,7 +764,9 @@ mod tests {
 
         // Write
         let write_tool = WriteTool::new(&workspace);
-        let result = write_tool.execute(json!({"path": "test.txt", "content": "Hello, world!"})).unwrap();
+        let result = write_tool
+            .execute(json!({"path": "test.txt", "content": "Hello, world!"}))
+            .unwrap();
         assert!(result.output.contains("Wrote"));
 
         // Read
@@ -712,11 +776,13 @@ mod tests {
 
         // Edit
         let edit_tool = EditTool::new(&workspace);
-        let result = edit_tool.execute(json!({
-            "path": "test.txt",
-            "old_string": "world",
-            "new_string": "River"
-        })).unwrap();
+        let result = edit_tool
+            .execute(json!({
+                "path": "test.txt",
+                "old_string": "world",
+                "new_string": "River"
+            }))
+            .unwrap();
         assert!(result.output.contains("Replaced"));
 
         // Verify edit
@@ -767,9 +833,10 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.to_string().contains("escapes workspace")
-            || err.to_string().contains("Invalid path")
-            || err.to_string().contains("Cannot access file"),
-            "Unexpected error: {}", err
+                || err.to_string().contains("Invalid path")
+                || err.to_string().contains("Cannot access file"),
+            "Unexpected error: {}",
+            err
         );
 
         // Test absolute path rejection
@@ -802,10 +869,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let workspace = dir.path().to_path_buf();
 
-        fs::write(workspace.join("test.txt"), "line one\nline two\nline three\nline four\nline five").unwrap();
+        fs::write(
+            workspace.join("test.txt"),
+            "line one\nline two\nline three\nline four\nline five",
+        )
+        .unwrap();
 
         let grep_tool = GrepTool::new(&workspace);
-        let result = grep_tool.execute(json!({"pattern": "three", "context": 1})).unwrap();
+        let result = grep_tool
+            .execute(json!({"pattern": "three", "context": 1}))
+            .unwrap();
         // Should include line two (before), three (match), and four (after)
         assert!(result.output.contains("line two"));
         assert!(result.output.contains("line three"));
@@ -823,12 +896,16 @@ mod tests {
         let grep_tool = GrepTool::new(&workspace);
 
         // Only search .txt files
-        let result = grep_tool.execute(json!({"pattern": "findme", "glob": "*.txt"})).unwrap();
+        let result = grep_tool
+            .execute(json!({"pattern": "findme", "glob": "*.txt"}))
+            .unwrap();
         assert!(result.output.contains("test.txt"));
         assert!(!result.output.contains("test.rs"));
 
         // Only search .rs files
-        let result = grep_tool.execute(json!({"pattern": "findme", "glob": "*.rs"})).unwrap();
+        let result = grep_tool
+            .execute(json!({"pattern": "findme", "glob": "*.rs"}))
+            .unwrap();
         assert!(!result.output.contains("test.txt"));
         assert!(result.output.contains("test.rs"));
     }

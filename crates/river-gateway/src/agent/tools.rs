@@ -3,10 +3,10 @@
 //! Provides a clean interface for executing tools within the agent task,
 //! handling the async locking of the tool executor.
 
-use crate::tools::{ToolExecutor, ToolCall, ToolCallResponse};
+use crate::tools::{ToolCall, ToolCallResponse, ToolExecutor};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 /// Execute a single tool call through the executor
 pub async fn execute_tool(
@@ -131,7 +131,10 @@ mod tests {
             (
                 ToolCallResponse {
                     tool_call_id: "1".to_string(),
-                    result: Ok(ToolResult { output: "ok".to_string(), output_file: None }),
+                    result: Ok(ToolResult {
+                        output: "ok".to_string(),
+                        output_file: None,
+                    }),
                 },
                 std::time::Duration::from_millis(10),
             ),
@@ -145,7 +148,10 @@ mod tests {
             (
                 ToolCallResponse {
                     tool_call_id: "3".to_string(),
-                    result: Ok(ToolResult { output: "ok".to_string(), output_file: None }),
+                    result: Ok(ToolResult {
+                        output: "ok".to_string(),
+                        output_file: None,
+                    }),
                 },
                 std::time::Duration::from_millis(15),
             ),
@@ -164,15 +170,16 @@ mod tests {
     fn test_all_succeeded() {
         use crate::tools::ToolResult;
 
-        let results = vec![
-            (
-                ToolCallResponse {
-                    tool_call_id: "1".to_string(),
-                    result: Ok(ToolResult { output: "ok".to_string(), output_file: None }),
-                },
-                std::time::Duration::from_millis(10),
-            ),
-        ];
+        let results = vec![(
+            ToolCallResponse {
+                tool_call_id: "1".to_string(),
+                result: Ok(ToolResult {
+                    output: "ok".to_string(),
+                    output_file: None,
+                }),
+            },
+            std::time::Duration::from_millis(10),
+        )];
 
         let stats = ToolExecutionStats::from_results(&results);
         assert!(stats.all_succeeded());

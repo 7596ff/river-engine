@@ -271,9 +271,14 @@ async fn handle_send(
     Json(req): Json<DiscordSendRequest>,
 ) -> Result<Json<SendResponse>, (StatusCode, Json<SendResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
-            success: false, message_id: None, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     // Validate request
     if let Err(e) = req.validate() {
@@ -431,9 +436,13 @@ async fn handle_typing(
     Json(request): Json<TypingRequest>,
 ) -> Result<Json<TypingResponse>, (StatusCode, Json<TypingResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(TypingResponse {
-            success: false, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(TypingResponse {
+                success: false,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     // Get Discord sender
     let discord_guard = state.discord.read().await;
@@ -496,9 +505,13 @@ async fn add_channel(
     Json(req): Json<AddChannelRequest>,
 ) -> Result<Json<ChannelResponse>, (StatusCode, Json<ChannelResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(ChannelResponse {
-            success: false, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ChannelResponse {
+                success: false,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     let channel_id: u64 = req.channel_id.parse().map_err(|_| {
         (
@@ -525,9 +538,13 @@ async fn remove_channel(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<ChannelResponse>, (StatusCode, Json<ChannelResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(ChannelResponse {
-            success: false, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ChannelResponse {
+                success: false,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     let channel_id: u64 = id.parse().map_err(|_| {
         (
@@ -563,9 +580,14 @@ async fn handle_read(
     Query(query): Query<ReadQuery>,
 ) -> Result<Json<Vec<ReadMessage>>, (StatusCode, Json<SendResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
-            success: false, message_id: None, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     let discord_guard = state.discord.read().await;
     let Some(ref discord) = *discord_guard else {
@@ -654,9 +676,14 @@ async fn history(
     Query(params): Query<HistoryParams>,
 ) -> Result<Json<Vec<river_adapter::IncomingEvent>>, (StatusCode, Json<SendResponse>)> {
     if validate_auth(&headers, &state.auth_token).is_err() {
-        return Err((StatusCode::UNAUTHORIZED, Json(SendResponse {
-            success: false, message_id: None, error: Some("Unauthorized".into()),
-        })));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(SendResponse {
+                success: false,
+                message_id: None,
+                error: Some("Unauthorized".into()),
+            }),
+        ));
     }
     let discord_guard = state.discord.read().await;
     let Some(ref discord) = *discord_guard else {
@@ -796,7 +823,12 @@ mod tests {
 
         let app = create_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

@@ -46,6 +46,8 @@ pub async fn register_with_gateway(
     if response.accepted {
         Ok(())
     } else {
-        Err(response.error.unwrap_or_else(|| "registration rejected".into()))
+        Err(response
+            .error
+            .unwrap_or_else(|| "registration rejected".into()))
     }
 }

@@ -68,7 +68,10 @@ pub fn validate(config: &RiverConfig) -> Vec<String> {
         ports.push((agent.port, format!("agent '{}'", name)));
 
         for (i, adapter) in agent.adapters.iter().enumerate() {
-            ports.push((adapter.port, format!("agent '{}' adapter[{}] ({})", name, i, adapter.adapter_type)));
+            ports.push((
+                adapter.port,
+                format!("agent '{}' adapter[{}] ({})", name, i, adapter.adapter_type),
+            ));
         }
     }
 
@@ -97,7 +100,8 @@ mod tests {
 
     #[test]
     fn test_valid_config() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "models": {
                 "claude": {
                     "provider": "anthropic",
@@ -113,14 +117,16 @@ mod tests {
                     "model": "claude"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
         assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
     }
 
     #[test]
     fn test_missing_model_reference() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "agents": {
                 "iris": {
                     "workspace": "/tmp/ws",
@@ -129,14 +135,16 @@ mod tests {
                     "model": "nonexistent"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
         assert!(errors.iter().any(|e| e.contains("nonexistent")));
     }
 
     #[test]
     fn test_port_conflict() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "port": 3000,
             "models": {
                 "m": { "provider": "openai", "endpoint": "http://localhost:8080/v1" }
@@ -149,14 +157,16 @@ mod tests {
                     "model": "m"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
         assert!(errors.iter().any(|e| e.contains("Port conflict")));
     }
 
     #[test]
     fn test_embedding_model_missing_dimensions() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "models": {
                 "m": { "provider": "openai", "endpoint": "http://localhost/v1" },
                 "embed": { "provider": "ollama", "endpoint": "http://localhost/v1", "name": "nomic" }
@@ -170,14 +180,16 @@ mod tests {
                     "embedding_model": "embed"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
         assert!(errors.iter().any(|e| e.contains("dimensions")));
     }
 
     #[test]
     fn test_gguf_missing_path() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "models": {
                 "local": { "provider": "gguf" }
             },
@@ -189,14 +201,18 @@ mod tests {
                     "model": "local"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
-        assert!(errors.iter().any(|e| e.contains("gguf") && e.contains("path")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("gguf") && e.contains("path")));
     }
 
     #[test]
     fn test_external_model_missing_endpoint() {
-        let config = parse_config(r#"{
+        let config = parse_config(
+            r#"{
             "models": {
                 "m": { "provider": "anthropic", "name": "claude" }
             },
@@ -208,7 +224,8 @@ mod tests {
                     "model": "m"
                 }
             }
-        }"#);
+        }"#,
+        );
         let errors = validate(&config);
         assert!(errors.iter().any(|e| e.contains("endpoint")));
     }
