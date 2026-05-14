@@ -183,7 +183,7 @@ pub struct AdapterConfig {
 
     /// Channel IDs (for discord)
     #[serde(default)]
-    pub channels: Vec<u64>,
+    pub channels: Vec<String>,
 }
 
 /// Global resource management config
@@ -416,12 +416,12 @@ mod tests {
             "port": 8081,
             "token_file": "/run/secrets/discord",
             "guild_id": "123456",
-            "channels": [111, 222, 333]
+            "channels": ["111", "222", "333"]
         }"#;
 
         let adapter: AdapterConfig = serde_json::from_str(json).unwrap();
         assert_eq!(adapter.adapter_type, "discord");
-        assert_eq!(adapter.channels, vec![111, 222, 333]);
+        assert_eq!(adapter.channels, vec!["111", "222", "333"]);
         assert_eq!(adapter.guild_id.unwrap(), "123456");
     }
 }

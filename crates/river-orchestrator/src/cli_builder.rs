@@ -163,7 +163,7 @@ mod tests {
                 "port": 8081,
                 "token_file": "/run/secrets/discord",
                 "guild_id": "123456",
-                "channels": [111, 222]
+                "channels": ["111", "222"]
             }]
         }"#,
         )
@@ -230,7 +230,7 @@ mod tests {
             "port": 8081,
             "token_file": "/run/secrets/discord",
             "guild_id": "123456",
-            "channels": [111, 222]
+            "channels": ["111", "222"]
         }"#,
         )
         .unwrap();

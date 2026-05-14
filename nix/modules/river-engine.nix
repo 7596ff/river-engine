@@ -337,9 +337,9 @@ in
                 then toString adapter.token_file else null;
               token_env = adapter.token_env;
             } // lib.optionalAttrs (adapter.settings ? guild_id) {
-              guild_id = adapter.settings.guild_id;
+              guild_id = toString adapter.settings.guild_id;
             } // lib.optionalAttrs (adapter.settings ? channels) {
-              channels = adapter.settings.channels;
+              channels = map toString adapter.settings.channels;
             })
           ) agent.adapters;
         } // lib.optionalAttrs (agent.spectator_model != null) {
