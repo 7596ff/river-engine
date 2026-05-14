@@ -41,7 +41,11 @@
           ];
         };
       }) // {
-        nixosModules.default = import ./nix/modules/river-engine.nix;
+        nixosModules.default = { config, lib, pkgs, ... }:
+          import ./nix/modules/river-engine.nix {
+            inherit config lib pkgs;
+            defaultPackage = self.packages.${pkgs.system}.default;
+          };
 
         overlays.default = final: prev: {
           river-engine = self.packages.${final.system}.default;

@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, defaultPackage ? null, ... }:
 
 let
   cfg = config.services.river-engine;
@@ -226,7 +226,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "The river-engine package to use";
+      default = defaultPackage;
+      description = "The river-engine package to use (defaults to the flake's package)";
     };
 
     port = lib.mkOption {
