@@ -5,7 +5,7 @@
 //! - low (64 bits): [birth:36][type:8][sequence:20]
 
 use super::{AgentBirth, SnowflakeType};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, TimeZone, Utc};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -16,7 +16,9 @@ use std::fmt;
 /// - 36 bits: agent birth (packed yyyymmddhhmmss)
 /// - 8 bits: type identifier
 /// - 20 bits: sequence number
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Serializes as a 32-character hex string (e.g. "0000000f42400000a0e5b40100100000").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Snowflake {
     /// High 64 bits: timestamp in microseconds since agent birth.
     high: u64,
@@ -60,6 +62,18 @@ impl Snowflake {
         Self { high, low }
     }
 
+    /// Parse a Snowflake from its 32-character hex string representation.
+    pub fn from_hex(s: &str) -> Result<Self, String> {
+        if s.len() != 32 {
+            return Err(format!("expected 32 hex chars, got {}", s.len()));
+        }
+        let high = u64::from_str_radix(&s[..16], 16)
+            .map_err(|e| format!("invalid hex in high bits: {}", e))?;
+        let low = u64::from_str_radix(&s[16..], 16)
+            .map_err(|e| format!("invalid hex in low bits: {}", e))?;
+        Ok(Self::from_parts(high, low))
+    }
+
     /// Get the timestamp in microseconds since agent birth.
     pub fn timestamp_micros(&self) -> u64 {
         self.high
@@ -96,6 +110,20 @@ impl Snowflake {
     /// Get the low 64 bits (birth + type + sequence).
     pub fn low(&self) -> u64 {
         self.low
+    }
+
+    /// Compute the wall-clock time this snowflake was created.
+    ///
+    /// Each snowflake encodes both the agent birth (low 36 bits) and
+    /// microseconds since birth (high 64 bits), so this needs no
+    /// external configuration.
+    pub fn to_datetime(&self) -> DateTime<Utc> {
+        let birth_micros = self.birth().to_epoch_micros();
+        let absolute_micros = birth_micros + self.timestamp_micros();
+        let secs = (absolute_micros / 1_000_000) as i64;
+        let nanos = ((absolute_micros % 1_000_000) * 1000) as u32;
+        Utc.timestamp_opt(secs, nanos).single()
+            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap())
     }
 
     /// Convert to a 16-byte big-endian representation.
@@ -138,6 +166,19 @@ impl fmt::Display for Snowflake {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display as bare hex: 32 chars, zero-padded, sortable as strings
         write!(f, "{:016x}{:016x}", self.high, self.low)
+    }
+}
+
+impl serde::Serialize for Snowflake {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!("{:016x}{:016x}", self.high, self.low))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Snowflake {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::from_hex(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -255,14 +296,75 @@ mod tests {
     }
 
     #[test]
-    fn test_snowflake_serde_roundtrip() {
+    fn test_snowflake_from_hex_roundtrip() {
+        let birth = test_birth();
+        let id = Snowflake::new(1000000, birth, SnowflakeType::Message, 42);
+        let hex = format!("{}", id);
+        let parsed = Snowflake::from_hex(&hex).unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn test_snowflake_from_hex_invalid() {
+        assert!(Snowflake::from_hex("not_hex").is_err());
+        assert!(Snowflake::from_hex("abc").is_err());
+        assert!(Snowflake::from_hex("").is_err());
+    }
+
+    #[test]
+    fn test_snowflake_serde_hex_string() {
         let birth = test_birth();
         let id = Snowflake::new(999999, birth, SnowflakeType::ToolCall, 777);
 
         let json = serde_json::to_string(&id).unwrap();
-        let deserialized: Snowflake = serde_json::from_str(&json).unwrap();
+        // Should serialize as a quoted hex string, not {"high":...,"low":...}
+        assert!(json.starts_with('"'));
+        assert!(json.ends_with('"'));
+        assert_eq!(json.len(), 34); // 32 hex chars + 2 quotes
 
+        let deserialized: Snowflake = serde_json::from_str(&json).unwrap();
         assert_eq!(id, deserialized);
+    }
+
+    #[test]
+    fn test_snowflake_serde_in_struct() {
+        #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+        struct TestEntry {
+            id: Snowflake,
+            name: String,
+        }
+
+        let birth = test_birth();
+        let entry = TestEntry {
+            id: Snowflake::new(12345, birth, SnowflakeType::Message, 0),
+            name: "test".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"id\":\""));
+        assert!(!json.contains("\"high\""));
+
+        let parsed: TestEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, parsed);
+    }
+
+    #[test]
+    fn test_snowflake_to_datetime() {
+        let birth = test_birth(); // 2024-03-15 14:30:45
+        // 0 microseconds after birth = birth time
+        let id = Snowflake::new(0, birth, SnowflakeType::Message, 0);
+        let dt = id.to_datetime();
+        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 14:30:45");
+
+        // 1 second after birth
+        let id2 = Snowflake::new(1_000_000, birth, SnowflakeType::Message, 0);
+        let dt2 = id2.to_datetime();
+        assert_eq!(dt2.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 14:30:46");
+
+        // 1 hour after birth
+        let id3 = Snowflake::new(3_600_000_000, birth, SnowflakeType::Message, 0);
+        let dt3 = id3.to_datetime();
+        assert_eq!(dt3.format("%Y-%m-%d %H:%M:%S").to_string(), "2024-03-15 15:30:45");
     }
 
     #[test]

@@ -48,44 +48,7 @@ impl SnowflakeGenerator {
 
     /// Convert an AgentBirth to microseconds since Unix epoch.
     fn birth_to_micros(birth: &AgentBirth) -> u64 {
-        // Calculate days since Unix epoch (1970-01-01)
-        // This is a simplified calculation that doesn't account for leap seconds
-        let year = birth.year() as i32;
-        let month = birth.month() as i32;
-        let day = birth.day() as i32;
-
-        // Days from year
-        let mut days: i64 = 0;
-        for y in 1970..year {
-            days += if Self::is_leap_year(y) { 366 } else { 365 };
-        }
-
-        // Days from month
-        let days_in_months = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        for m in 1..month {
-            days += days_in_months[m as usize] as i64;
-            if m == 2 && Self::is_leap_year(year) {
-                days += 1;
-            }
-        }
-
-        // Days from day
-        days += (day - 1) as i64;
-
-        // Convert to microseconds
-        let hours = birth.hour() as u64;
-        let minutes = birth.minute() as u64;
-        let seconds = birth.second() as u64;
-
-        let total_seconds =
-            days as u64 * 86400 + hours * 3600 + minutes * 60 + seconds;
-
-        total_seconds * 1_000_000
-    }
-
-    /// Check if a year is a leap year.
-    fn is_leap_year(year: i32) -> bool {
-        (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+        birth.to_epoch_micros()
     }
 
     /// Get the current timestamp in microseconds since agent birth.
@@ -256,14 +219,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_is_leap_year() {
-        assert!(SnowflakeGenerator::is_leap_year(2000)); // Divisible by 400
-        assert!(!SnowflakeGenerator::is_leap_year(1900)); // Divisible by 100 but not 400
-        assert!(SnowflakeGenerator::is_leap_year(2004)); // Divisible by 4 but not 100
-        assert!(!SnowflakeGenerator::is_leap_year(2001)); // Not divisible by 4
-        assert!(SnowflakeGenerator::is_leap_year(2024)); // Leap year
-    }
+    // is_leap_year test removed — logic moved to AgentBirth::to_epoch_micros
 
     #[test]
     fn test_generator_sequence_increments() {

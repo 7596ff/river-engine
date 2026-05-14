@@ -186,6 +186,33 @@ impl AgentBirth {
     pub fn second(&self) -> u8 {
         (self.0 & 0x3F) as u8
     }
+
+    /// Convert this birth to microseconds since Unix epoch.
+    pub fn to_epoch_micros(&self) -> u64 {
+        let year = self.year() as i32;
+        let month = self.month() as i32;
+        let day = self.day() as i32;
+
+        let mut days: i64 = 0;
+        for y in 1970..year {
+            days += if (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) { 366 } else { 365 };
+        }
+
+        let days_in_months = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        for m in 1..month {
+            days += days_in_months[m as usize] as i64;
+            if m == 2 && ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
+                days += 1;
+            }
+        }
+
+        days += (day - 1) as i64;
+
+        let total_seconds =
+            days as u64 * 86400 + self.hour() as u64 * 3600 + self.minute() as u64 * 60 + self.second() as u64;
+
+        total_seconds * 1_000_000
+    }
 }
 
 impl fmt::Display for AgentBirth {
@@ -392,5 +419,15 @@ mod tests {
         let json = serde_json::to_string(&birth).unwrap();
         let deserialized: AgentBirth = serde_json::from_str(&json).unwrap();
         assert_eq!(birth, deserialized);
+    }
+
+    #[test]
+    fn test_birth_to_epoch_micros() {
+        let birth = AgentBirth::new(2024, 3, 15, 14, 30, 45).unwrap();
+        let micros = birth.to_epoch_micros();
+        use chrono::{TimeZone, Utc};
+        let expected = Utc.with_ymd_and_hms(2024, 3, 15, 14, 30, 45).unwrap();
+        let expected_micros = expected.timestamp() as u64 * 1_000_000;
+        assert_eq!(micros, expected_micros);
     }
 }
