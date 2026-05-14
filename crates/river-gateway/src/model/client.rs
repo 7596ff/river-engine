@@ -729,6 +729,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             "test-model".to_string(),
             Duration::from_secs(30),
+            None,
         )
         .expect("test client creation should succeed");
         assert_eq!(client.url(), "http://localhost:8080");
@@ -742,6 +743,7 @@ mod tests {
             "https://api.anthropic.com".to_string(),
             "claude-sonnet-4-20250514".to_string(),
             Duration::from_secs(30),
+            None,
         )
         .expect("test client creation should succeed");
         assert_eq!(client.url(), "https://api.anthropic.com");
