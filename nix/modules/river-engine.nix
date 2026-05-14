@@ -224,9 +224,10 @@ in
   options.services.river-engine = {
     enable = lib.mkEnableOption "River Engine orchestrator";
 
-    srcPath = lib.mkOption {
-      type = lib.types.path;
-      description = "Path to river-engine source repository";
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.river-engine;
+      description = "The river-engine package to use";
     };
 
     port = lib.mkOption {
@@ -280,9 +281,7 @@ in
 
   config = lib.mkIf cfg.enable (
     let
-      package = pkgs.callPackage ../packages/river-engine/package.nix {
-        src = cfg.srcPath;
-      };
+      package = cfg.package;
 
       binPrefix = "${package}/bin";
 
