@@ -105,7 +105,17 @@ async fn run_inner(
                 .wrap(Wrap { trim: false });
 
             if follow_tail {
-                scroll_offset = u16::MAX;
+                // Estimate wrapped line count for scroll
+                let inner_width = chunks[0].width.saturating_sub(2).max(1) as usize;
+                let total: u16 = log_lines
+                    .iter()
+                    .map(|line| {
+                        let len: usize = line.spans.iter().map(|s| s.content.len()).sum();
+                        ((len / inner_width) + 1).min(u16::MAX as usize) as u16
+                    })
+                    .fold(0u16, |a, b| a.saturating_add(b));
+                let inner_height = chunks[0].height.saturating_sub(2);
+                scroll_offset = total.saturating_sub(inner_height);
             }
 
             let log_widget = log_widget.scroll((scroll_offset, 0));
