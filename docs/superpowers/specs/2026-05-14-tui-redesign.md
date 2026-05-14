@@ -44,9 +44,17 @@ keyboard ──► Enter ──► POST /home/{agent}/message ──────
 
 ## Entry Formatting
 
-Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each entry type implements `Display`. Timestamps are extracted from the snowflake ID on each entry.
+Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each type implements `Display`. Timestamps are extracted from the snowflake ID on each entry.
 
-| Entry type | Format |
+### river-core: `Display` (full content)
+
+The `Display` impls in river-core render the full content of each entry. This is what the context builder and logging use. Messages render their complete text. Tool results render their complete output. Nothing is collapsed or summarized.
+
+### river-tui: `TuiEntry` newtype (collapsed)
+
+The TUI wraps entries in a `TuiEntry` newtype with its own `Display` impl. For most entry types, it delegates to the river-core `Display`. For tool entries, it renders collapsed one-liners:
+
+| Entry type | TUI format |
 |---|---|
 | message/agent | `2026-05-14 14:03:22 [agent] content` |
 | message/user | `2026-05-14 14:03:22 [user:discord] cassie: content` |
@@ -56,12 +64,6 @@ Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, 
 | tool/tool_result | appended to call line: `→ result_file path` or `→ N lines` or `→ ok` |
 | heartbeat | `2026-05-14 14:03:22 💓` |
 | cursor | `2026-05-14 14:03:22 ┄ read cursor` |
-
-Tool calls and results are paired by `tool_call_id`. The formatter holds pending tool calls in a small map. When a tool result arrives, it renders the combined one-liner: `2026-05-14 14:03:22 🔧 read_file(src/main.rs) → tool-results/abc123.txt` (if result was written to file) or `→ 245 lines` (if inline result, showing line count). If a tool call has no result yet, it renders without the arrow. If a tool result arrives without a matching call (e.g., TUI started mid-session), it renders standalone: `2026-05-14 14:03:22 🔧 tool_name → result_file` or `→ N lines`.
-
-river-core provides `Display` impls on all entry types that are faithful to the full content — suitable for logging, debugging, and the context builder. These render the complete tool result content, full message text, etc.
-
-The TUI uses a newtype wrapper to override display for entry types that need collapsed rendering:
 
 ```rust
 // in river-tui
@@ -73,7 +75,9 @@ impl Display for TuiEntry {
 }
 ```
 
-`TuiEntry` delegates to the river-core `Display` impl for entry types that render the same way (messages, heartbeats, cursors) and overrides only `ToolEntry` rendering to produce collapsed one-liners. Tool call pairing by `tool_call_id` is handled by a stateful `HomeChannelFormatter` in the TUI that accumulates entries, pairs calls with results, and emits `TuiEntry`-formatted lines.
+### Tool call pairing
+
+Tool calls and results are paired by `tool_call_id` in the TUI's `HomeChannelFormatter` — a stateful struct that accumulates entries and emits formatted lines. When a tool result arrives, it renders the combined one-liner: `2026-05-14 14:03:22 🔧 read_file(src/main.rs) → tool-results/abc123.txt` (if result was written to file) or `→ 245 lines` (if inline result, showing line count). If a tool call has no result yet, it renders without the arrow. If a tool result arrives without a matching call (e.g., TUI started mid-session), it renders standalone: `2026-05-14 14:03:22 🔧 tool_name → result_file` or `→ N lines`.
 
 ## Layout
 
