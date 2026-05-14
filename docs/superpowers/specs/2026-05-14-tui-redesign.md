@@ -102,7 +102,14 @@ Tool calls and results are paired by `tool_call_id` in the TUI's `HomeChannelFor
 
 Three regions:
 
-- **Log** — scrollable, wrapping, auto-follows tail. Up/Down/PageUp/PageDown to scroll. Scrolling up disables auto-follow. Scrolling to bottom re-enables it.
+- **Log** — scrollable, auto-follows tail. Up/Down/PageUp/PageDown to scroll. Scrolling up disables auto-follow. Scrolling to bottom re-enables it. Messages can contain newlines. The first line gets the timestamp and role prefix. Continuation lines are indented to align with the content start:
+  ```
+  2026-05-14 14:03:22 [agent] here is a multi-line response
+                              that continues on the next line
+                              and the next
+  2026-05-14 14:03:25 [user:discord] cassie: hello
+  ```
+  Long lines within a message wrap at the terminal width, also indented to the content column.
 - **Status bar** — agent name.
 - **Input** — single-line text input. Enter sends. Ctrl-C quits.
 
