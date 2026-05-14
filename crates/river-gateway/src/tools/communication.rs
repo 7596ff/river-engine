@@ -24,10 +24,11 @@ impl SendMessageTool {
         registry: Arc<RwLock<AdapterRegistry>>,
         workspace: PathBuf,
         snowflake_gen: Arc<SnowflakeGenerator>,
+        http_client: reqwest::Client,
     ) -> Self {
         Self {
             registry,
-            http_client: reqwest::Client::new(),
+            http_client,
             workspace,
             snowflake_gen,
         }
@@ -292,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_message_tool_schema() {
         let registry = Arc::new(RwLock::new(AdapterRegistry::new()));
-        let tool = SendMessageTool::new(registry, PathBuf::from("."), test_snowflake_gen());
+        let tool = SendMessageTool::new(registry, PathBuf::from("."), test_snowflake_gen(), reqwest::Client::new());
 
         assert_eq!(tool.name(), "send_message");
         let params = tool.parameters();

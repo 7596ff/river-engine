@@ -175,6 +175,35 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     // Create subagent manager
     let subagent_manager = Arc::new(RwLock::new(SubagentManager::new(snowflake_gen.clone())));
 
+    // Load auth token: env var first, then --auth-token-file fallback
+    let auth_token = match river_core::require_auth_token() {
+        Ok(token) => {
+            tracing::info!("Auth token loaded from RIVER_AUTH_TOKEN");
+            token
+        }
+        Err(_) => {
+            if let Some(ref token_file) = config.auth_token_file {
+                let token = tokio::fs::read_to_string(token_file)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to read auth token file: {}", e))?
+                    .trim()
+                    .to_string();
+                if token.is_empty() {
+                    return Err(anyhow::anyhow!("Auth token file is empty"));
+                }
+                tracing::info!("Auth token loaded from {:?}", token_file);
+                token
+            } else {
+                return Err(anyhow::anyhow!(
+                    "No auth token configured. Set RIVER_AUTH_TOKEN in .env or pass --auth-token-file"
+                ));
+            }
+        }
+    };
+
+    // Build authed HTTP client for outbound calls
+    let authed_http_client = river_core::build_authed_client(&auth_token);
+
     // Create tool registry with core tools
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTool::new(&config.workspace)));
@@ -239,6 +268,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         adapter_registry.clone(),
         config.workspace.clone(),
         snowflake_gen.clone(),
+        authed_http_client.clone(),
     )));
     tracing::info!("Registered communication tools (send_message)");
 
@@ -253,35 +283,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     tracing::info!("Registered {} tools total", registry.names().len());
 
     let message_queue = Arc::new(MessageQueue::new());
-
-    // Load auth token: env var first, then --auth-token-file fallback
-    let auth_token = match river_core::require_auth_token() {
-        Ok(token) => {
-            tracing::info!("Auth token loaded from RIVER_AUTH_TOKEN");
-            token
-        }
-        Err(_) => {
-            if let Some(ref token_file) = config.auth_token_file {
-                let token = tokio::fs::read_to_string(token_file)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to read auth token file: {}", e))?
-                    .trim()
-                    .to_string();
-                if token.is_empty() {
-                    return Err(anyhow::anyhow!("Auth token file is empty"));
-                }
-                tracing::info!("Auth token loaded from {:?}", token_file);
-                token
-            } else {
-                return Err(anyhow::anyhow!(
-                    "No auth token configured. Set RIVER_AUTH_TOKEN in .env or pass --auth-token-file"
-                ));
-            }
-        }
-    };
-
-    // Build authed HTTP client for outbound calls
-    let authed_http_client = river_core::build_authed_client(&auth_token);
 
     // Create metrics
     let metrics = Arc::new(RwLock::new(AgentMetrics::new(
