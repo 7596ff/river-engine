@@ -279,7 +279,7 @@ mod tests {
                     "provider": "anthropic",
                     "endpoint": "https://api.anthropic.com/v1",
                     "name": "claude-sonnet-4-20250514",
-                    "api_key_file": "/run/secrets/key",
+                    "api_key_env": "ANTHROPIC_API_KEY",
                     "context_limit": 200000
                 },
                 "local": {
@@ -365,7 +365,7 @@ mod tests {
             provider: "ollama".to_string(),
             endpoint: Some("http://localhost:11434/v1".to_string()),
             name: Some("nomic".to_string()),
-            api_key_file: None,
+            api_key_env: None,
             context_limit: None,
             path: None,
             dimensions: Some(768),
