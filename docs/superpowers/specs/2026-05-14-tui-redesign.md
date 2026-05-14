@@ -53,11 +53,11 @@ Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, 
 | message/bystander | `2026-05-14 14:03:22 [bystander] content` |
 | message/system | `2026-05-14 14:03:22 [system] content` |
 | tool/tool_call | `2026-05-14 14:03:22 🔧 tool_name(args_summary)` |
-| tool/tool_result | appended to call line: `→ N lines` or `→ ok` |
+| tool/tool_result | appended to call line: `→ result_file path` or `→ N lines` or `→ ok` |
 | heartbeat | `2026-05-14 14:03:22 ♡` |
 | cursor | `2026-05-14 14:03:22 ┄ read cursor` |
 
-Tool calls and results are paired by `tool_call_id`. The formatter holds pending tool calls in a small map. When a tool result arrives, it renders the combined one-liner: `2026-05-14 14:03:22 🔧 read_file(src/main.rs) → 245 lines`. If a tool call has no result yet, it renders without the arrow. If a tool result arrives without a matching call (e.g., TUI started mid-session), it renders standalone: `2026-05-14 14:03:22 🔧 tool_name → N lines`.
+Tool calls and results are paired by `tool_call_id`. The formatter holds pending tool calls in a small map. When a tool result arrives, it renders the combined one-liner: `2026-05-14 14:03:22 🔧 read_file(src/main.rs) → tool-results/abc123.txt` (if result was written to file) or `→ 245 lines` (if inline result, showing line count). If a tool call has no result yet, it renders without the arrow. If a tool result arrives without a matching call (e.g., TUI started mid-session), it renders standalone: `2026-05-14 14:03:22 🔧 tool_name → result_file` or `→ N lines`.
 
 The `Display` impl on individual entry types handles the simple cases (message, heartbeat, cursor). Tool call pairing requires a stateful formatter that is not part of `Display` — it lives in the TUI's stdin reader task (or a thin `HomeChannelFormatter` struct that accumulates entries and emits formatted lines).
 
