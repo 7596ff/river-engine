@@ -31,7 +31,7 @@ Auth token is read from the `RIVER_AUTH_TOKEN` environment variable (consistent 
 
 Two async tasks:
 
-1. **Input reader** — reads lines from stdin or tails a file (`--file`). Deserializes each line as `HomeChannelEntry`, formats via `Display`, pushes to display buffer, notifies TUI to re-render. When `--file` is given, the reader opens the file, seeks to the end, and tails new lines (like `tail -f`). When reading from stdin, it reads lines as they arrive.
+1. **Input reader** — reads lines from stdin or tails a file (`--file`). Deserializes each line as `HomeChannelEntry`, formats via `Display`, pushes to display buffer, notifies TUI to re-render. When `--file` is given, the reader opens the file, reads all existing lines from the beginning, then tails new lines. When reading from stdin, it reads lines as they arrive.
 2. **TUI task** — crossterm event loop, ratatui rendering. Handles keyboard input. On Enter, POSTs to the bystander endpoint.
 
 Shared state: a display buffer (append-only vec of formatted strings behind a lock) and a tokio Notify for re-render signals.
