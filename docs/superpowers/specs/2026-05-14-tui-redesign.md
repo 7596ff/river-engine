@@ -111,7 +111,7 @@ Three regions:
   ```
   Long lines within a message wrap at the terminal width, also indented to the content column.
 - **Status bar** — agent name.
-- **Input** — single-line text input. Enter sends. Ctrl-C quits.
+- **Input** — text input that expands vertically as the message grows beyond one line. The log region shrinks to accommodate. Enter sends. Ctrl-C quits.
 
 ## User Input
 
