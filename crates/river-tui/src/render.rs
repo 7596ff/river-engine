@@ -104,18 +104,8 @@ async fn run_inner(
                 .block(Block::default().borders(Borders::ALL))
                 .wrap(Wrap { trim: false });
 
-            let inner_height = chunks[0].height.saturating_sub(2);
-            let inner_width = chunks[0].width.saturating_sub(2) as usize;
-            // Count wrapped lines — each line wraps at inner_width
-            let total_lines: u16 = log_lines
-                .iter()
-                .map(|line| {
-                    let len = line.spans.iter().map(|s| s.content.len()).sum::<usize>();
-                    if inner_width == 0 { 1 } else { ((len / inner_width) + 1) as u16 }
-                })
-                .sum();
-            if follow_tail && total_lines > inner_height {
-                scroll_offset = total_lines.saturating_sub(inner_height);
+            if follow_tail {
+                scroll_offset = u16::MAX;
             }
 
             let log_widget = log_widget.scroll((scroll_offset, 0));
