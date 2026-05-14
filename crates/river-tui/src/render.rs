@@ -76,6 +76,10 @@ async fn run_inner(
 
             // --- Log ---
             let prefix_width = 20; // "YYYY-MM-DD HH:MM:SS " = 20 chars
+            let inner_width = chunks[0].width.saturating_sub(2).max(1) as usize;
+            let inner_height = chunks[0].height.saturating_sub(2);
+
+            // Do our own wrapping so line count is exact
             let log_lines: Vec<Line> = lines
                 .iter()
                 .flat_map(|fl| {
@@ -86,12 +90,21 @@ async fn run_inner(
                         content_lines
                             .iter()
                             .enumerate()
-                            .map(|(i, line)| {
-                                if i == 0 {
-                                    Line::from(Span::raw(line.to_string()))
+                            .flat_map(|(i, line)| {
+                                let full = if i == 0 {
+                                    line.to_string()
                                 } else {
-                                    let indent = " ".repeat(prefix_width);
-                                    Line::from(Span::raw(format!("{}{}", indent, line)))
+                                    format!("{}{}", " ".repeat(prefix_width), line)
+                                };
+                                // Wrap this line manually
+                                if full.is_empty() {
+                                    vec![Line::from(Span::raw(""))]
+                                } else {
+                                    let chars: Vec<char> = full.chars().collect();
+                                    chars
+                                        .chunks(inner_width)
+                                        .map(|chunk| Line::from(Span::raw(chunk.iter().collect::<String>())))
+                                        .collect::<Vec<_>>()
                                 }
                             })
                             .collect::<Vec<_>>()
@@ -99,23 +112,13 @@ async fn run_inner(
                 })
                 .collect();
 
-            let log_widget = Paragraph::new(log_lines.clone())
-                .block(Block::default().borders(Borders::ALL))
-                .wrap(Wrap { trim: false });
+            let total_lines = log_lines.len() as u16;
+
+            let log_widget = Paragraph::new(log_lines)
+                .block(Block::default().borders(Borders::ALL));
 
             if follow_tail {
-                // Estimate wrapped line count for scroll using char count (closer to display width)
-                let inner_width = chunks[0].width.saturating_sub(2).max(1) as usize;
-                let inner_height = chunks[0].height.saturating_sub(2);
-                let total: u16 = log_lines
-                    .iter()
-                    .map(|line| {
-                        let chars: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-                        let wrapped = if chars == 0 { 1 } else { (chars.saturating_sub(1) / inner_width) + 1 };
-                        wrapped.min(u16::MAX as usize) as u16
-                    })
-                    .fold(0u16, |a, b| a.saturating_add(b));
-                scroll_offset = total.saturating_sub(inner_height);
+                scroll_offset = total_lines.saturating_sub(inner_height);
             }
 
             let log_widget = log_widget.scroll((scroll_offset, 0));
