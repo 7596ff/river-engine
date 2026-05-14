@@ -31,20 +31,30 @@ Auth token is read from the `RIVER_AUTH_TOKEN` environment variable (consistent 
 
 Two async tasks:
 
-1. **Input reader** — reads lines from stdin or tails a file (`--file`). Deserializes each line as `HomeChannelEntry`, formats via `Display`, pushes to display buffer, notifies TUI to re-render. When `--file` is given, the reader opens the file, reads all existing lines from the beginning, then tails new lines. When reading from stdin, it reads lines as they arrive.
+1. **Input reader** — reads lines from stdin or tails a file (`--file`). Deserializes each line as `HomeChannelEntry`, formats it, pushes to display buffer, notifies TUI to re-render. When `--file` is given, the reader opens the file, reads all existing lines from the beginning, then tails new lines. When reading from stdin, it reads lines as they arrive.
 2. **TUI task** — crossterm event loop, ratatui rendering. Handles keyboard input. On Enter, POSTs to the bystander endpoint.
 
 Shared state: a display buffer (append-only vec of formatted strings behind a lock) and a tokio Notify for re-render signals.
 
 ```
-stdin/file (JSONL) ──► deserialize ──► Display::fmt ──► display buffer ──► ratatui
-                                                                        │
-keyboard ──► Enter ──► POST /home/{agent}/message ──────────────────────┘
+stdin/file (JSONL) ──► deserialize ──► format ──► display buffer ──► ratatui
+                                                                     │
+keyboard ──► Enter ──► POST /home/{agent}/message ──────────────────┘
 ```
+
+## Prerequisites (already done)
+
+The snowflake serde refactor has landed:
+
+- `Snowflake` now serializes as a 32-char hex string via custom serde (not `{"high": N, "low": N}`)
+- `Snowflake::from_hex()` parses hex strings back to `Snowflake`
+- `Snowflake::to_datetime()` computes wall-clock time from embedded birth + timestamp
+- All entry type `id` fields are `Snowflake`, not `String`
+- JSONL format is unchanged
 
 ## Entry Formatting
 
-Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each type implements `Display`. Timestamps are extracted from the snowflake ID on each entry. Each snowflake encodes both the agent birth (in the low 36 bits) and microseconds since birth (in the high 64 bits), so wall-clock time can be computed from the snowflake alone. A `Snowflake::to_datetime() -> DateTime<Utc>` method is added to river-core to support this.
+Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each type gets a `Display` impl. Timestamps are extracted via `Snowflake::to_datetime()` on the entry's `id` field (already a `Snowflake` — no parsing needed).
 
 ### river-core: `Display` (full content)
 
@@ -128,7 +138,7 @@ The user's message does not appear in the display buffer directly. It will appea
 Delete existing `crates/river-tui` entirely. Create new `crates/river-tui`.
 
 **Dependencies:**
-- `river-core` (entry types, snowflake timestamp extraction, Display formatting)
+- `river-core` (entry types, `Snowflake::to_datetime()`, `Display` formatting)
 - `ratatui`
 - `crossterm`
 - `tokio`
@@ -136,6 +146,8 @@ Delete existing `crates/river-tui` entirely. Create new `crates/river-tui`.
 - `serde`, `serde_json`
 - `clap`
 - `chrono`
+- `dotenvy`
+- `tracing`, `tracing-subscriber`
 
 **Removed dependencies:** `river-adapter`, `axum`, `tower`, `tower-http`.
 
@@ -147,10 +159,10 @@ From `river-gateway/src/channels/entry.rs`:
 - `ToolEntry` struct
 - `HeartbeatEntry` struct
 - `CursorEntry` struct
+- `ChannelEntry` enum
 
 Plus:
-- `Display` impls for each type
-- `Snowflake::to_datetime()` method — computes wall-clock time from the embedded birth + timestamp microseconds
+- `Display` impls for each type (using `Snowflake::to_datetime()` for timestamps — no hex parsing needed, `id` is already a `Snowflake`)
 
 `river-gateway` re-exports or depends on these from `river-core`. No duplication.
 
