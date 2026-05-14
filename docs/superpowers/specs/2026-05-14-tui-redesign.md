@@ -2,13 +2,18 @@
 
 ## Goal
 
-Replace the TUI adapter with a home channel viewer. The TUI reads JSONL from stdin, formats it as a chat window, and posts user input to the gateway's bystander endpoint. It is not an adapter. It has no HTTP server. It knows nothing about files or channels.
+Replace the TUI adapter with a home channel viewer. The TUI reads JSONL from stdin or tails a file, formats it as a chat window, and posts user input to the gateway's bystander endpoint. It is not an adapter. It has no HTTP server.
 
 ## Usage
 
 ```
+# Tail a file directly
+river-tui --agent iris --file channels/home/iris.jsonl
+
+# Pipe from stdin
 tail -f channels/home/iris.jsonl | river-tui --agent iris
-tail -f channels/home/iris.jsonl | river-tui --agent iris --gateway-url http://athena:3000
+
+# Remote via SSH
 ssh athena tail -f /path/to/channels/home/iris.jsonl | river-tui --agent iris --gateway-url http://athena:3000
 ```
 
@@ -18,6 +23,7 @@ ssh athena tail -f /path/to/channels/home/iris.jsonl | river-tui --agent iris --
 |---|---|---|
 | `--agent` | none | yes |
 | `--gateway-url` | `http://127.0.0.1:3000` | no |
+| `--file` | none (reads stdin) | no |
 
 Auth token is read from the `RIVER_AUTH_TOKEN` environment variable (consistent with all other river-engine components). The TUI loads `.env` via `dotenvy` on startup.
 
@@ -25,13 +31,13 @@ Auth token is read from the `RIVER_AUTH_TOKEN` environment variable (consistent 
 
 Two async tasks:
 
-1. **Stdin reader** — reads lines from stdin, deserializes each as `HomeChannelEntry`, formats via `Display`, pushes to display buffer, notifies TUI to re-render.
+1. **Input reader** — reads lines from stdin or tails a file (`--file`). Deserializes each line as `HomeChannelEntry`, formats via `Display`, pushes to display buffer, notifies TUI to re-render. When `--file` is given, the reader opens the file, seeks to the end, and tails new lines (like `tail -f`). When reading from stdin, it reads lines as they arrive.
 2. **TUI task** — crossterm event loop, ratatui rendering. Handles keyboard input. On Enter, POSTs to the bystander endpoint.
 
 Shared state: a display buffer (append-only vec of formatted strings behind a lock) and a tokio Notify for re-render signals.
 
 ```
-stdin (JSONL) ──► deserialize ──► Display::fmt ──► display buffer ──► ratatui
+stdin/file (JSONL) ──► deserialize ──► Display::fmt ──► display buffer ──► ratatui
                                                                         │
 keyboard ──► Enter ──► POST /home/{agent}/message ──────────────────────┘
 ```
