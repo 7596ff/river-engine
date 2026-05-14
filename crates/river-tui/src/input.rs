@@ -37,46 +37,93 @@ async fn read_stdin(tx: mpsc::UnboundedSender<HomeChannelEntry>) {
 }
 
 async fn read_file(path: PathBuf, tx: mpsc::UnboundedSender<HomeChannelEntry>) {
-    use tokio::fs::File;
     use tokio::time::{sleep, Duration};
 
-    let file = match File::open(&path).await {
-        Ok(f) => f,
+    // Read existing content first, then tail
+    let content = match tokio::fs::read_to_string(&path).await {
+        Ok(c) => c,
         Err(e) => {
-            tracing::error!("failed to open {}: {}", path.display(), e);
+            tracing::error!("failed to read {}: {}", path.display(), e);
             return;
         }
     };
 
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
+    let mut byte_offset = content.len() as u64;
 
-    loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) => {
-                // EOF — wait and try again (tail behavior)
-                sleep(Duration::from_millis(100)).await;
-            }
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<HomeChannelEntry>(trimmed) {
-                    Ok(entry) => {
-                        if tx.send(entry).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("skipping malformed JSONL line: {}", e);
-                    }
+    // Process existing lines
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<HomeChannelEntry>(line) {
+            Ok(entry) => {
+                if tx.send(entry).is_err() {
+                    return;
                 }
             }
             Err(e) => {
-                tracing::error!("read error: {}", e);
-                break;
+                tracing::warn!("skipping malformed JSONL line: {}", e);
+            }
+        }
+    }
+
+    // Tail: poll for new data by checking file size
+    let mut partial = String::new();
+    loop {
+        sleep(Duration::from_millis(100)).await;
+
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let file_len = metadata.len();
+        if file_len <= byte_offset {
+            continue;
+        }
+
+        // Read new bytes
+        let file = match tokio::fs::File::open(&path).await {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncSeekExt;
+        let mut file = file;
+        if file.seek(std::io::SeekFrom::Start(byte_offset)).await.is_err() {
+            continue;
+        }
+
+        let mut buf = vec![0u8; (file_len - byte_offset) as usize];
+        match file.read_exact(&mut buf).await {
+            Ok(_) => {}
+            Err(_) => continue,
+        }
+
+        byte_offset = file_len;
+
+        let chunk = String::from_utf8_lossy(&buf);
+        partial.push_str(&chunk);
+
+        // Process complete lines
+        while let Some(newline_pos) = partial.find('\n') {
+            let line = partial[..newline_pos].trim().to_string();
+            partial = partial[newline_pos + 1..].to_string();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<HomeChannelEntry>(&line) {
+                Ok(entry) => {
+                    if tx.send(entry).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("skipping malformed JSONL line: {}", e);
+                }
             }
         }
     }
