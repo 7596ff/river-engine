@@ -71,7 +71,7 @@ pub struct MoveEntry {
 ```rust
 pub struct ChannelNotification {
     pub channel: String,
-    pub snowflake_id: Snowflake,
+    pub id: Snowflake,
 }
 ```
 
