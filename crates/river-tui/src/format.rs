@@ -1,10 +1,8 @@
 //! TUI-specific entry formatting
 //!
 //! TuiEntry wraps HomeChannelEntry with collapsed tool rendering.
-//! HomeChannelFormatter handles stateful tool call pairing.
 
 use river_core::channels::entry::{HomeChannelEntry, ToolEntry};
-use std::collections::HashMap;
 use std::fmt;
 
 /// Newtype for TUI-specific Display.
@@ -14,18 +12,6 @@ pub struct TuiEntry(pub HomeChannelEntry);
 #[derive(Debug, Clone)]
 pub struct FormattedLine {
     pub text: String,
-}
-
-/// Stateful formatter that pairs tool calls with results.
-pub struct HomeChannelFormatter {
-    pending_calls: HashMap<String, PendingCall>,
-}
-
-#[derive(Debug)]
-struct PendingCall {
-    tool_name: String,
-    args_summary: String,
-    timestamp: String,
 }
 
 fn format_time(id: &river_core::Snowflake) -> String {
@@ -87,49 +73,10 @@ impl fmt::Display for TuiEntry {
     }
 }
 
-impl HomeChannelFormatter {
-    pub fn new() -> Self {
-        Self {
-            pending_calls: HashMap::new(),
-        }
-    }
-
-    /// Push an entry and get back formatted lines.
-    pub fn push(&mut self, entry: HomeChannelEntry) -> Vec<FormattedLine> {
-        match &entry {
-            HomeChannelEntry::Tool(t) if t.kind == "tool_call" => {
-                let time = format_time(&t.id);
-                let args = summarize_args(&t.arguments);
-                let text = format!("{} 🔧 {}({})", time, t.tool_name, args);
-                self.pending_calls.insert(
-                    t.tool_call_id.clone(),
-                    PendingCall {
-                        tool_name: t.tool_name.clone(),
-                        args_summary: args,
-                        timestamp: time,
-                    },
-                );
-                vec![FormattedLine { text }]
-            }
-            HomeChannelEntry::Tool(t) if t.kind == "tool_result" => {
-                let summary = summarize_result(t);
-                let text =
-                    if let Some(call) = self.pending_calls.remove(&t.tool_call_id) {
-                        format!(
-                            "{} 🔧 {}({}) → {}",
-                            call.timestamp, call.tool_name, call.args_summary, summary
-                        )
-                    } else {
-                        let time = format_time(&t.id);
-                        format!("{} 🔧 {} → {}", time, t.tool_name, summary)
-                    };
-                vec![FormattedLine { text }]
-            }
-            _ => {
-                let text = format!("{}", TuiEntry(entry));
-                vec![FormattedLine { text }]
-            }
-        }
+/// Format a HomeChannelEntry into a FormattedLine.
+pub fn format_entry(entry: HomeChannelEntry) -> FormattedLine {
+    FormattedLine {
+        text: format!("{}", TuiEntry(entry)),
     }
 }
 
@@ -168,82 +115,51 @@ mod tests {
     }
 
     #[test]
-    fn test_formatter_tool_call_then_result() {
-        let mut fmt = HomeChannelFormatter::new();
-
-        let call = HomeChannelEntry::Tool(ToolEntry::call(
+    fn test_tool_call_collapsed() {
+        let entry = HomeChannelEntry::Tool(ToolEntry::call(
             test_snowflake(),
             "read_file".into(),
             serde_json::json!({"path": "src/main.rs"}),
             "tc_001".into(),
         ));
-        let lines = fmt.push(call);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("🔧 read_file"));
-        assert!(!lines[0].text.contains("→"));
+        let line = format_entry(entry);
+        assert!(line.text.contains("🔧 read_file"));
+    }
 
-        let result = HomeChannelEntry::Tool(ToolEntry::result(
+    #[test]
+    fn test_tool_result_collapsed() {
+        let entry = HomeChannelEntry::Tool(ToolEntry::result(
             test_snowflake(),
             "read_file".into(),
             "fn main() {}\n".repeat(100),
             "tc_001".into(),
         ));
-        let lines = fmt.push(result);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("→ 100 lines"));
+        let line = format_entry(entry);
+        assert!(line.text.contains("🔧 read_file → 100 lines"));
     }
 
     #[test]
-    fn test_formatter_tool_result_file() {
-        let mut fmt = HomeChannelFormatter::new();
-
-        let call = HomeChannelEntry::Tool(ToolEntry::call(
-            test_snowflake(),
-            "bash".into(),
-            serde_json::json!({"command": "ls"}),
-            "tc_002".into(),
-        ));
-        fmt.push(call);
-
-        let result = HomeChannelEntry::Tool(ToolEntry::result_file(
+    fn test_tool_result_file() {
+        let entry = HomeChannelEntry::Tool(ToolEntry::result_file(
             test_snowflake(),
             "bash".into(),
             "tool-results/abc123.txt".into(),
             "tc_002".into(),
         ));
-        let lines = fmt.push(result);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("→ tool-results/abc123.txt"));
+        let line = format_entry(entry);
+        assert!(line.text.contains("→ tool-results/abc123.txt"));
     }
 
     #[test]
-    fn test_formatter_orphan_result() {
-        let mut fmt = HomeChannelFormatter::new();
-
-        let result = HomeChannelEntry::Tool(ToolEntry::result(
-            test_snowflake(),
-            "read_file".into(),
-            "some content\nmore content".into(),
-            "tc_orphan".into(),
-        ));
-        let lines = fmt.push(result);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("🔧 read_file → 2 lines"));
-    }
-
-    #[test]
-    fn test_formatter_message_passthrough() {
-        let mut fmt = HomeChannelFormatter::new();
-
-        let msg = HomeChannelEntry::Message(MessageEntry::agent(
+    fn test_message_passthrough() {
+        let entry = HomeChannelEntry::Message(MessageEntry::agent(
             test_snowflake(),
             "hello".into(),
             "home".into(),
             None,
         ));
-        let lines = fmt.push(msg);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].text.contains("[agent]"));
-        assert!(lines[0].text.contains("hello"));
+        let line = format_entry(entry);
+        assert!(line.text.contains("[agent]"));
+        assert!(line.text.contains("hello"));
     }
 }

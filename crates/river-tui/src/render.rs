@@ -1,6 +1,6 @@
 //! Ratatui terminal rendering
 
-use crate::format::{FormattedLine, HomeChannelFormatter};
+use crate::format::{format_entry, FormattedLine};
 use crate::post::BystanderClient;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
@@ -45,7 +45,6 @@ async fn run_inner(
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut formatter = HomeChannelFormatter::new();
     let mut lines: Vec<FormattedLine> = Vec::new();
     let mut input = String::new();
     let mut scroll_offset: u16 = 0;
@@ -212,8 +211,7 @@ async fn run_inner(
             entry = entry_rx.recv() => {
                 match entry {
                     Some(e) => {
-                        let new_lines = formatter.push(e);
-                        lines.extend(new_lines);
+                        lines.push(format_entry(e));
                     }
                     None => break,
                 }
