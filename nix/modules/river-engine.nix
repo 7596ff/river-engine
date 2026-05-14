@@ -122,6 +122,12 @@ let
         description = "Path to file containing adapter token";
       };
 
+      token_env = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Environment variable name for adapter token (e.g. DISCORD_TOKEN)";
+      };
+
       settings = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;
         default = {};
@@ -329,6 +335,7 @@ in
               port = adapter.port;
               token_file = if adapter.token_file != null
                 then toString adapter.token_file else null;
+              token_env = adapter.token_env;
             } // lib.optionalAttrs (adapter.settings ? guild_id) {
               guild_id = adapter.settings.guild_id;
             } // lib.optionalAttrs (adapter.settings ? channels) {

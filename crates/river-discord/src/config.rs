@@ -7,9 +7,13 @@ use std::path::PathBuf;
 #[command(name = "river-discord")]
 #[command(about = "River Engine Discord Adapter")]
 pub struct Args {
-    /// Discord bot token file
+    /// Discord bot token file (optional if token env var is set)
     #[arg(long)]
-    pub token_file: PathBuf,
+    pub token_file: Option<PathBuf>,
+
+    /// Environment variable name for Discord token (default: DISCORD_TOKEN)
+    #[arg(long, default_value = "DISCORD_TOKEN")]
+    pub token_env: String,
 
     /// River gateway URL
     #[arg(long, default_value = "http://localhost:3000")]
@@ -46,14 +50,23 @@ pub struct DiscordConfig {
 impl DiscordConfig {
     /// Load configuration from CLI args
     pub fn from_args(args: Args) -> anyhow::Result<Self> {
-        let token = std::fs::read_to_string(&args.token_file)
-            .map_err(|e| anyhow::anyhow!("Failed to read token file: {}", e))?
-            .trim()
-            .to_string();
-
-        if token.is_empty() {
-            anyhow::bail!("Token file is empty");
-        }
+        let token = if let Ok(env_token) = std::env::var(&args.token_env) {
+            if env_token.is_empty() {
+                anyhow::bail!("{} env var is empty", args.token_env);
+            }
+            env_token
+        } else if let Some(ref token_file) = args.token_file {
+            let t = std::fs::read_to_string(token_file)
+                .map_err(|e| anyhow::anyhow!("Failed to read token file: {}", e))?
+                .trim()
+                .to_string();
+            if t.is_empty() {
+                anyhow::bail!("Token file is empty");
+            }
+            t
+        } else {
+            anyhow::bail!("Discord token required: set {} env var or pass --token-file", args.token_env);
+        };
 
         Ok(Self {
             token,

@@ -123,6 +123,11 @@ pub fn discord_args(adapter: &AdapterConfig, gateway_port: u16) -> Vec<String> {
         args.push(token_file.display().to_string());
     }
 
+    if let Some(ref token_env) = adapter.token_env {
+        args.push("--token-env".to_string());
+        args.push(token_env.clone());
+    }
+
     if let Some(ref guild_id) = adapter.guild_id {
         args.push("--guild-id".to_string());
         args.push(guild_id.clone());

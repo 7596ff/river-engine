@@ -173,6 +173,10 @@ pub struct AdapterConfig {
     #[serde(default)]
     pub token_file: Option<PathBuf>,
 
+    /// Environment variable name for token (for discord, e.g. DISCORD_TOKEN)
+    #[serde(default)]
+    pub token_env: Option<String>,
+
     /// Guild/server ID (for discord)
     #[serde(default)]
     pub guild_id: Option<String>,
