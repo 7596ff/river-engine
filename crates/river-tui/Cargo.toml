@@ -4,26 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "River Engine TUI adapter"
+description = "River Engine TUI — home channel viewer"
 
 [[bin]]
 name = "river-tui"
 path = "src/main.rs"
 
 [dependencies]
-river-adapter = { path = "../river-adapter" }
-tokio.workspace = true
-axum.workspace = true
-reqwest.workspace = true
-tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-clap.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-chrono.workspace = true
-anyhow.workspace = true
+river-core = { path = "../river-core" }
 ratatui.workspace = true
 crossterm.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+dotenvy = "0.15"
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
-tower = { workspace = true, features = ["util"] }

@@ -2188,17 +2188,16 @@ name = "river-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
  "chrono",
  "clap",
  "crossterm",
+ "dotenvy",
  "ratatui",
  "reqwest",
- "river-adapter",
+ "river-core",
  "serde",
  "serde_json",
  "tokio",
- "tower",
  "tracing",
  "tracing-subscriber",
 ]
