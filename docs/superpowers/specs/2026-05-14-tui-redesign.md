@@ -44,7 +44,7 @@ keyboard ──► Enter ──► POST /home/{agent}/message ──────
 
 ## Entry Formatting
 
-Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each type implements `Display`. Timestamps are extracted from the snowflake ID on each entry.
+Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, `CursorEntry`) move from `river-gateway/src/channels/entry.rs` to `river-core`. Each type implements `Display`. Timestamps are extracted from the snowflake ID on each entry. Each snowflake encodes both the agent birth (in the low 36 bits) and microseconds since birth (in the high 64 bits), so wall-clock time can be computed from the snowflake alone. A `Snowflake::to_datetime() -> DateTime<Utc>` method is added to river-core to support this.
 
 ### river-core: `Display` (full content)
 
@@ -54,16 +54,16 @@ The `Display` impls in river-core render the full content of each entry. This is
 
 The TUI wraps entries in a `TuiEntry` newtype with its own `Display` impl. For most entry types, it delegates to the river-core `Display`. For tool entries, it renders collapsed one-liners:
 
-| Entry type | TUI format |
-|---|---|
-| message/agent | `2026-05-14 14:03:22 [agent] content` |
-| message/user | `2026-05-14 14:03:22 [user:discord] cassie: content` |
-| message/bystander | `2026-05-14 14:03:22 [bystander] content` |
-| message/system | `2026-05-14 14:03:22 [system] content` |
-| tool/tool_call | `2026-05-14 14:03:22 🔧 tool_name(args_summary)` |
-| tool/tool_result | appended to call line: `→ result_file path` or `→ N lines` or `→ ok` |
-| heartbeat | `2026-05-14 14:03:22 💓` |
-| cursor | `2026-05-14 14:03:22 ┄ read cursor` |
+| Entry type        | TUI format                                                           |
+| ----------------- | -------------------------------------------------------------------- |
+| message/agent     | `2026-05-14 14:03:22 [agent] content`                                |
+| message/user      | `2026-05-14 14:03:22 [user:discord] cassie: content`                 |
+| message/bystander | `2026-05-14 14:03:22 [bystander] content`                            |
+| message/system    | `2026-05-14 14:03:22 [system] content`                               |
+| tool/tool_call    | `2026-05-14 14:03:22 🔧 tool_name(args_summary)`                     |
+| tool/tool_result  | appended to call line: `→ result_file path` or `→ N lines` or `→ ok` |
+| heartbeat         | `2026-05-14 14:03:22 💓`                                             |
+| cursor            | `2026-05-14 14:03:22 ┄ read cursor`                                  |
 
 ```rust
 // in river-tui
@@ -84,20 +84,20 @@ Tool calls and results are paired by `tool_call_id` in the TUI's `HomeChannelFor
 ```
 ┌──────────────────────────────────────────────┐
 │ 2026-05-14 14:03:22 [agent] hi! how can I    │
-│ help?                                         │
+│ help?                                        │
 │ 2026-05-14 14:03:25 [user:discord] cassie:   │
-│ hello                                         │
+│ hello                                        │
 │ 2026-05-14 14:04:01 🔧 read_file(main.rs)    │
-│ → 245 lines                                   │
+│ → 245 lines                                  │
 │ 2026-05-14 14:04:03 [bystander] have you     │
-│ considered...                                  │
-│ 2026-05-14 14:05:11 ♡                         │
-│                                               │
-├───────────────────────────────────────────────┤
-│ [river] iris                                  │
-├───────────────────────────────────────────────┤
-│ > _                                           │
-└───────────────────────────────────────────────┘
+│ considered...                                │
+│ 2026-05-14 14:05:11 💓                       │
+│                                              │
+├──────────────────────────────────────────────┤
+│ [river] iris                                 │
+├──────────────────────────────────────────────┤
+│ > _                                          │
+└──────────────────────────────────────────────┘
 ```
 
 Three regions:
@@ -143,7 +143,7 @@ From `river-gateway/src/channels/entry.rs`:
 
 Plus:
 - `Display` impls for each type
-- Snowflake-to-timestamp extraction (may already exist in river-core's snowflake module)
+- `Snowflake::to_datetime()` method — computes wall-clock time from the embedded birth + timestamp microseconds
 
 `river-gateway` re-exports or depends on these from `river-core`. No duplication.
 
