@@ -3,6 +3,7 @@
 //! Moves are stored as one JSON object per line:
 //! {"start":"...","end":"...","summary":"..."}
 
+use river_core::Snowflake;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
@@ -10,16 +11,16 @@ use tokio::io::AsyncWriteExt;
 /// A single move entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveEntry {
-    pub start: String,
-    pub end: String,
+    pub start: Snowflake,
+    pub end: Snowflake,
     pub summary: String,
 }
 
 /// Append a move to the JSONL file
 pub async fn append_move(
     path: &Path,
-    start: &str,
-    end: &str,
+    start: Snowflake,
+    end: Snowflake,
     summary: &str,
 ) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
@@ -27,8 +28,8 @@ pub async fn append_move(
     }
 
     let entry = MoveEntry {
-        start: start.to_string(),
-        end: end.to_string(),
+        start,
+        end,
         summary: summary.to_string(),
     };
 
@@ -68,14 +69,26 @@ pub async fn read_moves_tail(path: &Path, n: usize) -> Vec<MoveEntry> {
 }
 
 /// Read the cursor — the `end` snowflake of the last move
-pub async fn read_cursor(path: &Path) -> Option<String> {
+pub async fn read_cursor(path: &Path) -> Option<Snowflake> {
     let moves = read_moves(path).await;
-    moves.last().map(|m| m.end.clone())
+    moves.last().map(|m| m.end)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, Snowflake, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
+
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -83,14 +96,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("moves.jsonl");
 
-        append_move(&path, "aaa", "bbb", "The agent set up the project.").await.unwrap();
-        append_move(&path, "ccc", "ddd", "The user asked about auth.").await.unwrap();
+        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "The agent set up the project.").await.unwrap();
+        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "The user asked about auth.").await.unwrap();
 
         let moves = read_moves(&path).await;
         assert_eq!(moves.len(), 2);
-        assert_eq!(moves[0].start, "aaa");
+        assert_eq!(moves[0].start, test_snowflake_seq(1));
         assert_eq!(moves[0].summary, "The agent set up the project.");
-        assert_eq!(moves[1].start, "ccc");
+        assert_eq!(moves[1].start, test_snowflake_seq(3));
     }
 
     #[tokio::test]
@@ -107,7 +120,7 @@ mod tests {
         let path = dir.path().join("moves.jsonl");
 
         for i in 0..20 {
-            append_move(&path, &format!("s{:03}", i), &format!("e{:03}", i), &format!("Move {}", i)).await.unwrap();
+            append_move(&path, test_snowflake_seq(i * 2), test_snowflake_seq(i * 2 + 1), &format!("Move {}", i)).await.unwrap();
         }
 
         let tail = read_moves_tail(&path, 5).await;
@@ -123,11 +136,11 @@ mod tests {
 
         assert_eq!(read_cursor(&path).await, None);
 
-        append_move(&path, "aaa", "bbb", "First move.").await.unwrap();
-        assert_eq!(read_cursor(&path).await, Some("bbb".to_string()));
+        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "First move.").await.unwrap();
+        assert_eq!(read_cursor(&path).await, Some(test_snowflake_seq(2)));
 
-        append_move(&path, "ccc", "ddd", "Second move.").await.unwrap();
-        assert_eq!(read_cursor(&path).await, Some("ddd".to_string()));
+        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "Second move.").await.unwrap();
+        assert_eq!(read_cursor(&path).await, Some(test_snowflake_seq(4)));
     }
 
     #[tokio::test]
@@ -135,11 +148,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("moves.jsonl");
 
-        append_move(&path, "aaa", "bbb", "Good move.").await.unwrap();
+        append_move(&path, test_snowflake_seq(1), test_snowflake_seq(2), "Good move.").await.unwrap();
         // Write a malformed line
         let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.unwrap();
         f.write_all(b"{bad json\n").await.unwrap();
-        append_move(&path, "ccc", "ddd", "Another good move.").await.unwrap();
+        append_move(&path, test_snowflake_seq(3), test_snowflake_seq(4), "Another good move.").await.unwrap();
 
         let moves = read_moves(&path).await;
         assert_eq!(moves.len(), 2); // malformed line skipped

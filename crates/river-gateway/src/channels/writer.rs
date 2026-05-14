@@ -57,8 +57,8 @@ impl HomeChannelWriter {
     /// and deletes the files.
     pub async fn cleanup_tool_results(
         home_channel_path: &Path,
-        move_start: &str,
-        move_end: &str,
+        move_start: river_core::Snowflake,
+        move_end: river_core::Snowflake,
     ) {
         let log = ChannelLog::from_path(home_channel_path.to_path_buf());
         let entries = match log.read_all_home().await {
@@ -73,7 +73,7 @@ impl HomeChannelWriter {
         for entry in &entries {
             if let HomeChannelEntry::Tool(t) = entry {
                 // Check if this entry's ID is in the snowflake range
-                if t.id.as_str() >= move_start && t.id.as_str() <= move_end {
+                if t.id >= move_start && t.id <= move_end {
                     if let Some(ref file_path) = t.result_file {
                         match tokio::fs::remove_file(file_path).await {
                             Ok(()) => cleaned += 1,
@@ -90,7 +90,7 @@ impl HomeChannelWriter {
         }
 
         if cleaned > 0 {
-            info!(cleaned, move_start, move_end, "Cleaned up tool result files");
+            info!(cleaned, move_start = %move_start, move_end = %move_end, "Cleaned up tool result files");
         }
     }
 }
@@ -98,6 +98,18 @@ impl HomeChannelWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, Snowflake, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
+
     use crate::channels::entry::{MessageEntry, ToolEntry, HeartbeatEntry};
     use tempfile::TempDir;
 
@@ -108,18 +120,18 @@ mod tests {
         let writer = HomeChannelWriter::spawn(path.clone());
 
         // Write a message
-        let msg = MessageEntry::agent("001".into(), "hello".into(), "home".into(), None);
+        let msg = MessageEntry::agent(test_snowflake_seq(1), "hello".into(), "home".into(), None);
         writer.write(HomeChannelEntry::Message(msg)).await;
 
         // Write a tool call
         let tool = ToolEntry::call(
-            "002".into(), "bash".into(),
+            test_snowflake_seq(2), "bash".into(),
             serde_json::json!({"cmd": "ls"}), "tc1".into(),
         );
         writer.write(HomeChannelEntry::Tool(tool)).await;
 
         // Write a heartbeat
-        let hb = HeartbeatEntry::new("003".into(), "2026-05-12T12:00:00Z".into());
+        let hb = HeartbeatEntry::new(test_snowflake_seq(3), "2026-05-12T12:00:00Z".into());
         writer.write(HomeChannelEntry::Heartbeat(hb)).await;
 
         // Shutdown and wait for writes to flush
@@ -130,9 +142,9 @@ mod tests {
         let log = ChannelLog::from_path(path);
         let entries = log.read_all_home().await.unwrap();
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].id(), "001");
-        assert_eq!(entries[1].id(), "002");
-        assert_eq!(entries[2].id(), "003");
+        assert_eq!(entries[0].id(), test_snowflake_seq(1));
+        assert_eq!(entries[1].id(), test_snowflake_seq(2));
+        assert_eq!(entries[2].id(), test_snowflake_seq(3));
     }
 
     #[tokio::test]
@@ -144,7 +156,7 @@ mod tests {
         // Write 100 entries rapidly
         for i in 0..100 {
             let msg = MessageEntry::agent(
-                format!("{:03}", i), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
             );
             writer.write(HomeChannelEntry::Message(msg)).await;
         }
@@ -156,7 +168,7 @@ mod tests {
         let entries = log.read_all_home().await.unwrap();
         assert_eq!(entries.len(), 100);
         for (i, entry) in entries.iter().enumerate() {
-            assert_eq!(entry.id(), format!("{:03}", i));
+            assert_eq!(entry.id(), test_snowflake_seq(i as u32));
         }
     }
 }

@@ -120,7 +120,7 @@ pub async fn send_to_adapter(
         let snowflake = snowflake_gen.next_id(SnowflakeType::Message);
         let log = crate::channels::ChannelLog::open(channels_dir, adapter, channel_id);
         let agent_entry = crate::channels::MessageEntry::agent(
-            snowflake.to_string(),
+            snowflake,
             content.to_string(),
             adapter.to_string(),
             adapter_msg_id,

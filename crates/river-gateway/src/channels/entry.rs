@@ -2,6 +2,7 @@
 //!
 //! Each line in a channel JSONL log is one of these entries.
 
+use river_core::Snowflake;
 use serde::{Deserialize, Serialize};
 
 /// A single entry in a channel log
@@ -16,7 +17,7 @@ pub enum ChannelEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageEntry {
     /// Snowflake ID — unique, sortable, encodes timestamp
-    pub id: String,
+    pub id: Snowflake,
     /// "agent", "other", "user", "bystander", or "system"
     pub role: String,
     /// Display name of the speaker (for role: "other"/"user")
@@ -47,7 +48,7 @@ pub struct MessageEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolEntry {
     /// Snowflake ID
-    pub id: String,
+    pub id: Snowflake,
     /// "tool_call" or "tool_result"
     pub kind: String,
     /// Tool name
@@ -69,7 +70,7 @@ pub struct ToolEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatEntry {
     /// Snowflake ID
-    pub id: String,
+    pub id: Snowflake,
     /// Always "heartbeat"
     pub kind: String,
     /// ISO timestamp
@@ -80,7 +81,7 @@ pub struct HeartbeatEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorEntry {
     /// Snowflake ID
-    pub id: String,
+    pub id: Snowflake,
     /// Always "agent"
     pub role: String,
     /// Always true
@@ -102,12 +103,12 @@ pub enum HomeChannelEntry {
 }
 
 impl HomeChannelEntry {
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> Snowflake {
         match self {
-            HomeChannelEntry::Message(m) => &m.id,
-            HomeChannelEntry::Cursor(c) => &c.id,
-            HomeChannelEntry::Tool(t) => &t.id,
-            HomeChannelEntry::Heartbeat(h) => &h.id,
+            HomeChannelEntry::Message(m) => m.id,
+            HomeChannelEntry::Cursor(c) => c.id,
+            HomeChannelEntry::Tool(t) => t.id,
+            HomeChannelEntry::Heartbeat(h) => h.id,
         }
     }
 }
@@ -115,7 +116,7 @@ impl HomeChannelEntry {
 impl MessageEntry {
     /// Create an incoming message entry (role: "other")
     pub fn incoming(
-        id: String,
+        id: Snowflake,
         author: String,
         author_id: String,
         content: String,
@@ -138,7 +139,7 @@ impl MessageEntry {
 
     /// Create an outbound agent message entry (role: "agent")
     pub fn agent(
-        id: String,
+        id: Snowflake,
         content: String,
         adapter: String,
         msg_id: Option<String>,
@@ -159,7 +160,7 @@ impl MessageEntry {
 
     /// Create a user message with source tracking (for home channel)
     pub fn user_home(
-        id: String,
+        id: Snowflake,
         author: String,
         author_id: String,
         content: String,
@@ -183,7 +184,7 @@ impl MessageEntry {
     }
 
     /// Create a bystander message (anonymous)
-    pub fn bystander(id: String, content: String) -> Self {
+    pub fn bystander(id: Snowflake, content: String) -> Self {
         Self {
             id,
             role: "bystander".to_string(),
@@ -199,7 +200,7 @@ impl MessageEntry {
     }
 
     /// Create a system message
-    pub fn system_msg(id: String, content: String) -> Self {
+    pub fn system_msg(id: Snowflake, content: String) -> Self {
         Self {
             id,
             role: "system".to_string(),
@@ -221,21 +222,21 @@ impl MessageEntry {
 }
 
 impl ToolEntry {
-    pub fn call(id: String, tool_name: String, arguments: serde_json::Value, tool_call_id: String) -> Self {
+    pub fn call(id: Snowflake, tool_name: String, arguments: serde_json::Value, tool_call_id: String) -> Self {
         Self {
             id, kind: "tool_call".to_string(), tool_name,
             arguments: Some(arguments), result: None, result_file: None, tool_call_id,
         }
     }
 
-    pub fn result(id: String, tool_name: String, content: String, tool_call_id: String) -> Self {
+    pub fn result(id: Snowflake, tool_name: String, content: String, tool_call_id: String) -> Self {
         Self {
             id, kind: "tool_result".to_string(), tool_name,
             arguments: None, result: Some(content), result_file: None, tool_call_id,
         }
     }
 
-    pub fn result_file(id: String, tool_name: String, file_path: String, tool_call_id: String) -> Self {
+    pub fn result_file(id: Snowflake, tool_name: String, file_path: String, tool_call_id: String) -> Self {
         Self {
             id, kind: "tool_result".to_string(), tool_name,
             arguments: None, result: None, result_file: Some(file_path), tool_call_id,
@@ -244,13 +245,13 @@ impl ToolEntry {
 }
 
 impl HeartbeatEntry {
-    pub fn new(id: String, timestamp: String) -> Self {
+    pub fn new(id: Snowflake, timestamp: String) -> Self {
         Self { id, kind: "heartbeat".to_string(), timestamp }
     }
 }
 
 impl CursorEntry {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: Snowflake) -> Self {
         Self {
             id,
             role: "agent".to_string(),
@@ -269,10 +270,10 @@ impl ChannelEntry {
     }
 
     /// Get the snowflake ID string
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> Snowflake {
         match self {
-            ChannelEntry::Message(m) => &m.id,
-            ChannelEntry::Cursor(c) => &c.id,
+            ChannelEntry::Message(m) => m.id,
+            ChannelEntry::Cursor(c) => c.id,
         }
     }
 }
@@ -280,11 +281,22 @@ impl ChannelEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
 
     #[test]
     fn test_incoming_message_serialization() {
         let entry = MessageEntry::incoming(
-            "ABC123".to_string(),
+            test_snowflake(),
             "cassie".to_string(),
             "12345".to_string(),
             "hello".to_string(),
@@ -302,7 +314,7 @@ mod tests {
     #[test]
     fn test_agent_message_serialization() {
         let entry = MessageEntry::agent(
-            "ABC124".to_string(),
+            test_snowflake_seq(1),
             "good morning".to_string(),
             "discord".to_string(),
             Some("msg_002".to_string()),
@@ -315,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_cursor_serialization() {
-        let entry = CursorEntry::new("ABC125".to_string());
+        let entry = CursorEntry::new(test_snowflake_seq(2));
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"cursor\":true"));
         assert!(json.contains("\"role\":\"agent\""));
@@ -325,24 +337,24 @@ mod tests {
     #[test]
     fn test_channel_entry_is_agent() {
         let msg = ChannelEntry::Message(MessageEntry::agent(
-            "1".to_string(), "hi".to_string(), "discord".to_string(), None,
+            test_snowflake_seq(1), "hi".to_string(), "discord".to_string(), None,
         ));
         assert!(msg.is_agent());
 
         let other = ChannelEntry::Message(MessageEntry::incoming(
-            "2".to_string(), "user".to_string(), "u1".to_string(),
+            test_snowflake_seq(2), "user".to_string(), "u1".to_string(),
             "hello".to_string(), "discord".to_string(), None,
         ));
         assert!(!other.is_agent());
 
-        let cursor = ChannelEntry::Cursor(CursorEntry::new("3".to_string()));
+        let cursor = ChannelEntry::Cursor(CursorEntry::new(test_snowflake_seq(3)));
         assert!(cursor.is_agent());
     }
 
     #[test]
     fn test_roundtrip_message() {
         let entry = MessageEntry::incoming(
-            "ABC123".to_string(),
+            test_snowflake(),
             "cassie".to_string(),
             "12345".to_string(),
             "hello world".to_string(),
@@ -351,7 +363,7 @@ mod tests {
         );
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: MessageEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id, "ABC123");
+        assert_eq!(parsed.id, test_snowflake());
         assert_eq!(parsed.role, "other");
         assert_eq!(parsed.author.unwrap(), "cassie");
         assert_eq!(parsed.content, "hello world");
@@ -359,10 +371,10 @@ mod tests {
 
     #[test]
     fn test_roundtrip_cursor() {
-        let entry = CursorEntry::new("ABC125".to_string());
+        let entry = CursorEntry::new(test_snowflake_seq(2));
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: CursorEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id, "ABC125");
+        assert_eq!(parsed.id, test_snowflake_seq(2));
         assert!(parsed.cursor);
     }
 
@@ -371,7 +383,7 @@ mod tests {
     #[test]
     fn test_home_channel_message_tagged_roundtrip() {
         let msg = MessageEntry::user_home(
-            "001".into(), "cassie".into(), "u1".into(), "hello".into(),
+            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
             "discord".into(), "general".into(), Some("general".into()), None,
         );
         let entry = HomeChannelEntry::Message(msg);
@@ -381,7 +393,7 @@ mod tests {
         assert!(json.contains("\"source_channel_id\":\"general\""));
 
         let parsed: HomeChannelEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id(), "001");
+        assert_eq!(parsed.id(), test_snowflake_seq(1));
         if let HomeChannelEntry::Message(m) = parsed {
             assert_eq!(m.role, "user");
             assert_eq!(m.source_adapter.unwrap(), "discord");
@@ -393,7 +405,7 @@ mod tests {
     #[test]
     fn test_home_channel_tool_call_tagged_roundtrip() {
         let tool = ToolEntry::call(
-            "002".into(), "read_file".into(),
+            test_snowflake_seq(2), "read_file".into(),
             serde_json::json!({"path": "/tmp/test.txt"}),
             "tc_001".into(),
         );
@@ -417,7 +429,7 @@ mod tests {
     #[test]
     fn test_home_channel_tool_result_tagged_roundtrip() {
         let tool = ToolEntry::result(
-            "003".into(), "read_file".into(),
+            test_snowflake_seq(3), "read_file".into(),
             "file contents here".into(), "tc_001".into(),
         );
         let entry = HomeChannelEntry::Tool(tool);
@@ -437,7 +449,7 @@ mod tests {
     #[test]
     fn test_home_channel_tool_result_file_roundtrip() {
         let tool = ToolEntry::result_file(
-            "004".into(), "bash".into(),
+            test_snowflake_seq(4), "bash".into(),
             "/tmp/results/004.txt".into(), "tc_002".into(),
         );
         let entry = HomeChannelEntry::Tool(tool);
@@ -454,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_home_channel_heartbeat_tagged_roundtrip() {
-        let hb = HeartbeatEntry::new("005".into(), "2026-05-12T12:00:00Z".into());
+        let hb = HeartbeatEntry::new(test_snowflake_seq(5), "2026-05-12T12:00:00Z".into());
         let entry = HomeChannelEntry::Heartbeat(hb);
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"type\":\"heartbeat\""));
@@ -470,18 +482,18 @@ mod tests {
 
     #[test]
     fn test_home_channel_cursor_tagged_roundtrip() {
-        let cursor = CursorEntry::new("006".into());
+        let cursor = CursorEntry::new(test_snowflake_seq(6));
         let entry = HomeChannelEntry::Cursor(cursor);
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"type\":\"cursor\""));
 
         let parsed: HomeChannelEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id(), "006");
+        assert_eq!(parsed.id(), test_snowflake_seq(6));
     }
 
     #[test]
     fn test_home_channel_bystander_roundtrip() {
-        let msg = MessageEntry::bystander("007".into(), "interesting work".into());
+        let msg = MessageEntry::bystander(test_snowflake_seq(7), "interesting work".into());
         let entry = HomeChannelEntry::Message(msg);
         let json = serde_json::to_string(&entry).unwrap();
 
@@ -497,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_home_channel_system_msg_roundtrip() {
-        let msg = MessageEntry::system_msg("008".into(), "context pressure warning".into());
+        let msg = MessageEntry::system_msg(test_snowflake_seq(8), "context pressure warning".into());
         let entry = HomeChannelEntry::Message(msg);
         let json = serde_json::to_string(&entry).unwrap();
 
@@ -513,18 +525,18 @@ mod tests {
     #[test]
     fn test_home_channel_id_accessor() {
         let msg_entry = HomeChannelEntry::Message(
-            MessageEntry::agent("m1".into(), "hi".into(), "home".into(), None),
+            MessageEntry::agent(test_snowflake_seq(10), "hi".into(), "home".into(), None),
         );
-        assert_eq!(msg_entry.id(), "m1");
+        assert_eq!(msg_entry.id(), test_snowflake_seq(10));
 
         let tool_entry = HomeChannelEntry::Tool(
-            ToolEntry::call("t1".into(), "bash".into(), serde_json::json!({}), "tc1".into()),
+            ToolEntry::call(test_snowflake_seq(11), "bash".into(), serde_json::json!({}), "tc1".into()),
         );
-        assert_eq!(tool_entry.id(), "t1");
+        assert_eq!(tool_entry.id(), test_snowflake_seq(11));
 
         let hb_entry = HomeChannelEntry::Heartbeat(
-            HeartbeatEntry::new("h1".into(), "2026-01-01T00:00:00Z".into()),
+            HeartbeatEntry::new(test_snowflake_seq(12), "2026-01-01T00:00:00Z".into()),
         );
-        assert_eq!(hb_entry.id(), "h1");
+        assert_eq!(hb_entry.id(), test_snowflake_seq(12));
     }
 }

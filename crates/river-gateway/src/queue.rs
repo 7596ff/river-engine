@@ -12,7 +12,7 @@ pub struct ChannelNotification {
     /// Channel identifier (e.g., "discord_general")
     pub channel: String,
     /// Snowflake ID of the new message
-    pub snowflake_id: String,
+    pub id: river_core::Snowflake,
 }
 
 /// Thread-safe notification queue
@@ -63,6 +63,18 @@ impl Default for MessageQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, Snowflake, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
+
 
     #[test]
     fn test_new_queue_is_empty() {
@@ -77,11 +89,11 @@ mod tests {
 
         queue.push(ChannelNotification {
             channel: "discord_general".to_string(),
-            snowflake_id: "001".to_string(),
+            id: test_snowflake_seq(1),
         });
         queue.push(ChannelNotification {
             channel: "discord_general".to_string(),
-            snowflake_id: "002".to_string(),
+            id: test_snowflake_seq(2),
         });
 
         assert!(!queue.is_empty());
@@ -89,8 +101,8 @@ mod tests {
 
         let notifications = queue.drain();
         assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[0].snowflake_id, "001");
-        assert_eq!(notifications[1].snowflake_id, "002");
+        assert_eq!(notifications[0].id, test_snowflake_seq(1));
+        assert_eq!(notifications[1].id, test_snowflake_seq(2));
 
         assert!(queue.is_empty());
     }
@@ -108,21 +120,21 @@ mod tests {
 
         queue.push(ChannelNotification {
             channel: "discord_general".to_string(),
-            snowflake_id: "first".to_string(),
+            id: test_snowflake_seq(1),
         });
         queue.push(ChannelNotification {
             channel: "discord_dm".to_string(),
-            snowflake_id: "second".to_string(),
+            id: test_snowflake_seq(2),
         });
         queue.push(ChannelNotification {
             channel: "discord_general".to_string(),
-            snowflake_id: "third".to_string(),
+            id: test_snowflake_seq(3),
         });
 
         let notifications = queue.drain();
-        assert_eq!(notifications[0].snowflake_id, "first");
-        assert_eq!(notifications[1].snowflake_id, "second");
-        assert_eq!(notifications[2].snowflake_id, "third");
+        assert_eq!(notifications[0].id, test_snowflake_seq(1));
+        assert_eq!(notifications[1].id, test_snowflake_seq(2));
+        assert_eq!(notifications[2].id, test_snowflake_seq(3));
     }
 
     #[test]
@@ -138,7 +150,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 q.push(ChannelNotification {
                     channel: "test".to_string(),
-                    snowflake_id: format!("{}", i),
+                    id: test_snowflake_seq(i as u32),
                 });
             }));
         }

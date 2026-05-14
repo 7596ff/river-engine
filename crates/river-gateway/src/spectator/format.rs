@@ -98,49 +98,65 @@ pub fn format_entries_budgeted(entries: &[HomeChannelEntry], token_budget: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, Snowflake, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
+
     use crate::channels::entry::*;
 
     #[test]
     fn test_format_user_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::user_home(
-            "abc001".into(), "cassie".into(), "u1".into(), "hello world".into(),
+            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello world".into(),
             "discord".into(), "general".into(), Some("general".into()), None,
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc001] user:discord:general/general cassie: hello world".to_string()));
+        let sf = test_snowflake_seq(1);
+        assert_eq!(result, Some(format!("[{}] user:discord:general/general cassie: hello world", sf)));
     }
 
     #[test]
     fn test_format_agent_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::agent(
-            "abc002".into(), "hi there!".into(), "home".into(), None,
+            test_snowflake_seq(2), "hi there!".into(), "home".into(), None,
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc002] agent: hi there!".to_string()));
+        let sf = test_snowflake_seq(2);
+        assert_eq!(result, Some(format!("[{}] agent: hi there!", sf)));
     }
 
     #[test]
     fn test_format_bystander_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::bystander(
-            "abc003".into(), "interesting work".into(),
+            test_snowflake_seq(3), "interesting work".into(),
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc003] bystander: interesting work".to_string()));
+        let sf = test_snowflake_seq(3);
+        assert_eq!(result, Some(format!("[{}] bystander: interesting work", sf)));
     }
 
     #[test]
     fn test_format_system_message() {
         let entry = HomeChannelEntry::Message(MessageEntry::system_msg(
-            "abc004".into(), "context pressure warning".into(),
+            test_snowflake_seq(4), "context pressure warning".into(),
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc004] system: context pressure warning".to_string()));
+        let sf = test_snowflake_seq(4);
+        assert_eq!(result, Some(format!("[{}] system: context pressure warning", sf)));
     }
 
     #[test]
     fn test_format_spectator_message_filtered() {
         let entry = HomeChannelEntry::Message(MessageEntry::system_msg(
-            "abc010".into(), "[spectator] move written covering entries abc001-abc009".into(),
+            test_snowflake_seq(10), "[spectator] move written covering entries abc001-abc009".into(),
         ));
         let result = format_entry(&entry);
         assert_eq!(result, None);
@@ -149,37 +165,40 @@ mod tests {
     #[test]
     fn test_format_tool_call() {
         let entry = HomeChannelEntry::Tool(ToolEntry::call(
-            "abc005".into(), "read_file".into(),
+            test_snowflake_seq(5), "read_file".into(),
             serde_json::json!({"path": "/tmp/test.txt"}), "tc1".into(),
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc005] tool_call: read_file".to_string()));
+        let sf = test_snowflake_seq(5);
+        assert_eq!(result, Some(format!("[{}] tool_call: read_file", sf)));
     }
 
     #[test]
     fn test_format_tool_result() {
         let entry = HomeChannelEntry::Tool(ToolEntry::result(
-            "abc006".into(), "read_file".into(),
+            test_snowflake_seq(6), "read_file".into(),
             "file contents here, this is some data".into(), "tc1".into(),
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc006] tool_result(read_file): [37 bytes]".to_string()));
+        let sf = test_snowflake_seq(6);
+        assert_eq!(result, Some(format!("[{}] tool_result(read_file): [37 bytes]", sf)));
     }
 
     #[test]
     fn test_format_tool_result_file() {
         let entry = HomeChannelEntry::Tool(ToolEntry::result_file(
-            "abc007".into(), "bash".into(),
+            test_snowflake_seq(7), "bash".into(),
             "/tmp/results/abc007.txt".into(), "tc2".into(),
         ));
         let result = format_entry(&entry);
-        assert_eq!(result, Some("[abc007] tool_result(bash): [file: /tmp/results/abc007.txt]".to_string()));
+        let sf = test_snowflake_seq(7);
+        assert_eq!(result, Some(format!("[{}] tool_result(bash): [file: /tmp/results/abc007.txt]", sf)));
     }
 
     #[test]
     fn test_format_heartbeat_filtered() {
         let entry = HomeChannelEntry::Heartbeat(HeartbeatEntry::new(
-            "abc008".into(), "2026-05-12T12:00:00Z".into(),
+            test_snowflake_seq(8), "2026-05-12T12:00:00Z".into(),
         ));
         let result = format_entry(&entry);
         assert_eq!(result, None);
@@ -187,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_format_cursor_filtered() {
-        let entry = HomeChannelEntry::Cursor(CursorEntry::new("abc009".into()));
+        let entry = HomeChannelEntry::Cursor(CursorEntry::new(test_snowflake_seq(9)));
         let result = format_entry(&entry);
         assert_eq!(result, None);
     }
@@ -196,26 +215,26 @@ mod tests {
     fn test_format_entries_with_budget() {
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::agent(
-                "001".into(), "short".into(), "home".into(), None,
+                test_snowflake_seq(1), "short".into(), "home".into(), None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                "002".into(), "also short".into(), "home".into(), None,
+                test_snowflake_seq(2), "also short".into(), "home".into(), None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                "003".into(), "third message".into(), "home".into(), None,
+                test_snowflake_seq(3), "third message".into(), "home".into(), None,
             )),
         ];
 
         // Large budget — all entries fit
         let (transcript, last_idx) = format_entries_budgeted(&entries, 10000);
         assert_eq!(last_idx, 2);
-        assert!(transcript.contains("[001]"));
-        assert!(transcript.contains("[003]"));
+        assert!(transcript.contains(&format!("[{}]", test_snowflake_seq(1))));
+        assert!(transcript.contains(&format!("[{}]", test_snowflake_seq(3))));
 
         // Tiny budget — only first entry fits
         let (transcript, last_idx) = format_entries_budgeted(&entries, 10);
         assert_eq!(last_idx, 0);
-        assert!(transcript.contains("[001]"));
-        assert!(!transcript.contains("[002]"));
+        assert!(transcript.contains(&format!("[{}]", test_snowflake_seq(1))));
+        assert!(!transcript.contains(&format!("[{}]", test_snowflake_seq(2))));
     }
 }

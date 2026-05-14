@@ -175,7 +175,7 @@ impl SpectatorTask {
 
         // Read entries since cursor
         let log = ChannelLog::from_path(self.config.home_channel_path.clone());
-        let entries = match log.read_home_since_opt(cursor.as_deref()).await {
+        let entries = match log.read_home_since_opt(cursor).await {
             Ok(e) => e,
             Err(e) => {
                 tracing::error!(error = %e, "Failed to read home channel for sweep");
@@ -197,17 +197,17 @@ impl SpectatorTask {
         if transcript.is_empty() {
             // All entries were filtered (heartbeats/cursors/spectator messages)
             // Write a no-activity move to advance the cursor past them
-            let first_id = entries[0].id().to_string();
-            let last_id = entries.last().unwrap().id().to_string();
-            if let Err(e) = moves::append_move(&self.config.moves_path, &first_id, &last_id, "[no activity]").await {
+            let first_id = entries[0].id();
+            let last_id = entries.last().unwrap().id();
+            if let Err(e) = moves::append_move(&self.config.moves_path, first_id, last_id, "[no activity]").await {
                 tracing::error!(error = %e, "Failed to write no-activity move");
             }
             self.last_sweep = Some(std::time::Instant::now());
             return false;
         }
 
-        let first_id = entries[0].id().to_string();
-        let last_id = entries[last_idx].id().to_string();
+        let first_id = entries[0].id();
+        let last_id = entries[last_idx].id();
 
         // Check if there are more non-filtered entries beyond what we included
         let remaining = &entries[last_idx + 1..];
@@ -237,21 +237,21 @@ impl SpectatorTask {
         };
 
         // Write move
-        if let Err(e) = moves::append_move(&self.config.moves_path, &first_id, &last_id, &summary).await {
+        if let Err(e) = moves::append_move(&self.config.moves_path, first_id, last_id, &summary).await {
             tracing::error!(error = %e, "Failed to write move");
             return false;
         }
 
         // Write observability message to home channel
         let obs_msg = crate::channels::entry::MessageEntry::system_msg(
-            self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+            self.snowflake_gen.next_id(SnowflakeType::Message),
             format!("[spectator] move written covering entries {}-{}", first_id, last_id),
         );
         self.home_channel_writer.write(HomeChannelEntry::Message(obs_msg)).await;
 
         // Clean up tool result files
         HomeChannelWriter::cleanup_tool_results(
-            &self.config.home_channel_path, &first_id, &last_id,
+            &self.config.home_channel_path, first_id, last_id,
         ).await;
 
         // Emit event

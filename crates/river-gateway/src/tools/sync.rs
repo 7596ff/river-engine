@@ -123,14 +123,14 @@ impl Tool for SyncConversationTool {
                     let snowflake = snowflake_gen.next_id(SnowflakeType::Message);
                     let entry = if fetched.is_bot {
                         crate::channels::MessageEntry::agent(
-                            snowflake.to_string(),
+                            snowflake,
                             fetched.content.clone(),
                             adapter.clone(),
                             Some(fetched.id.clone()),
                         )
                     } else {
                         crate::channels::MessageEntry::incoming(
-                            snowflake.to_string(),
+                            snowflake,
                             fetched.author_name.clone(),
                             fetched.author_id.clone(),
                             fetched.content.clone(),

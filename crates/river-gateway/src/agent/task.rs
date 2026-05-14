@@ -187,7 +187,7 @@ impl AgentTask {
         // Write heartbeat to home channel if applicable
         if is_heartbeat {
             let hb = HeartbeatEntry::new(
-                self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                self.snowflake_gen.next_id(SnowflakeType::Message),
                 Utc::now().to_rfc3339(),
             );
             self.home_channel_writer.write(HomeChannelEntry::Heartbeat(hb)).await;
@@ -273,7 +273,7 @@ impl AgentTask {
 
             if let Some(ref content) = response.content {
                 let entry = MessageEntry::agent(
-                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                    self.snowflake_gen.next_id(SnowflakeType::Message),
                     content.clone(), "home".to_string(), None,
                 );
                 self.home_channel_writer.write(HomeChannelEntry::Message(entry)).await;
@@ -293,7 +293,7 @@ impl AgentTask {
             // Write tool calls to home channel
             for tc in &response.tool_calls {
                 let entry = ToolEntry::call(
-                    self.snowflake_gen.next_id(SnowflakeType::Message).to_string(),
+                    self.snowflake_gen.next_id(SnowflakeType::Message),
                     tc.function.name.clone(),
                     serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null),
                     tc.id.clone(),
@@ -309,7 +309,7 @@ impl AgentTask {
                 let tool_msg = ChatMessage::tool(&result.tool_call_id, &result.result);
                 messages.push(tool_msg);
 
-                let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message).to_string();
+                let snowflake = self.snowflake_gen.next_id(SnowflakeType::Message);
                 let entry = if result.result.len() > 4096 {
                     let results_dir = self.config.workspace.join("channels").join("home")
                         .join(&self.agent_name).join("tool-results");

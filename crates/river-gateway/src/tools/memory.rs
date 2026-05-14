@@ -224,7 +224,8 @@ impl Tool for MemoryDeleteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| RiverError::tool("Missing required parameter: id".to_string()))?;
 
-        let id = parse_snowflake_id(id_str)?;
+        let id = Snowflake::from_hex(id_str)
+            .map_err(|e| RiverError::tool(format!("Invalid snowflake ID: {}", e)))?;
 
         let db = self.db.lock().map_err(|_| RiverError::tool("Database lock poisoned".to_string()))?;
         let deleted = db.delete_memory(id)?;
@@ -296,20 +297,7 @@ impl Tool for MemoryDeleteBySourceTool {
     }
 }
 
-/// Parse a Snowflake ID from its string representation (hex format: high-low)
-fn parse_snowflake_id(s: &str) -> Result<Snowflake, RiverError> {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 2 {
-        return Err(RiverError::tool(format!("Invalid snowflake ID format: {}", s)));
-    }
-
-    let high = u64::from_str_radix(parts[0], 16)
-        .map_err(|_| RiverError::tool(format!("Invalid snowflake ID: {}", s)))?;
-    let low = u64::from_str_radix(parts[1], 16)
-        .map_err(|_| RiverError::tool(format!("Invalid snowflake ID: {}", s)))?;
-
-    Ok(Snowflake::from_parts(high, low))
-}
+// parse_snowflake_id removed — use Snowflake::from_hex directly
 
 #[cfg(test)]
 mod tests {

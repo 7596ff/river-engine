@@ -200,12 +200,11 @@ async fn handle_incoming(
 
     // Generate snowflake ID
     let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
-    let snowflake_str = snowflake.to_string();
-
+    
     // Write to home channel first (write-ahead)
     if let Some(ref writer) = state.home_channel_writer {
         let home_entry = crate::channels::entry::MessageEntry::user_home(
-            snowflake_str.clone(),
+            snowflake,
             msg.author.name.clone(),
             msg.author.id.clone(),
             msg.content.clone(),
@@ -221,7 +220,7 @@ async fn handle_incoming(
 
     // Build channel log entry (secondary projection)
     let entry = crate::channels::MessageEntry::incoming(
-        snowflake_str.clone(),
+        snowflake,
         msg.author.name.clone(),
         msg.author.id.clone(),
         msg.content.clone(),
@@ -246,7 +245,7 @@ async fn handle_incoming(
     };
     state.message_queue.push(crate::queue::ChannelNotification {
         channel: channel_key.clone(),
-        snowflake_id: snowflake_str,
+        id: snowflake,
     });
 
     tracing::info!(channel = %channel_key, "Message delivered to channel log");
@@ -277,10 +276,9 @@ async fn handle_bystander(
     };
 
     let snowflake = state.snowflake_gen.next_id(river_core::SnowflakeType::Message);
-    let snowflake_str = snowflake.to_string();
-
+    
     let entry = crate::channels::entry::MessageEntry::bystander(
-        snowflake_str.clone(), msg.content,
+        snowflake, msg.content,
     );
 
     writer.write(
@@ -289,12 +287,12 @@ async fn handle_bystander(
 
     state.message_queue.push(crate::queue::ChannelNotification {
         channel: "home".to_string(),
-        snowflake_id: snowflake_str.clone(),
+        id: snowflake,
     });
 
-    tracing::info!(id = %snowflake_str, "Bystander message received");
+    tracing::info!(id = %snowflake, "Bystander message received");
 
-    Ok(Json(serde_json::json!({ "ok": true, "id": snowflake_str })))
+    Ok(Json(serde_json::json!({ "ok": true, "id": snowflake.to_string() })))
 }
 
 async fn list_tools(

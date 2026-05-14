@@ -125,6 +125,18 @@ fn format_user_tag(m: &MessageEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use river_core::{AgentBirth, Snowflake, SnowflakeType};
+
+    fn test_snowflake() -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(0, birth, SnowflakeType::Message, 0)
+    }
+
+    fn test_snowflake_seq(seq: u32) -> Snowflake {
+        let birth = AgentBirth::new(2026, 5, 14, 12, 0, 0).unwrap();
+        Snowflake::new(seq as u64 * 1_000_000, birth, SnowflakeType::Message, seq)
+    }
+
     use crate::channels::entry::*;
     use crate::channels::log::ChannelLog;
     use tempfile::TempDir;
@@ -143,11 +155,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::user_home(
-                "001".into(), "cassie".into(), "u1".into(), "hello".into(),
+                test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
                 "discord".into(), "general".into(), Some("general".into()), None,
             )),
             HomeChannelEntry::Message(MessageEntry::agent(
-                "002".into(), "hi there!".into(), "home".into(), None,
+                test_snowflake_seq(2), "hi there!".into(), "home".into(), None,
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -167,19 +179,19 @@ mod tests {
         let entries = vec![
             // Two consecutive tool calls should become one assistant message
             HomeChannelEntry::Tool(ToolEntry::call(
-                "001".into(), "read_file".into(),
+                test_snowflake_seq(1), "read_file".into(),
                 serde_json::json!({"path": "/tmp/a.txt"}), "tc1".into(),
             )),
             HomeChannelEntry::Tool(ToolEntry::call(
-                "002".into(), "read_file".into(),
+                test_snowflake_seq(2), "read_file".into(),
                 serde_json::json!({"path": "/tmp/b.txt"}), "tc2".into(),
             )),
             // Then two tool results
             HomeChannelEntry::Tool(ToolEntry::result(
-                "003".into(), "read_file".into(), "content a".into(), "tc1".into(),
+                test_snowflake_seq(3), "read_file".into(), "content a".into(), "tc1".into(),
             )),
             HomeChannelEntry::Tool(ToolEntry::result(
-                "004".into(), "read_file".into(), "content b".into(), "tc2".into(),
+                test_snowflake_seq(4), "read_file".into(), "content b".into(), "tc2".into(),
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -207,7 +219,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::agent(
-                "001".into(), "working on it".into(), "home".into(), None,
+                test_snowflake_seq(1), "working on it".into(), "home".into(), None,
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -225,7 +237,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = vec![
             HomeChannelEntry::Message(MessageEntry::bystander(
-                "001".into(), "nice work".into(),
+                test_snowflake_seq(1), "nice work".into(),
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -241,7 +253,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = vec![
             HomeChannelEntry::Heartbeat(HeartbeatEntry::new(
-                "001".into(), "2026-05-12T12:00:00Z".into(),
+                test_snowflake_seq(1), "2026-05-12T12:00:00Z".into(),
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -256,9 +268,9 @@ mod tests {
     async fn test_build_context_cursor_skipped() {
         let dir = TempDir::new().unwrap();
         let entries = vec![
-            HomeChannelEntry::Cursor(CursorEntry::new("001".into())),
+            HomeChannelEntry::Cursor(CursorEntry::new(test_snowflake_seq(1))),
             HomeChannelEntry::Message(MessageEntry::agent(
-                "002".into(), "hi".into(), "home".into(), None,
+                test_snowflake_seq(2), "hi".into(), "home".into(), None,
             )),
         ];
         let path = write_entries(&dir, &entries).await;
@@ -273,7 +285,7 @@ mod tests {
         let mut entries = Vec::new();
         for i in 0..10 {
             entries.push(HomeChannelEntry::Message(MessageEntry::agent(
-                format!("{:03}", i), format!("msg {}", i), "home".into(), None,
+                test_snowflake_seq(i as u32), format!("msg {}", i), "home".into(), None,
             )));
         }
         let path = write_entries(&dir, &entries).await;
@@ -298,7 +310,7 @@ mod tests {
     #[tokio::test]
     async fn test_format_user_tag_with_all_fields() {
         let m = MessageEntry::user_home(
-            "001".into(), "cassie".into(), "u1".into(), "hello".into(),
+            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
             "discord".into(), "123456".into(), Some("general".into()), None,
         );
         let tag = format_user_tag(&m);
@@ -308,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_format_user_tag_without_channel_name() {
         let m = MessageEntry::user_home(
-            "001".into(), "cassie".into(), "u1".into(), "hello".into(),
+            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
             "discord".into(), "123456".into(), None, None,
         );
         let tag = format_user_tag(&m);
@@ -318,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn test_format_user_tag_no_source() {
         let m = MessageEntry::incoming(
-            "001".into(), "cassie".into(), "u1".into(), "hello".into(),
+            test_snowflake_seq(1), "cassie".into(), "u1".into(), "hello".into(),
             "discord".into(), None,
         );
         let tag = format_user_tag(&m);
