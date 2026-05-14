@@ -226,7 +226,6 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.river-engine;
       description = "The river-engine package to use";
     };
 
