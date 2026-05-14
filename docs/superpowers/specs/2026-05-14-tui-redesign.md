@@ -59,7 +59,21 @@ Entry types (`HomeChannelEntry`, `MessageEntry`, `ToolEntry`, `HeartbeatEntry`, 
 
 Tool calls and results are paired by `tool_call_id`. The formatter holds pending tool calls in a small map. When a tool result arrives, it renders the combined one-liner: `2026-05-14 14:03:22 🔧 read_file(src/main.rs) → tool-results/abc123.txt` (if result was written to file) or `→ 245 lines` (if inline result, showing line count). If a tool call has no result yet, it renders without the arrow. If a tool result arrives without a matching call (e.g., TUI started mid-session), it renders standalone: `2026-05-14 14:03:22 🔧 tool_name → result_file` or `→ N lines`.
 
-The `Display` impl on individual entry types handles the simple cases (message, heartbeat, cursor). Tool call pairing requires a stateful formatter that is not part of `Display` — it lives in the TUI's stdin reader task (or a thin `HomeChannelFormatter` struct that accumulates entries and emits formatted lines).
+river-core provides `Display` impls on all entry types that are faithful to the full content — suitable for logging, debugging, and the context builder. These render the complete tool result content, full message text, etc.
+
+The TUI uses a newtype wrapper to override display for entry types that need collapsed rendering:
+
+```rust
+// in river-tui
+struct TuiEntry(HomeChannelEntry);
+
+impl Display for TuiEntry {
+    // delegates to inner Display for messages, heartbeats, cursors
+    // overrides for tool entries: one-liner summaries
+}
+```
+
+`TuiEntry` delegates to the river-core `Display` impl for entry types that render the same way (messages, heartbeats, cursors) and overrides only `ToolEntry` rendering to produce collapsed one-liners. Tool call pairing by `tool_call_id` is handled by a stateful `HomeChannelFormatter` in the TUI that accumulates entries, pairs calls with results, and emits `TuiEntry`-formatted lines.
 
 ## Layout
 
