@@ -573,6 +573,7 @@ mod tests {
                 "http://localhost:8080".to_string(),
                 "test-model".to_string(),
                 Duration::from_secs(30),
+                None,
             )
             .unwrap(),
             Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
@@ -633,6 +634,7 @@ mod tests {
                 "http://localhost:8080".into(),
                 "test".into(),
                 Duration::from_secs(30),
+                None,
             )
             .unwrap(),
             Arc::new(RwLock::new(ToolExecutor::new(ToolRegistry::new()))),
