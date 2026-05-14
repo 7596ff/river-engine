@@ -18,7 +18,8 @@ ssh athena tail -f /path/to/channels/home/iris.jsonl | river-tui --agent iris --
 |---|---|---|
 | `--agent` | none | yes |
 | `--gateway-url` | `http://127.0.0.1:3000` | no |
-| `--auth-token-file` | none | no |
+
+Auth token is read from the `RIVER_AUTH_TOKEN` environment variable (consistent with all other river-engine components). The TUI loads `.env` via `dotenvy` on startup.
 
 ## Architecture
 
@@ -86,7 +87,7 @@ Three regions:
 On Enter:
 
 1. POST to `{gateway_url}/home/{agent_name}/message` with body `{ "content": "<input>" }`
-2. Auth token (if configured) sent as `Authorization: Bearer <token>`
+2. Auth token from `RIVER_AUTH_TOKEN` env var sent as `Authorization: Bearer <token>`
 3. If POST fails, show error in status bar (briefly)
 
 The user's message does not appear in the display buffer directly. It will appear when the home channel entry arrives via stdin — the gateway writes bystander messages to the home channel, `tail -f` picks it up, stdin reader deserializes it, and it renders as `[bystander]`. This gives accurate ordering and confirms the message was received.
@@ -128,6 +129,7 @@ Plus:
 - HTTP server (axum, `/send`, `/health`)
 - Gateway health polling
 - `GatewayClient` (the full client — replaced by a single `post_bystander` function)
+- `--auth-token-file` CLI flag (auth from env now)
 - `SharedState` with atomic bools for connection/server status
 - `ChatLine` type
 - Channel concept
