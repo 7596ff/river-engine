@@ -11,6 +11,17 @@ pub enum NoteType {
     Move,
     Moment,
     RoomNote,
+    Atomic,
+}
+
+/// A typed link to another atomic note
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteLink {
+    /// Link type (extends, complicates, contradicts, supports, etc.)
+    #[serde(rename = "type")]
+    pub link_type: String,
+    /// Target note ID (snowflake hex)
+    pub target: String,
 }
 
 /// Frontmatter metadata for a note
@@ -25,6 +36,8 @@ pub struct NoteFrontmatter {
     pub tags: Vec<String>,
     #[serde(default)]
     pub channel: Option<String>,
+    #[serde(default)]
+    pub links: Option<Vec<NoteLink>>,
 }
 
 /// A parsed note (frontmatter + content)
@@ -111,5 +124,50 @@ Content here"#;
         let output = note.to_string();
         assert!(output.contains("id:"));
         assert!(output.contains("Content here"));
+    }
+
+    #[test]
+    fn test_parse_atomic_note() {
+        let content = r#"---
+id: "abc123"
+created: 2026-05-15T22:00:00Z
+author: viola
+type: atomic
+links:
+  - type: extends
+    target: "def456"
+  - type: complicates
+    target: "ghi789"
+tags: [hobbes, reason]
+---
+
+Hobbes's theory of reason requires agreed-upon names."#;
+
+        let note = Note::parse("test-z.md", content).unwrap();
+        assert_eq!(note.frontmatter.note_type, NoteType::Atomic);
+        assert_eq!(note.frontmatter.tags, vec!["hobbes", "reason"]);
+        let links = note.frontmatter.links.unwrap();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].link_type, "extends");
+        assert_eq!(links[0].target, "def456");
+        assert_eq!(links[1].link_type, "complicates");
+        assert!(note.content.contains("Hobbes"));
+    }
+
+    #[test]
+    fn test_parse_regular_note_no_links() {
+        let content = r#"---
+id: "abc123"
+created: 2026-05-15T22:00:00Z
+author: agent
+type: note
+tags: []
+---
+
+Regular note content."#;
+
+        let note = Note::parse("test.md", content).unwrap();
+        assert_eq!(note.frontmatter.note_type, NoteType::Note);
+        assert!(note.frontmatter.links.is_none());
     }
 }
