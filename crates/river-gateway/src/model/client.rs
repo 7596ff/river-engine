@@ -460,6 +460,8 @@ struct Choice {
 struct OpenAIAssistantMessage {
     content: Option<String>,
     tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// DeepSeek reasoning/thinking content
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -619,6 +621,8 @@ pub struct ModelResponse {
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCallRequest>,
     pub usage: Usage,
+    /// DeepSeek reasoning/thinking content — must be passed back to the API
+    pub reasoning_content: Option<String>,
 }
 
 impl ModelResponse {
@@ -647,6 +651,7 @@ impl ModelResponse {
             content: choice.message.content,
             tool_calls,
             usage: Usage::from_openai(resp.usage),
+            reasoning_content: choice.message.reasoning_content,
         })
     }
 
@@ -676,6 +681,7 @@ impl ModelResponse {
             content,
             tool_calls,
             usage: Usage::from_anthropic(resp.usage),
+            reasoning_content: None,
         })
     }
 

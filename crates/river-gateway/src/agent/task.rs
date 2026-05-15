@@ -274,7 +274,7 @@ impl AgentTask {
             );
 
             // Add assistant response to local conversation and write to home channel
-            let assistant_msg = ChatMessage::assistant(
+            let mut assistant_msg = ChatMessage::assistant(
                 response.content.clone(),
                 if response.tool_calls.is_empty() {
                     None
@@ -282,6 +282,7 @@ impl AgentTask {
                     Some(response.tool_calls.clone())
                 },
             );
+            assistant_msg.reasoning_content = response.reasoning_content.clone();
             messages.push(assistant_msg);
 
             if let Some(ref content) = response.content {
