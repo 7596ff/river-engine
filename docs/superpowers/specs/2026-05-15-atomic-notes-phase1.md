@@ -97,17 +97,26 @@ Tags: hobbes, names, reason
 
 ## Auto-indexing
 
-Atomic notes live inside `embeddings/` — the Phase 0 sync service already watches for `NoteWritten` events and indexes `.md` files. No additional wiring needed. Notes are searchable via the `search` tool immediately after writing.
+Atomic notes live inside `embeddings/` — the Phase 0 sync service already watches for `NoteWritten` events and indexes `.md` files. The sync service parses frontmatter via `Note::parse()` in `embeddings/note.rs`.
+
+For atomic notes to parse correctly:
+- `NoteType` enum in `embeddings/note.rs` must include an `Atomic` variant, or `type: atomic` in frontmatter will cause a parse failure and fall back to raw chunking
+- `NoteFrontmatter` in `embeddings/note.rs` must include an optional `links` field (`Option<Vec<NoteLink>>`) so links are parsed and available for the Phase 2 link graph
+
+Without these changes, atomic notes would still be indexed (via `chunk_raw` fallback) but their structured metadata — ID, tags, and links — would be lost.
 
 ## What's Added
 
-- `SnowflakeType::AtomicNote = 0x07` in `river-core/src/snowflake/types.rs`
+- `SnowflakeType::AtomicNote = 0x07` in `river-core/src/snowflake/types.rs` (with updated tests for exhaustive coverage)
+- `NoteType::Atomic` variant in `embeddings/note.rs`
+- `NoteLink` struct and `links` field on `NoteFrontmatter` in `embeddings/note.rs`
 - `tools/atomic.rs` — new `WriteAtomicTool`
 - Tool registration in `server.rs`
 
 ## What's Modified
 
-- `river-core/src/snowflake/types.rs` — add `AtomicNote` variant
+- `river-core/src/snowflake/types.rs` — add `AtomicNote` variant, update tests (`from_u8` valid/invalid, `all()`, display)
+- `embeddings/note.rs` — add `Atomic` to `NoteType`, add `NoteLink` struct, add `links: Option<Vec<NoteLink>>` to `NoteFrontmatter`
 - `tools/mod.rs` — add `pub mod atomic;` and re-export
 - `server.rs` — register `WriteAtomicTool`
 
