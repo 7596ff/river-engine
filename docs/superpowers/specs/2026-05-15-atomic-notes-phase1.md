@@ -12,6 +12,8 @@ Markdown with YAML frontmatter. Lives in `embeddings/atomic/{snowflake_hex}-z.md
 ---
 id: "00000000001e84800695d2a7a0100000"
 type: atomic
+created: 2026-05-15T22:00:00Z
+author: viola
 links:
   - type: extends
     target: "00000000001e84800695d2a7a0100001"
@@ -80,9 +82,14 @@ Strict enforcement:
 
 On success:
 1. Generate a Snowflake ID with `SnowflakeType::AtomicNote`
-2. Create `embeddings/atomic/` directory if it doesn't exist
-3. Write the markdown file to `embeddings/atomic/{snowflake_hex}-z.md`
-4. Return the ID and path in the tool result
+2. Auto-populate frontmatter fields not provided by the agent:
+   - `id` — the generated Snowflake hex
+   - `type` — always `"atomic"`
+   - `created` — current UTC timestamp (required by `NoteFrontmatter`)
+   - `author` — the agent name (from tool config, required by `NoteFrontmatter`)
+3. Create `embeddings/atomic/` directory if it doesn't exist
+4. Write the markdown file to `embeddings/atomic/{snowflake_hex}-z.md`
+5. Return the ID and path in the tool result
 
 The `NoteWritten` event fires automatically because the write uses `ToolResult::with_file()` and the path contains "embeddings/" — the Phase 0 sync service picks it up and embeds it.
 
