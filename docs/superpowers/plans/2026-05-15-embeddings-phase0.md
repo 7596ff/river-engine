@@ -213,19 +213,79 @@ pub struct SyncStats {
 }
 ```
 
-- [ ] **Step 4: Fix tests**
+- [ ] **Step 4: Make SyncService generic over an Embedder trait**
 
-Update test constructors to pass an `EmbeddingClient`. Since tests can't call a real embedding server, create a test helper. The simplest approach: make the tests use `#[ignore]` for integration tests that need ollama, and keep unit tests with a mock client.
+Define an `Embedder` trait so tests can use a mock:
 
-Actually, the simpler approach: the tests already work with mock embeddings. Since the `SyncService` now requires a real client, make the tests construct one pointed at a fake URL — the tests that call `sync_file` will fail on the HTTP call. Instead, refactor: extract the embedding call so tests can override it.
+In `crates/river-gateway/src/embeddings/sync.rs`, add:
 
-**Simplest approach for Phase 0:** Mark sync tests as `#[ignore]` (they require a running ollama) and add an integration test flag. The existing tests verify chunking and hashing logic, not embedding quality.
+```rust
+/// Trait for embedding text — allows mocking in tests
+#[async_trait::async_trait]
+pub trait Embedder: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, String>;
+}
+
+#[async_trait::async_trait]
+impl Embedder for EmbeddingClient {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        EmbeddingClient::embed(self, text)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+```
+
+Make `SyncService` generic:
+
+```rust
+pub struct SyncService<E: Embedder> {
+    embeddings_dir: PathBuf,
+    store: VectorStore,
+    chunker: Chunker,
+    embedder: E,
+}
+
+impl<E: Embedder> SyncService<E> {
+    pub fn new(embeddings_dir: PathBuf, store: VectorStore, embedder: E) -> Self {
+        Self {
+            embeddings_dir,
+            store,
+            chunker: Chunker::default(),
+            embedder,
+        }
+    }
+    // ... rest of impl unchanged, use self.embedder.embed() instead of self.embedding_client.embed()
+}
+```
+
+Add `async-trait` to the gateway's `Cargo.toml` if not already present.
+
+- [ ] **Step 4b: Create MockEmbedder for tests**
+
+In the test module:
+
+```rust
+struct MockEmbedder;
+
+#[async_trait::async_trait]
+impl Embedder for MockEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
+        Ok(vec![0.1, 0.2, 0.3, 0.4])
+    }
+}
+```
+
+Update existing tests to use `MockEmbedder`:
 
 ```rust
 #[tokio::test]
-#[ignore] // Requires running embedding server
 async fn test_sync_file() {
-    // ... existing test with real EmbeddingClient
+    let temp = TempDir::new().unwrap();
+    // ... existing setup ...
+    let store = VectorStore::open_in_memory().unwrap();
+    let sync = SyncService::new(temp.path().to_path_buf(), store, MockEmbedder);
+    // ... rest unchanged
 }
 ```
 
@@ -635,7 +695,7 @@ Expected: Clean build.
 
 Run: `cargo test`
 
-Expected: All tests pass (sync integration tests ignored).
+Expected: All tests pass.
 
 - [ ] **Step 3: Push**
 
