@@ -1,7 +1,5 @@
-//! Memory system for semantic search
+//! Memory system — embedding client
 
 mod embedding;
-mod search;
 
 pub use embedding::{EmbeddingClient, EmbeddingConfig};
-pub use search::{MemorySearcher, SearchResult};

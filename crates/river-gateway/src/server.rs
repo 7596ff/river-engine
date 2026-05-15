@@ -256,13 +256,17 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     )));
     tracing::info!("Registered communication tools (send_message)");
 
-    // NOTE: Model management, memory, and Redis tools disabled to reduce tool count.
+    // Register search tool if embeddings are configured
+    if let (Some(ref store), Some(ref embed_client)) = (&vector_store, &embedding_client) {
+        registry.register(Box::new(crate::tools::SearchTool::new(
+            store.clone(),
+            Arc::new(embed_client.clone()),
+        )));
+        tracing::info!("Registered search tool");
+    }
+
+    // NOTE: Model management and Redis tools disabled to reduce tool count.
     // Re-enable when using larger models that can handle 27+ tools reliably.
-    //
-    // Disabled:
-    //   model mgmt: request_model, release_model, switch_model
-    //   memory: embed, memory_search, memory_delete, memory_delete_by_source
-    //   redis: medium_term_set, medium_term_get
 
     tracing::info!("Registered {} tools total", registry.names().len());
 
@@ -295,6 +299,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(home_dir.join("tool-results"))
         .await
         .ok();
+
+    // Clone embedding client for sync service (before AppState consumes it)
+    let embedding_client_for_sync = embedding_client.clone();
 
     // Create app state
     let mut app_state = AppState::new(
@@ -405,7 +412,21 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     coordinator.spawn_task("spectator", |_| spectator_task.run());
 
-    tracing::info!("Spawned agent and spectator tasks via coordinator");
+    // Spawn embedding sync service
+    if let (Some(store), Some(embed_client)) = (vector_store, embedding_client_for_sync) {
+        let sync_service = SyncService::new(
+            embeddings_dir.clone(),
+            store,
+            embed_client,
+        );
+        let sync_rx = coordinator.bus().subscribe();
+        coordinator.spawn_task("sync", move |_| async move {
+            sync_service.run(sync_rx).await;
+        });
+        tracing::info!("Spawned embedding sync service");
+    }
+
+    tracing::info!("Spawned agent, spectator, and sync tasks via coordinator");
 
     tokio::spawn(async move {
         // Keep coordinator alive until shutdown
