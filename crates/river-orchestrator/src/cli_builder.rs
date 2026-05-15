@@ -39,10 +39,6 @@ pub fn gateway_args(
     if let Some(resolved) = resolved_models.get(&agent.model) {
         args.push("--model-url".to_string());
         args.push(resolved.endpoint.clone());
-            if let Some(ref name) = resolved.name {
-                args.push("--embedding-model-name".to_string());
-                args.push(name.clone());
-            }
         if let Some(ref name) = resolved.name {
             args.push("--model-name".to_string());
             args.push(name.clone());
@@ -60,10 +56,6 @@ pub fn gateway_args(
     if let Some(resolved) = resolved_models.get(spectator_key) {
         args.push("--spectator-model-url".to_string());
         args.push(resolved.endpoint.clone());
-            if let Some(ref name) = resolved.name {
-                args.push("--embedding-model-name".to_string());
-                args.push(name.clone());
-            }
         if let Some(ref name) = resolved.name {
             args.push("--spectator-model-name".to_string());
             args.push(name.clone());
