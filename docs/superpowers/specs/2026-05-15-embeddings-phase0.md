@@ -27,7 +27,9 @@ Note: `sync_file()` and `full_sync()` are currently `async` but only because of 
 
 ### VectorStore (no changes)
 
-At `embeddings/store.rs`. Brute-force cosine similarity implemented in Rust — loads all embedding blobs from SQLite, computes cosine in memory. The file header says "sqlite-vec vector store" but no sqlite-vec extension is used. This is fine for Phase 0 — small corpus, fast enough.
+At `embeddings/store.rs`. Brute-force cosine similarity implemented in Rust — loads all embedding blobs from SQLite into memory, computes cosine similarity against every row. The file header says "sqlite-vec vector store" but no sqlite-vec extension is used.
+
+This is acceptable for Phase 0 with a small corpus (< ~1000 chunks). At larger scale, every search loads all embeddings into memory. A `VectorStore::chunk_count()` method should be added so the sync service can log warnings if the corpus grows beyond the safe range.
 
 ### Search tool (new)
 
@@ -103,7 +105,7 @@ File deletions are NOT handled by events in Phase 0. If a file is deleted from `
 
 At startup, `full_sync()` runs once to:
 - Embed any files written while the service was down
-- Clean up chunks for files that no longer exist
+- **Prune orphaned chunks** — scan all `source_path` entries in `VectorStore`, check if the file still exists on disk, delete chunks for missing files. The current `full_sync()` only iterates over existing files — this pruning step must be added.
 
 ## What's Removed
 
@@ -120,9 +122,10 @@ At startup, `full_sync()` runs once to:
 
 ## What's Modified
 
-- `embeddings/sync.rs` — accept `EmbeddingClient` in constructor, replace mock, add `run()` with event loop
+- `embeddings/sync.rs` — accept `EmbeddingClient` in constructor, replace mock, add `run()` with event loop, add orphan pruning to `full_sync()`
 - `server.rs` — spawn sync service task, register search tool, wire `EmbeddingClient` to both
 - `memory/mod.rs` — remove `search` re-export
+- `workspace/AGENTS.md` — note the `search` tool and how it differs from `grep` (semantic vs. text match)
 
 ## Deferrals
 
