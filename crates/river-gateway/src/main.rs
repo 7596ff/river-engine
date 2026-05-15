@@ -40,6 +40,10 @@ struct Args {
     #[arg(long)]
     embedding_url: Option<String>,
 
+    /// Embedding model name
+    #[arg(long)]
+    embedding_model_name: Option<String>,
+
     /// Redis URL (enables working/medium-term memory tools)
     #[arg(long)]
     redis_url: Option<String>,
@@ -301,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
         model_url: args.model_url,
         model_name: args.model_name,
         embedding_url: args.embedding_url,
+        embedding_model_name: args.embedding_model_name,
         redis_url: args.redis_url,
         orchestrator_url: args.orchestrator_url,
         auth_token_file: args.auth_token_file,

@@ -36,6 +36,7 @@ pub struct ServerConfig {
     pub model_url: Option<String>,
     pub model_name: Option<String>,
     pub embedding_url: Option<String>,
+    pub embedding_model_name: Option<String>,
     pub redis_url: Option<String>,
     pub orchestrator_url: Option<String>,
     pub auth_token_file: Option<PathBuf>,
@@ -66,8 +67,10 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Create embedding client if configured
     let embedding_client = if let Some(url) = &config.embedding_url {
+        let model_name = config.embedding_model_name.clone().unwrap_or_else(|| "nomic-embed-text".to_string());
         let embed_config = EmbeddingConfig {
             url: url.clone(),
+            model: model_name,
             ..Default::default()
         };
         Some(EmbeddingClient::new(embed_config))
