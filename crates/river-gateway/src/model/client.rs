@@ -711,6 +711,7 @@ mod tests {
             content: Some("Hello".to_string()),
             tool_calls: vec![],
             usage: test_usage(),
+            reasoning_content: None,
         };
         assert!(!resp.has_tool_calls());
 
@@ -725,6 +726,7 @@ mod tests {
                 },
             }],
             usage: test_usage(),
+            reasoning_content: None,
         };
         assert!(resp_with_tools.has_tool_calls());
     }
