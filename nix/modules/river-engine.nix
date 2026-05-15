@@ -474,8 +474,10 @@ in
       users.groups.${cfg.group} = lib.mkIf (cfg.group == "river") {};
 
       # --- Filesystem ---
-      # Data dirs are world-readable so the TUI can tail the home channel JSONL
-      systemd.tmpfiles.rules = lib.mapAttrsToList (name: agent:
+      # Data dirs and home are world-readable so the TUI can tail the home channel JSONL
+      systemd.tmpfiles.rules = [
+        "d /var/lib/river 0755 ${cfg.user} ${cfg.group} -"
+      ] ++ lib.mapAttrsToList (name: agent:
         "d ${toString agent.data_dir} 0755 ${cfg.user} ${cfg.group} -"
       ) cfg.agents;
     }
