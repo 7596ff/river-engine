@@ -385,7 +385,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let spectator_model = ModelClient::new(
         spectator_model_url.clone(),
         spectator_model_name.clone(),
-        Duration::from_secs(60),
+        Duration::from_secs(300),
         config.spectator_api_key_env.as_deref(),
     )?;
 
