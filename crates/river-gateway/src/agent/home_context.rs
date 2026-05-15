@@ -77,7 +77,10 @@ pub async fn build_context(
                         break;
                     }
                     if tool_calls.is_empty() {
-                        messages.push(ChatMessage::assistant(content, None));
+                        // Only emit if there's actual content — skip empty agent messages
+                        if content.is_some() {
+                            messages.push(ChatMessage::assistant(content, None));
+                        }
                     } else {
                         messages.push(ChatMessage::assistant(content, Some(tool_calls)));
                         i = next; // skip past the tool_call entries we consumed
