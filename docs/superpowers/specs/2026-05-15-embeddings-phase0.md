@@ -2,32 +2,36 @@
 
 ## Goal
 
-Wire the embedding infrastructure to a real embedding server (ollama nomic-embed-text), sync files from `embeddings/` on write events, and give the agent a `search` tool. Remove the old memory tools.
+Wire the embedding infrastructure to a real embedding server (ollama nomic-embed-text), sync files from `embeddings/` on write events, and give the agent a `search` tool. Clean up dead memory tool code.
 
 ## Components
 
 ### EmbeddingClient (no changes)
 
-Already built at `memory/embedding.rs`. Speaks `/v1/embeddings` (OpenAI-compatible). Ollama serves `nomic-embed-text` at 768 dimensions on this endpoint. No code changes needed — just wire it into `SyncService`.
+Already built at `memory/embedding.rs`. Speaks `/v1/embeddings` (OpenAI-compatible). Ollama serves `nomic-embed-text` at 768 dimensions on this endpoint. No code changes needed — just wire it into `SyncService` and the search tool.
 
-### SyncService (modified)
+The `EmbeddingClient` instance is created once in `server.rs` and shared (via `Arc`) between the `SyncService` and the search tool.
 
-At `embeddings/sync.rs`. Currently uses a mock `embed_text()` function returning `[0.1, 0.2, 0.3, 0.4]`.
+### SyncService (refactored)
 
-Changes:
-- Accept `EmbeddingClient` in constructor
-- Replace mock `embed_text()` with `EmbeddingClient::embed()`
-- Run as a background task that subscribes to `NoteWritten` events on the coordinator bus
-- On event: sync the written file (hash, diff, chunk, embed, store)
-- Run `full_sync()` once at startup to catch any files written while the service was down
+At `embeddings/sync.rs`. Currently defines a private `embed_text()` mock function at module level. The service's `new()` constructor takes only a directory path and `VectorStore` — it has no access to an embedding client.
+
+Refactoring required:
+- Add `EmbeddingClient` as a field, accept it in constructor
+- Remove the mock `embed_text()` function
+- Change `sync_file()` to call `self.embedding_client.embed()` instead of the mock
+- Add a `run()` method that subscribes to the coordinator event bus and syncs files on `NoteWritten` events
+- Run `full_sync()` once at startup inside `run()` before entering the event loop
+
+Note: `sync_file()` and `full_sync()` are currently `async` but only because of the mock. With a real `EmbeddingClient` they genuinely need to be async (HTTP calls to ollama).
 
 ### VectorStore (no changes)
 
-At `embeddings/store.rs`. Brute-force cosine similarity over all stored embeddings in SQLite. Works for small corpora. No changes for Phase 0.
+At `embeddings/store.rs`. Brute-force cosine similarity implemented in Rust — loads all embedding blobs from SQLite, computes cosine in memory. The file header says "sqlite-vec vector store" but no sqlite-vec extension is used. This is fine for Phase 0 — small corpus, fast enough.
 
 ### Search tool (new)
 
-New tool registered with the agent: `search(query: "string", limit: 5)`.
+New tool: `search(query: "string", limit: 5)`.
 
 - Embeds the query string via `EmbeddingClient`
 - Searches `VectorStore` with cosine similarity
@@ -60,23 +64,19 @@ Found 3 results for "hobbes names":
    Post-shower Hobbes conversation about names and arbitration...
 ```
 
-### Old memory tools (removed)
+### Old memory tools (cleanup)
 
-Remove from `tools/memory.rs`:
-- `EmbedTool` — replaced by file-based sync
-- `MemorySearchTool` — replaced by `search` tool
-- `MemoryDeleteTool` — not needed (delete the file from `embeddings/` instead)
-- `MemoryDeleteBySourceTool` — not needed
+The old memory tools (`EmbedTool`, `MemorySearchTool`, `MemoryDeleteTool`, `MemoryDeleteBySourceTool`) in `tools/memory.rs` are already disabled — `server.rs` does not register them, commenting "NOTE: Model management, memory, and Redis tools disabled to reduce tool count." They are dead code.
 
-Remove registration of these tools from `server.rs`.
+This spec removes `tools/memory.rs` entirely. The `search` tool replaces the search functionality. File-based sync replaces manual embedding.
 
-The `memories` table in the Database is no longer used for embeddings. The Database itself stays (used for other purposes) but the embedding-related methods become dead code.
+The `memories` table in the Database was previously used for embedding storage. Birth memory has been moved to `birth.json` (completed in the birth rework). The `memories` table and `db/memories.rs` methods are now dead code — deferred to cleanup.
 
 ## Data Flow
 
 ```
 agent writes file to embeddings/ via write tool
-    → NoteWritten event on coordinator bus
+    → NoteWritten event on coordinator bus (already carries path: String)
     → SyncService receives event, syncs the changed file
     → file is chunked, each chunk embedded via EmbeddingClient → ollama
     → chunks + embeddings stored in VectorStore (SQLite)
@@ -95,31 +95,34 @@ Model name (`nomic-embed-text`) and dimensions (768) come from the model config 
 
 ## Event-Driven Sync
 
-The `NoteWritten` event already exists on the coordinator event bus (`AgentEvent::NoteWritten`). The sync service subscribes via `event_rx` and syncs the specific file that changed, not the entire directory.
+The `NoteWritten` event already exists on the coordinator event bus with the required fields: `AgentEvent::NoteWritten { path: String, timestamp: DateTime<Utc> }`. No changes needed to the event.
 
-The `NoteWritten` event should carry the file path so the sync service knows which file to sync. If it currently only carries a flag, extend it with the path.
+The sync service subscribes via a cloned event bus receiver. On `NoteWritten`, it syncs the specific file — not the entire directory.
 
-At startup, `full_sync()` runs once to catch files written while the service was down.
+File deletions are NOT handled by events in Phase 0. If a file is deleted from `embeddings/`, orphaned chunks remain in `VectorStore` until the next startup `full_sync()`, which can detect and clean them. This is a known limitation — deferred to a later phase.
+
+At startup, `full_sync()` runs once to:
+- Embed any files written while the service was down
+- Clean up chunks for files that no longer exist
 
 ## What's Removed
 
-- `tools/memory.rs` — entire file (EmbedTool, MemorySearchTool, MemoryDeleteTool, MemoryDeleteBySourceTool)
-- Memory tool registration in `server.rs`
+- `tools/memory.rs` — entire file (already disabled, now deleted)
 - `memory/search.rs` — `MemorySearcher` (replaced by VectorStore search)
-- Dead `memories` table methods in `db/memories.rs` (optional cleanup — can defer)
+- Any remaining references to old memory tools in `server.rs`
 
 ## What's Added
 
 - `tools/search.rs` — new search tool
 - Search tool registration in `server.rs`
-- `SyncService` background task spawned via coordinator
-- `EmbeddingClient` wired into `SyncService`
+- `SyncService::run()` method with event subscription
+- `SyncService` background task spawned from `server.rs`
 
 ## What's Modified
 
-- `embeddings/sync.rs` — accept `EmbeddingClient`, replace mock, add event subscription
-- `server.rs` — spawn sync service task, register search tool, remove old memory tools
-- `coordinator/events.rs` — ensure `NoteWritten` carries file path
+- `embeddings/sync.rs` — accept `EmbeddingClient` in constructor, replace mock, add `run()` with event loop
+- `server.rs` — spawn sync service task, register search tool, wire `EmbeddingClient` to both
+- `memory/mod.rs` — remove `search` re-export
 
 ## Deferrals
 
@@ -127,7 +130,8 @@ Items deferred to later phases or a finalization pass:
 
 - **Brute-force → ANN index** — replace cosine scan with sqlite-vec or similar when corpus grows
 - **Periodic re-sync fallback** — background poll as safety net if events are missed
+- **File deletion events** — event-driven cleanup of orphaned chunks
 - **Path-prefix filtering** — `search(query, limit, path_prefix)` for scoped searches
 - **Chunk overlap tuning** — current chunker may not overlap enough for good retrieval
 - **Embedding model hot-swap** — changing models requires re-embedding everything
-- **Dead code cleanup** — `db/memories.rs` embedding methods, `memory/search.rs`
+- **Dead code cleanup** — `db/memories.rs` embedding methods, VectorStore header comment
