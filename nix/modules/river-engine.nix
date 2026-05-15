@@ -438,6 +438,8 @@ in
         startLimitBurst = 5;
         startLimitIntervalSec = 60;
 
+        path = with pkgs; [ bash coreutils findutils gnused gnugrep gawk ];
+
         serviceConfig = {
           Type = "simple";
           User = cfg.user;
