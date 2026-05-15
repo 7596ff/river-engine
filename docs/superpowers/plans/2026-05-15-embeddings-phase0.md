@@ -308,42 +308,65 @@ impl SyncService {
 }
 ```
 
-- [ ] **Step 2: Spawn sync service in server.rs**
+- [ ] **Step 2: Open VectorStore and register SearchTool early in server.rs**
 
-In `server.rs`, after the existing vector store setup (around line 91-110), replace the one-shot sync with spawning the service as a coordinator task:
+In `server.rs`, the VectorStore must be opened and the SearchTool registered BEFORE `AppState` consumes the registry. The SyncService is spawned AFTER the coordinator is created.
+
+Early in server.rs (where the one-shot sync currently lives, ~line 91), open the VectorStore and store it for later:
 
 ```rust
-// Create and spawn sync service if embeddings are configured
-if let Some(ref _embedding_url) = config.embedding_url {
+// Open vector store if embeddings are configured
+let vector_store = if config.embedding_url.is_some() {
     let vectors_db_path = config.data_dir.join("vectors.db");
     match VectorStore::open(&vectors_db_path) {
         Ok(store) => {
-            let embedding_client_for_sync = embedding_client
-                .as_ref()
-                .expect("Embedding client must exist when embedding_url is set")
-                .clone();
-            let sync_service = SyncService::new(
-                embeddings_dir.clone(),
-                store.clone(),
-                embedding_client_for_sync,
-            );
-            let sync_bus = coordinator.bus().clone();
-            coordinator.spawn_task("sync", move |_| async move {
-                sync_service.run(sync_bus.subscribe()).await;
-            });
-            tracing::info!("Spawned embedding sync service");
-
-            // Store VectorStore for search tool
-            // (will be used in Task 4)
+            tracing::info!("Opened vector store at {:?}", vectors_db_path);
+            Some(store)
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to open vector store");
+            None
         }
     }
+} else {
+    None
+};
+```
+
+Then register the SearchTool alongside other tools (~line 201), before the registry is locked:
+
+```rust
+// Register search tool if embeddings are configured
+if let (Some(store), Some(ref embed_client)) = (&vector_store, &embedding_client) {
+    registry.register(Box::new(SearchTool::new(
+        store.clone(),
+        Arc::new(embed_client.clone()),
+    )));
+    tracing::info!("Registered search tool");
 }
 ```
 
 Remove the old one-shot sync code.
+
+- [ ] **Step 2b: Spawn SyncService after coordinator is created**
+
+After the coordinator is created and agent/spectator tasks are spawned (~line 422), spawn the sync service:
+
+```rust
+// Spawn embedding sync service
+if let (Some(store), Some(ref embed_client)) = (vector_store, &embedding_client) {
+    let sync_service = SyncService::new(
+        embeddings_dir.clone(),
+        store,
+        embed_client.clone(),
+    );
+    let sync_rx = coordinator.bus().subscribe();
+    coordinator.spawn_task("sync", move |_| async move {
+        sync_service.run(sync_rx).await;
+    });
+    tracing::info!("Spawned embedding sync service");
+}
+```
 
 - [ ] **Step 3: Build and verify**
 
@@ -492,24 +515,7 @@ pub use search::SearchTool;
 
 - [ ] **Step 3: Register search tool in server.rs**
 
-In `server.rs`, inside the `if let Some(ref _embedding_url)` block where the VectorStore is created, after spawning the sync service, register the search tool:
-
-```rust
-// Register search tool
-let embedding_client_for_search = Arc::new(
-    embedding_client
-        .as_ref()
-        .expect("Embedding client must exist when embedding_url is set")
-        .clone(),
-);
-registry.register(Box::new(SearchTool::new(
-    store.clone(),
-    embedding_client_for_search,
-)));
-tracing::info!("Registered search tool");
-```
-
-Note: this requires `registry` to still be mutable at this point. The search tool registration must happen before the registry is wrapped in `Arc<RwLock<>>`. Check the ordering in server.rs and move the embedding/vector store setup before the registry is locked.
+The SearchTool registration was already handled in Task 3 Step 2 (registered early alongside other tools before the registry is locked). Verify it compiles and the tool appears in the tool list.
 
 - [ ] **Step 4: Run tests**
 
@@ -590,7 +596,7 @@ git add -A && git commit -m "cleanup: remove dead memory tools (EmbedTool, Memor
 ### Task 6: Update AGENTS.md
 
 **Files:**
-- Modify: `crates/river-engine/workspace/AGENTS.md`
+- Modify: `workspace/AGENTS.md`
 
 - [ ] **Step 1: Add search tool documentation**
 
