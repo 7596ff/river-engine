@@ -1,35 +1,115 @@
 //! File watcher and sync service for embeddings
 
+use crate::coordinator::events::{AgentEvent, CoordinatorEvent};
 use crate::embeddings::{Chunker, Note, VectorStore};
+use crate::memory::EmbeddingClient;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use tokio::sync::broadcast;
 
-/// Mock embedding function - will be replaced with real embedding client
-async fn embed_text(_content: &str) -> Result<Vec<f32>, String> {
-    // Return a simple mock embedding for now
-    // In production, this would call an embedding API
-    Ok(vec![0.1, 0.2, 0.3, 0.4])
+/// Trait for embedding text — allows mocking in tests
+#[async_trait::async_trait]
+pub trait Embedder: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, String>;
 }
 
-pub struct SyncService {
+#[async_trait::async_trait]
+impl Embedder for EmbeddingClient {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        EmbeddingClient::embed(self, text)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+pub struct SyncService<E: Embedder> {
     embeddings_dir: PathBuf,
     store: VectorStore,
     chunker: Chunker,
+    embedder: E,
 }
 
-impl SyncService {
-    pub fn new(embeddings_dir: PathBuf, store: VectorStore) -> Self {
+impl<E: Embedder> SyncService<E> {
+    pub fn new(embeddings_dir: PathBuf, store: VectorStore, embedder: E) -> Self {
         Self {
             embeddings_dir,
             store,
             chunker: Chunker::default(),
+            embedder,
         }
     }
 
-    /// Full sync: scan all files in embeddings dir, sync each
+    /// Run the sync service: full sync at startup, then listen for NoteWritten events
+    pub async fn run(self, mut event_rx: broadcast::Receiver<CoordinatorEvent>) {
+        match self.full_sync().await {
+            Ok(stats) => {
+                tracing::info!(
+                    updated = stats.updated,
+                    skipped = stats.skipped,
+                    pruned = stats.pruned,
+                    errors = stats.errors,
+                    "Initial embedding sync complete"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Initial embedding sync failed");
+            }
+        }
+
+        loop {
+            match event_rx.recv().await {
+                Ok(CoordinatorEvent::Agent(AgentEvent::NoteWritten { path, .. })) => {
+                    let file_path = PathBuf::from(&path);
+                    if file_path.exists() {
+                        match self.sync_file(&file_path).await {
+                            Ok(true) => {
+                                tracing::info!(path = %path, "Synced file on write event")
+                            }
+                            Ok(false) => {
+                                tracing::debug!(path = %path, "File unchanged")
+                            }
+                            Err(e) => tracing::error!(
+                                path = %path,
+                                error = %e,
+                                "Failed to sync file on write event"
+                            ),
+                        }
+                    }
+                }
+                Ok(CoordinatorEvent::Shutdown) => {
+                    tracing::info!("Sync service shutting down");
+                    break;
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(missed = n, "Sync service lagged, running full sync");
+                    let _ = self.full_sync().await;
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    tracing::info!("Event bus closed, sync service stopping");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Full sync: scan all files, prune orphans
     pub async fn full_sync(&self) -> Result<SyncStats, String> {
         let mut stats = SyncStats::default();
 
+        // Prune orphaned chunks
+        if let Ok(sources) = self.store.list_sources() {
+            for source in sources {
+                let full_path = self.embeddings_dir.join(&source);
+                if !full_path.exists() {
+                    self.store.delete_source(&source)?;
+                    stats.pruned += 1;
+                    tracing::info!(source = %source, "Pruned orphaned chunks");
+                }
+            }
+        }
+
+        // Sync existing files
         let files = self.list_markdown_files()?;
         for path in files {
             match self.sync_file(&path).await {
@@ -47,6 +127,17 @@ impl SyncService {
             }
         }
 
+        if let Ok(count) = self.store.chunk_count() {
+            if count > 1000 {
+                tracing::warn!(
+                    chunks = count,
+                    "Corpus size exceeds recommended limit for brute-force search"
+                );
+            } else {
+                tracing::info!(chunks = count, "Sync complete");
+            }
+        }
+
         Ok(stats)
     }
 
@@ -61,30 +152,24 @@ impl SyncService {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read {}: {}", rel_path, e))?;
 
-        // Hash content
         let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
 
-        // Check if unchanged
         if let Ok(Some(existing_hash)) = self.store.get_hash(&rel_path) {
             if existing_hash == hash {
-                return Ok(false); // No change
+                return Ok(false);
             }
         }
 
-        // Delete old chunks for this file
         self.store.delete_source(&rel_path)?;
 
-        // Parse and chunk
         let chunks = if let Ok(note) = Note::parse(&rel_path, &content) {
             self.chunker.chunk(&note)
         } else {
             self.chunker.chunk_raw(&rel_path, &content)
         };
 
-        // Embed and store each chunk
         for chunk in &chunks {
-            let embedding = embed_text(&chunk.content).await?;
-
+            let embedding = self.embedder.embed(&chunk.content).await?;
             self.store.upsert_chunk(
                 &chunk.id,
                 &chunk.source_path,
@@ -128,12 +213,22 @@ pub struct SyncStats {
     pub updated: usize,
     pub skipped: usize,
     pub errors: usize,
+    pub pruned: usize,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    struct MockEmbedder;
+
+    #[async_trait::async_trait]
+    impl Embedder for MockEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
+            Ok(vec![0.1, 0.2, 0.3, 0.4])
+        }
+    }
 
     #[tokio::test]
     async fn test_sync_file() {
@@ -154,13 +249,11 @@ This is test content."#;
         std::fs::write(&note_path, content).unwrap();
 
         let store = VectorStore::open_in_memory().unwrap();
-        let sync = SyncService::new(temp.path().to_path_buf(), store);
+        let sync = SyncService::new(temp.path().to_path_buf(), store, MockEmbedder);
 
-        // First sync should update
         let changed = sync.sync_file(&note_path).await.unwrap();
         assert!(changed);
 
-        // Second sync should skip (no change)
         let changed = sync.sync_file(&note_path).await.unwrap();
         assert!(!changed);
     }
@@ -169,7 +262,6 @@ This is test content."#;
     async fn test_full_sync() {
         let temp = TempDir::new().unwrap();
 
-        // Create some test files
         for i in 0..3 {
             let path = temp.path().join(format!("note{}.md", i));
             let content = format!(
@@ -188,11 +280,31 @@ Content {}"#,
         }
 
         let store = VectorStore::open_in_memory().unwrap();
-        let sync = SyncService::new(temp.path().to_path_buf(), store);
+        let sync = SyncService::new(temp.path().to_path_buf(), store, MockEmbedder);
 
         let stats = sync.full_sync().await.unwrap();
         assert_eq!(stats.updated, 3);
         assert_eq!(stats.skipped, 0);
         assert_eq!(stats.errors, 0);
+    }
+
+    #[tokio::test]
+    async fn test_orphan_pruning() {
+        let temp = TempDir::new().unwrap();
+
+        let note_path = temp.path().join("ephemeral.md");
+        std::fs::write(&note_path, "# Ephemeral\nWill be deleted.").unwrap();
+
+        let store = VectorStore::open_in_memory().unwrap();
+        let sync = SyncService::new(temp.path().to_path_buf(), store.clone(), MockEmbedder);
+
+        let stats = sync.full_sync().await.unwrap();
+        assert_eq!(stats.updated, 1);
+
+        std::fs::remove_file(&note_path).unwrap();
+
+        let stats = sync.full_sync().await.unwrap();
+        assert_eq!(stats.pruned, 1);
+        assert_eq!(stats.updated, 0);
     }
 }

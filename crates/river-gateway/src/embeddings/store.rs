@@ -158,6 +158,29 @@ impl VectorStore {
 
         Ok(results)
     }
+
+    /// List all unique source paths in the store
+    pub fn list_sources(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT source_path FROM chunks")
+            .map_err(|e| e.to_string())?;
+        let sources = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(sources)
+    }
+
+    /// Get total chunk count
+    pub fn chunk_count(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        Ok(count as usize)
+    }
 }
 
 #[derive(Debug, Clone)]

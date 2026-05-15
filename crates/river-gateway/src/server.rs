@@ -88,29 +88,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Create vector store and run initial sync if embeddings are configured
     let embeddings_dir = config.workspace.join("embeddings");
-    let _vector_store = if config.embedding_url.is_some() {
+    // Open vector store if embeddings are configured
+    let vector_store = if config.embedding_url.is_some() {
         let vectors_db_path = config.data_dir.join("vectors.db");
         match VectorStore::open(&vectors_db_path) {
             Ok(store) => {
                 tracing::info!("Opened vector store at {:?}", vectors_db_path);
-
-                // Run initial sync
-                let sync_service = SyncService::new(embeddings_dir.clone(), store.clone());
-                match sync_service.full_sync().await {
-                    Ok(stats) => {
-                        tracing::info!(
-                            updated = stats.updated,
-                            skipped = stats.skipped,
-                            errors = stats.errors,
-                            "Initial embedding sync complete"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("Initial embedding sync failed: {}", e);
-                    }
-                }
-
-                Some(Arc::new(store))
+                Some(store)
             }
             Err(e) => {
                 tracing::warn!("Failed to open vector store: {}", e);

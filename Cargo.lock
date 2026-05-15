@@ -2113,6 +2113,7 @@ name = "river-gateway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "atty",
  "axum",
  "chrono",
