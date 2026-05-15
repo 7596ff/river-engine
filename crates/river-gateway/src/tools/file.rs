@@ -287,11 +287,10 @@ impl Tool for WriteTool {
             bytes = content.len(),
             "WriteTool: File written successfully"
         );
-        Ok(ToolResult::success(format!(
-            "Wrote {} bytes to {:?}",
-            content.len(),
-            path
-        )))
+        Ok(ToolResult::with_file(
+            format!("Wrote {} bytes to {:?}", content.len(), path),
+            path.to_string_lossy().to_string(),
+        ))
     }
 }
 
@@ -419,10 +418,10 @@ impl Tool for EditTool {
             occurrences = occurrences,
             "EditTool: File edited successfully"
         );
-        Ok(ToolResult::success(format!(
-            "Replaced {} occurrence(s) in {:?}",
-            occurrences, path
-        )))
+        Ok(ToolResult::with_file(
+            format!("Replaced {} occurrence(s) in {:?}", occurrences, path),
+            path.to_string_lossy().to_string(),
+        ))
     }
 }
 
