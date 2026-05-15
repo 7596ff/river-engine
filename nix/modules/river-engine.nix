@@ -467,7 +467,6 @@ in
         isSystemUser = true;
         group = cfg.group;
         home = "/var/lib/river";
-        createHome = true;
         description = "River Engine service user";
       };
 
