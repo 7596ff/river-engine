@@ -5,6 +5,7 @@ pub mod executor;
 pub mod registry;
 
 // Pure tools
+pub mod atomic;
 pub mod file;
 pub mod logging;
 pub mod search;
@@ -27,6 +28,7 @@ pub use executor::{ToolCall, ToolCallResponse, ToolExecutor};
 pub use registry::{Tool, ToolRegistry, ToolResult, ToolSchema};
 
 // Re-export tools
+pub use atomic::WriteAtomicTool;
 pub use adapters::{AdapterConfig, AdapterRegistry, ListAdaptersTool};
 pub use communication::{ReadChannelTool, SendMessageTool};
 pub use context::{ContextRotation, ContextStatusTool, RotateContextTool};

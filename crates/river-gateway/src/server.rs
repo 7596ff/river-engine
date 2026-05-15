@@ -272,6 +272,14 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!("Registered search tool");
     }
 
+    // Register write_atomic tool
+    registry.register(Box::new(crate::tools::WriteAtomicTool::new(
+        config.workspace.clone(),
+        snowflake_gen.clone(),
+        agent_name.clone(),
+    )));
+    tracing::info!("Registered write_atomic tool");
+
     // NOTE: Model management and Redis tools disabled to reduce tool count.
     // Re-enable when using larger models that can handle 27+ tools reliably.
 

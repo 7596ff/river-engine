@@ -9,6 +9,7 @@ pub enum ChunkType {
     Move,
     Moment,
     RoomNote,
+    Atomic,
     Fragment,
 }
 
@@ -39,6 +40,7 @@ impl Chunker {
             NoteType::Move => ChunkType::Move,
             NoteType::Moment => ChunkType::Moment,
             NoteType::RoomNote => ChunkType::RoomNote,
+            NoteType::Atomic => ChunkType::Atomic,
         };
 
         let max_chars = self.max_chunk_tokens * 4;
