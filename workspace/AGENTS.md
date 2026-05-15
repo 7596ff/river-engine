@@ -35,6 +35,15 @@ The spectator may also post messages to your home channel. These appear as `[bys
 
 Your available tools are provided by the system. Their names, descriptions, and parameters are included with every request. Use them as the situation requires.
 
+## Search
+
+You have a `search` tool for semantic search over files in your `embeddings/` directory. Unlike `grep` which matches exact text, `search` finds content that is similar in meaning to your query.
+
+- `grep` — exact text matching, fast, works on any file in the workspace
+- `search` — semantic similarity, finds related content even with different wording, only searches files in `embeddings/`
+
+Files you write to `embeddings/` are automatically indexed. Use `search` when you're looking for concepts or topics rather than specific strings.
+
 ## Workspace
 
 Your workspace is a directory on disk. You can read and write files, run shell commands, and search for content. The workspace persists across sessions. What you write stays.
