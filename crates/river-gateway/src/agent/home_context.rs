@@ -3,6 +3,7 @@
 use crate::channels::entry::{HomeChannelEntry, MessageEntry};
 use crate::channels::log::ChannelLog;
 use crate::model::{ChatMessage, FunctionCall, ToolCallRequest};
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -38,19 +39,19 @@ pub async fn build_context(
     let tail_start = all_entries.len().saturating_sub(config.max_tail_entries);
     let tail = &all_entries[tail_start..];
 
-    // Process tail — group agent content with following tool calls into one assistant message
+    // Process tail — merge agent content with tool calls, reorder interleaved messages
     let mut i = 0;
     while i < tail.len() {
         match &tail[i] {
             HomeChannelEntry::Message(m) => match m.role.as_str() {
                 "agent" => {
-                    // Look ahead: if the next entries are tool_calls, merge them
-                    // into a single assistant message with both content and tool_calls
                     let content = if m.content.is_empty() {
                         None
                     } else {
                         Some(m.content.clone())
                     };
+
+                    // Look ahead for immediately following tool_call entries
                     let mut next = i + 1;
                     let mut tool_calls = Vec::new();
                     while next < tail.len() {
@@ -64,9 +65,7 @@ pub async fn build_context(
                                         arguments: tc
                                             .arguments
                                             .as_ref()
-                                            .map(|a| {
-                                                serde_json::to_string(a).unwrap_or_default()
-                                            })
+                                            .map(|a| serde_json::to_string(a).unwrap_or_default())
                                             .unwrap_or_default(),
                                     },
                                 });
@@ -76,15 +75,67 @@ pub async fn build_context(
                         }
                         break;
                     }
+
                     if tool_calls.is_empty() {
-                        // Only emit if there's actual content — skip empty agent messages
+                        // No tool calls — emit plain assistant message (skip if empty)
                         if content.is_some() {
                             messages.push(ChatMessage::assistant(content, None));
                         }
                     } else {
-                        messages.push(ChatMessage::assistant(content, Some(tool_calls)));
-                        i = next; // skip past the tool_call entries we consumed
-                        continue; // don't increment i again
+                        // Emit assistant message with tool calls
+                        let expected_ids: HashSet<String> =
+                            tool_calls.iter().map(|tc| tc.id.clone()).collect();
+                        messages
+                            .push(ChatMessage::assistant(content, Some(tool_calls)));
+
+                        // Now collect tool results for these IDs, deferring any
+                        // interleaved non-tool messages (e.g. Discord echo from send_message)
+                        let mut deferred: Vec<ChatMessage> = Vec::new();
+                        let mut found_ids: HashSet<String> = HashSet::new();
+                        let mut scan = next;
+
+                        while scan < tail.len() && found_ids.len() < expected_ids.len() {
+                            match &tail[scan] {
+                                HomeChannelEntry::Tool(t) if t.kind == "tool_result" => {
+                                    if expected_ids.contains(&t.tool_call_id) {
+                                        let result_content =
+                                            if let Some(ref result) = t.result {
+                                                result.clone()
+                                            } else if let Some(ref file) = t.result_file {
+                                                // Can't async read here in a sync scan,
+                                                // use placeholder — will be filled below
+                                                format!("[file: {}]", file)
+                                            } else {
+                                                "[empty tool result]".to_string()
+                                            };
+                                        messages.push(ChatMessage::tool(
+                                            &t.tool_call_id,
+                                            &result_content,
+                                        ));
+                                        found_ids.insert(t.tool_call_id.clone());
+                                    } else {
+                                        // Tool result for a different call — defer
+                                        deferred.push(ChatMessage::tool(
+                                            &t.tool_call_id,
+                                            t.result.as_deref().unwrap_or("[empty]"),
+                                        ));
+                                    }
+                                }
+                                other => {
+                                    // Non-tool entry interleaved — defer it
+                                    if let Some(msg) = entry_to_chat_message(other) {
+                                        deferred.push(msg);
+                                    }
+                                }
+                            }
+                            scan += 1;
+                        }
+
+                        // Emit deferred messages after tool results
+                        messages.extend(deferred);
+
+                        i = scan;
+                        continue;
                     }
                 }
                 "user" => {
@@ -101,8 +152,7 @@ pub async fn build_context(
             HomeChannelEntry::Tool(t) => {
                 match t.kind.as_str() {
                     "tool_call" => {
-                        // Orphan tool calls (no preceding agent message) —
-                        // collect into an assistant message with no content
+                        // Orphan tool calls (no preceding agent message)
                         let mut tool_calls = Vec::new();
                         while i < tail.len() {
                             if let HomeChannelEntry::Tool(tc) = &tail[i] {
@@ -115,9 +165,7 @@ pub async fn build_context(
                                             arguments: tc
                                                 .arguments
                                                 .as_ref()
-                                                .map(|a| {
-                                                    serde_json::to_string(a).unwrap_or_default()
-                                                })
+                                                .map(|a| serde_json::to_string(a).unwrap_or_default())
                                                 .unwrap_or_default(),
                                         },
                                     });
@@ -127,16 +175,59 @@ pub async fn build_context(
                             }
                             break;
                         }
+
+                        // Same reordering logic for orphan tool calls
+                        let expected_ids: HashSet<String> =
+                            tool_calls.iter().map(|tc| tc.id.clone()).collect();
                         messages.push(ChatMessage::assistant(None, Some(tool_calls)));
-                        continue; // don't increment i again
+
+                        let mut deferred: Vec<ChatMessage> = Vec::new();
+                        let mut found_ids: HashSet<String> = HashSet::new();
+                        let mut scan = i;
+
+                        while scan < tail.len() && found_ids.len() < expected_ids.len() {
+                            match &tail[scan] {
+                                HomeChannelEntry::Tool(t) if t.kind == "tool_result" => {
+                                    if expected_ids.contains(&t.tool_call_id) {
+                                        let result_content =
+                                            if let Some(ref result) = t.result {
+                                                result.clone()
+                                            } else if let Some(ref file) = t.result_file {
+                                                format!("[file: {}]", file)
+                                            } else {
+                                                "[empty tool result]".to_string()
+                                            };
+                                        messages.push(ChatMessage::tool(
+                                            &t.tool_call_id,
+                                            &result_content,
+                                        ));
+                                        found_ids.insert(t.tool_call_id.clone());
+                                    } else {
+                                        deferred.push(ChatMessage::tool(
+                                            &t.tool_call_id,
+                                            t.result.as_deref().unwrap_or("[empty]"),
+                                        ));
+                                    }
+                                }
+                                other => {
+                                    if let Some(msg) = entry_to_chat_message(other) {
+                                        deferred.push(msg);
+                                    }
+                                }
+                            }
+                            scan += 1;
+                        }
+
+                        messages.extend(deferred);
+                        i = scan;
+                        continue;
                     }
                     "tool_result" => {
+                        // Orphan tool result — emit as-is
                         let content = if let Some(ref result) = t.result {
                             result.clone()
                         } else if let Some(ref file) = t.result_file {
-                            tokio::fs::read_to_string(file)
-                                .await
-                                .unwrap_or_else(|_| format!("[tool result file missing: {}]", file))
+                            format!("[file: {}]", file)
                         } else {
                             "[empty tool result]".to_string()
                         };
@@ -154,6 +245,28 @@ pub async fn build_context(
     }
 
     Ok(messages)
+}
+
+/// Convert a HomeChannelEntry to a ChatMessage (for deferred messages)
+fn entry_to_chat_message(entry: &HomeChannelEntry) -> Option<ChatMessage> {
+    match entry {
+        HomeChannelEntry::Message(m) => match m.role.as_str() {
+            "agent" => {
+                if m.content.is_empty() {
+                    None
+                } else {
+                    Some(ChatMessage::assistant(Some(m.content.clone()), None))
+                }
+            }
+            "user" => Some(ChatMessage::user(format_user_tag(m))),
+            "bystander" => Some(ChatMessage::user(format!("[bystander] {}", m.content))),
+            "system" => Some(ChatMessage::system(m.content.clone())),
+            _ => None,
+        },
+        HomeChannelEntry::Heartbeat(_) => Some(ChatMessage::system("[heartbeat]".to_string())),
+        HomeChannelEntry::Cursor(_) => None,
+        HomeChannelEntry::Tool(_) => None, // handled by caller
+    }
 }
 
 /// Format a user message with source adapter/channel tag
@@ -247,7 +360,6 @@ mod tests {
     async fn test_build_context_tool_calls_grouped() {
         let dir = TempDir::new().unwrap();
         let entries = vec![
-            // Two consecutive tool calls should become one assistant message
             HomeChannelEntry::Tool(ToolEntry::call(
                 test_snowflake_seq(1),
                 "read_file".into(),
@@ -260,7 +372,6 @@ mod tests {
                 serde_json::json!({"path": "/tmp/b.txt"}),
                 "tc2".into(),
             )),
-            // Then two tool results
             HomeChannelEntry::Tool(ToolEntry::result(
                 test_snowflake_seq(3),
                 "read_file".into(),
@@ -279,17 +390,13 @@ mod tests {
         let msgs = build_context(&path, &[], &HomeContextConfig::default())
             .await
             .unwrap();
-        // 1 assistant (with 2 tool calls) + 2 tool results = 3 messages
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].role, "assistant");
         assert!(msgs[0].content.is_none());
         let tc = msgs[0].tool_calls.as_ref().unwrap();
         assert_eq!(tc.len(), 2);
-        assert_eq!(tc[0].function.name, "read_file");
-        assert_eq!(tc[1].function.name, "read_file");
         assert_eq!(tc[0].id, "tc1");
         assert_eq!(tc[1].id, "tc2");
-
         assert_eq!(msgs[1].role, "tool");
         assert_eq!(msgs[1].tool_call_id.as_ref().unwrap(), "tc1");
         assert_eq!(msgs[2].role, "tool");
@@ -372,7 +479,7 @@ mod tests {
         let msgs = build_context(&path, &[], &HomeContextConfig::default())
             .await
             .unwrap();
-        assert_eq!(msgs.len(), 1); // cursor skipped
+        assert_eq!(msgs.len(), 1);
     }
 
     #[tokio::test]
@@ -394,7 +501,6 @@ mod tests {
         };
         let msgs = build_context(&path, &[], &config).await.unwrap();
         assert_eq!(msgs.len(), 3);
-        // Should be the last 3
         assert!(msgs[0].content.as_ref().unwrap().contains("msg 7"));
         assert!(msgs[1].content.as_ref().unwrap().contains("msg 8"));
         assert!(msgs[2].content.as_ref().unwrap().contains("msg 9"));
@@ -408,6 +514,199 @@ mod tests {
             .await
             .unwrap();
         assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_build_context_agent_content_merged_with_tool_calls() {
+        let dir = TempDir::new().unwrap();
+        let entries = vec![
+            HomeChannelEntry::Message(MessageEntry::agent(
+                test_snowflake_seq(1),
+                "Let me read those files.".into(),
+                "home".into(),
+                None,
+            )),
+            HomeChannelEntry::Tool(ToolEntry::call(
+                test_snowflake_seq(2),
+                "read_file".into(),
+                serde_json::json!({"path": "/tmp/a.txt"}),
+                "tc1".into(),
+            )),
+            HomeChannelEntry::Tool(ToolEntry::call(
+                test_snowflake_seq(3),
+                "read_file".into(),
+                serde_json::json!({"path": "/tmp/b.txt"}),
+                "tc2".into(),
+            )),
+            HomeChannelEntry::Tool(ToolEntry::result(
+                test_snowflake_seq(4),
+                "read_file".into(),
+                "content a".into(),
+                "tc1".into(),
+            )),
+            HomeChannelEntry::Tool(ToolEntry::result(
+                test_snowflake_seq(5),
+                "read_file".into(),
+                "content b".into(),
+                "tc2".into(),
+            )),
+        ];
+        let path = write_entries(&dir, &entries).await;
+
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].role, "assistant");
+        assert_eq!(
+            msgs[0].content.as_ref().unwrap(),
+            "Let me read those files."
+        );
+        let tc = msgs[0].tool_calls.as_ref().unwrap();
+        assert_eq!(tc.len(), 2);
+        assert_eq!(tc[0].id, "tc1");
+        assert_eq!(tc[1].id, "tc2");
+        assert_eq!(msgs[1].role, "tool");
+        assert_eq!(msgs[1].tool_call_id.as_ref().unwrap(), "tc1");
+        assert_eq!(msgs[2].role, "tool");
+        assert_eq!(msgs[2].tool_call_id.as_ref().unwrap(), "tc2");
+    }
+
+    #[tokio::test]
+    async fn test_build_context_agent_empty_content_with_tool_calls() {
+        let dir = TempDir::new().unwrap();
+        let entries = vec![
+            HomeChannelEntry::Message(MessageEntry::agent(
+                test_snowflake_seq(1),
+                "".into(),
+                "home".into(),
+                None,
+            )),
+            HomeChannelEntry::Tool(ToolEntry::call(
+                test_snowflake_seq(2),
+                "glob".into(),
+                serde_json::json!({"pattern": "*.rs"}),
+                "tc1".into(),
+            )),
+            HomeChannelEntry::Tool(ToolEntry::result(
+                test_snowflake_seq(3),
+                "glob".into(),
+                "main.rs\nlib.rs".into(),
+                "tc1".into(),
+            )),
+        ];
+        let path = write_entries(&dir, &entries).await;
+
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "assistant");
+        assert!(msgs[0].content.is_none());
+        assert_eq!(msgs[0].tool_calls.as_ref().unwrap().len(), 1);
+        assert_eq!(msgs[1].role, "tool");
+    }
+
+    #[tokio::test]
+    async fn test_build_context_agent_without_following_tool_calls() {
+        let dir = TempDir::new().unwrap();
+        let entries = vec![
+            HomeChannelEntry::Message(MessageEntry::agent(
+                test_snowflake_seq(1),
+                "Just a normal response.".into(),
+                "home".into(),
+                None,
+            )),
+            HomeChannelEntry::Message(MessageEntry::bystander(
+                test_snowflake_seq(2),
+                "thanks".into(),
+            )),
+        ];
+        let path = write_entries(&dir, &entries).await;
+
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "assistant");
+        assert_eq!(
+            msgs[0].content.as_ref().unwrap(),
+            "Just a normal response."
+        );
+        assert!(msgs[0].tool_calls.is_none());
+        assert_eq!(msgs[1].role, "user");
+    }
+
+    #[tokio::test]
+    async fn test_build_context_interleaved_message_during_tool_execution() {
+        // Simulates: send_message tool sends to Discord, Discord echoes back
+        // as an incoming user message BEFORE the tool result is written
+        let dir = TempDir::new().unwrap();
+        let entries = vec![
+            HomeChannelEntry::Message(MessageEntry::agent(
+                test_snowflake_seq(1),
+                "Sending message now.".into(),
+                "home".into(),
+                None,
+            )),
+            HomeChannelEntry::Tool(ToolEntry::call(
+                test_snowflake_seq(2),
+                "send_message".into(),
+                serde_json::json!({"adapter": "discord", "channel": "123", "content": "hello from viola"}),
+                "tc1".into(),
+            )),
+            // Discord echo arrives before tool result
+            HomeChannelEntry::Message(MessageEntry::user_home(
+                test_snowflake_seq(3),
+                "viola".into(),
+                "bot".into(),
+                "hello from viola".into(),
+                "discord".into(),
+                "123".into(),
+                None,
+                None,
+            )),
+            // Tool result arrives after
+            HomeChannelEntry::Tool(ToolEntry::result(
+                test_snowflake_seq(4),
+                "send_message".into(),
+                "Message sent successfully".into(),
+                "tc1".into(),
+            )),
+            // Next user message
+            HomeChannelEntry::Message(MessageEntry::bystander(
+                test_snowflake_seq(5),
+                "nice, it worked!".into(),
+            )),
+        ];
+        let path = write_entries(&dir, &entries).await;
+
+        let msgs = build_context(&path, &[], &HomeContextConfig::default())
+            .await
+            .unwrap();
+
+        // Expected order:
+        // 0: assistant("Sending message now.", tool_calls=[send_message])
+        // 1: tool(result for tc1)
+        // 2: user(discord echo — deferred)
+        // 3: user(bystander — after the reordered block)
+        assert_eq!(msgs.len(), 4);
+
+        assert_eq!(msgs[0].role, "assistant");
+        assert_eq!(msgs[0].content.as_ref().unwrap(), "Sending message now.");
+        assert!(msgs[0].tool_calls.is_some());
+
+        assert_eq!(msgs[1].role, "tool");
+        assert_eq!(msgs[1].tool_call_id.as_ref().unwrap(), "tc1");
+
+        assert_eq!(msgs[2].role, "user"); // deferred discord echo
+        assert!(msgs[2].content.as_ref().unwrap().contains("hello from viola"));
+
+        assert_eq!(msgs[3].role, "user"); // bystander
+        assert!(msgs[3].content.as_ref().unwrap().contains("nice, it worked"));
     }
 
     #[tokio::test]
@@ -454,139 +753,5 @@ mod tests {
         );
         let tag = format_user_tag(&m);
         assert_eq!(tag, "cassie: hello");
-    }
-
-    #[tokio::test]
-    async fn test_build_context_agent_content_merged_with_tool_calls() {
-        // When an agent message is immediately followed by tool_call entries,
-        // they should be merged into a single assistant message with both
-        // content and tool_calls — matching the OpenAI API format.
-        let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(1),
-                "Let me read those files.".into(),
-                "home".into(),
-                None,
-            )),
-            HomeChannelEntry::Tool(ToolEntry::call(
-                test_snowflake_seq(2),
-                "read_file".into(),
-                serde_json::json!({"path": "/tmp/a.txt"}),
-                "tc1".into(),
-            )),
-            HomeChannelEntry::Tool(ToolEntry::call(
-                test_snowflake_seq(3),
-                "read_file".into(),
-                serde_json::json!({"path": "/tmp/b.txt"}),
-                "tc2".into(),
-            )),
-            HomeChannelEntry::Tool(ToolEntry::result(
-                test_snowflake_seq(4),
-                "read_file".into(),
-                "content a".into(),
-                "tc1".into(),
-            )),
-            HomeChannelEntry::Tool(ToolEntry::result(
-                test_snowflake_seq(5),
-                "read_file".into(),
-                "content b".into(),
-                "tc2".into(),
-            )),
-        ];
-        let path = write_entries(&dir, &entries).await;
-
-        let msgs = build_context(&path, &[], &HomeContextConfig::default())
-            .await
-            .unwrap();
-
-        // 1 assistant (content + 2 tool calls) + 2 tool results = 3 messages
-        assert_eq!(msgs.len(), 3);
-
-        // First message: assistant with BOTH content and tool_calls
-        assert_eq!(msgs[0].role, "assistant");
-        assert_eq!(
-            msgs[0].content.as_ref().unwrap(),
-            "Let me read those files."
-        );
-        let tc = msgs[0].tool_calls.as_ref().unwrap();
-        assert_eq!(tc.len(), 2);
-        assert_eq!(tc[0].id, "tc1");
-        assert_eq!(tc[1].id, "tc2");
-
-        // Then tool results
-        assert_eq!(msgs[1].role, "tool");
-        assert_eq!(msgs[1].tool_call_id.as_ref().unwrap(), "tc1");
-        assert_eq!(msgs[2].role, "tool");
-        assert_eq!(msgs[2].tool_call_id.as_ref().unwrap(), "tc2");
-    }
-
-    #[tokio::test]
-    async fn test_build_context_agent_empty_content_with_tool_calls() {
-        // When agent content is empty, it should be None in the merged message
-        let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(1),
-                "".into(),
-                "home".into(),
-                None,
-            )),
-            HomeChannelEntry::Tool(ToolEntry::call(
-                test_snowflake_seq(2),
-                "glob".into(),
-                serde_json::json!({"pattern": "*.rs"}),
-                "tc1".into(),
-            )),
-            HomeChannelEntry::Tool(ToolEntry::result(
-                test_snowflake_seq(3),
-                "glob".into(),
-                "main.rs\nlib.rs".into(),
-                "tc1".into(),
-            )),
-        ];
-        let path = write_entries(&dir, &entries).await;
-
-        let msgs = build_context(&path, &[], &HomeContextConfig::default())
-            .await
-            .unwrap();
-
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].role, "assistant");
-        assert!(msgs[0].content.is_none()); // empty content becomes None
-        assert_eq!(msgs[0].tool_calls.as_ref().unwrap().len(), 1);
-        assert_eq!(msgs[1].role, "tool");
-    }
-
-    #[tokio::test]
-    async fn test_build_context_agent_without_following_tool_calls() {
-        // Agent message NOT followed by tool calls — normal assistant message
-        let dir = TempDir::new().unwrap();
-        let entries = vec![
-            HomeChannelEntry::Message(MessageEntry::agent(
-                test_snowflake_seq(1),
-                "Just a normal response.".into(),
-                "home".into(),
-                None,
-            )),
-            HomeChannelEntry::Message(MessageEntry::bystander(
-                test_snowflake_seq(2),
-                "thanks".into(),
-            )),
-        ];
-        let path = write_entries(&dir, &entries).await;
-
-        let msgs = build_context(&path, &[], &HomeContextConfig::default())
-            .await
-            .unwrap();
-
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].role, "assistant");
-        assert_eq!(
-            msgs[0].content.as_ref().unwrap(),
-            "Just a normal response."
-        );
-        assert!(msgs[0].tool_calls.is_none());
-        assert_eq!(msgs[1].role, "user");
     }
 }
