@@ -49,7 +49,7 @@ impl EmbeddingClient {
 
     /// Get embedding for text
     pub async fn embed(&self, text: &str) -> RiverResult<Vec<f32>> {
-        let url = format!("{}/v1/embeddings", self.config.url);
+        let url = format!("{}/embeddings", self.config.url);
 
         let response = self
             .client
@@ -85,7 +85,7 @@ impl EmbeddingClient {
 
     /// Get embeddings for multiple texts
     pub async fn embed_batch(&self, texts: &[String]) -> RiverResult<Vec<Vec<f32>>> {
-        let url = format!("{}/v1/embeddings", self.config.url);
+        let url = format!("{}/embeddings", self.config.url);
 
         let response = self
             .client
