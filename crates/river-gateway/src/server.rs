@@ -143,9 +143,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         heartbeat_minutes: 45,
         agent_birth,
         agent_name: agent_name.clone(),
-        embedding: config.embedding_url.as_ref().map(|url| EmbeddingConfig {
-            url: url.clone(),
-            ..Default::default()
+        embedding: config.embedding_url.as_ref().map(|url| {
+            let model = config.embedding_model_name.clone().unwrap_or_else(|| "nomic-embed-text".to_string());
+            EmbeddingConfig {
+                url: url.clone(),
+                model,
+                ..Default::default()
+            }
         }),
         redis: config.redis_url.as_ref().map(|url| RedisConfig {
             url: url.clone(),
