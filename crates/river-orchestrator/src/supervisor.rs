@@ -133,17 +133,26 @@ pub async fn supervise(spec: ChildSpec, mut shutdown_rx: broadcast::Receiver<()>
             label = %spec.label,
             bin = %spec.bin.display(),
             attempt = attempt,
+            args = ?spec.args,
             "Spawning child process"
         );
 
+        // Also log to stderr directly so systemd captures it even if tracing fails
+        eprintln!("[supervisor] Spawning {} (attempt {}): {} {:?}",
+            spec.label, attempt, spec.bin.display(), spec.args);
+
         let mut child = match spawn_child(&spec) {
-            Ok(c) => c,
+            Ok(c) => {
+                eprintln!("[supervisor] {} spawned (pid {:?})", spec.label, c.id());
+                c
+            }
             Err(e) => {
                 tracing::error!(
                     label = %spec.label,
                     error = %e,
                     "Failed to spawn child process"
                 );
+                eprintln!("[supervisor] Failed to spawn {}: {}", spec.label, e);
                 let delay = backoff.next_delay();
                 tokio::time::sleep(delay).await;
                 continue;
@@ -157,8 +166,14 @@ pub async fn supervise(spec: ChildSpec, mut shutdown_rx: broadcast::Receiver<()>
         tokio::select! {
             status = child.wait() => {
                 match status {
-                    Ok(s) => tracing::warn!(label = %spec.label, status = %s, "Child exited"),
-                    Err(e) => tracing::error!(label = %spec.label, error = %e, "Child wait failed"),
+                    Ok(s) => {
+                        tracing::warn!(label = %spec.label, status = %s, "Child exited");
+                        eprintln!("[supervisor] {} exited: {}", spec.label, s);
+                    }
+                    Err(e) => {
+                        tracing::error!(label = %spec.label, error = %e, "Child wait failed");
+                        eprintln!("[supervisor] {} wait failed: {}", spec.label, e);
+                    }
                 }
 
                 let delay = backoff.next_delay();
