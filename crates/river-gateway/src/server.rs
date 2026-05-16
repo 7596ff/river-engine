@@ -3,7 +3,6 @@
 use crate::agent::{AgentTask, AgentTaskConfig};
 use crate::api::create_router;
 use crate::coordinator::Coordinator;
-use crate::db::init_db;
 use crate::embeddings::{SyncService, VectorStore};
 use crate::flash::FlashQueue;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
@@ -61,9 +60,6 @@ pub struct ServerConfig {
 
 /// Initialize and run the gateway server
 pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
-    // Initialize database
-    let db_path = config.data_dir.join("river.db");
-    let db = init_db(&db_path)?;
 
     // Create embedding client if configured
     let embedding_client = if let Some(url) = &config.embedding_url {
@@ -157,8 +153,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }),
     };
 
-    // Wrap database in Arc for sharing
-    let db_arc = Arc::new(std::sync::Mutex::new(db));
     let snowflake_gen = Arc::new(river_core::SnowflakeGenerator::new(
         gateway_config.agent_birth,
     ));
@@ -321,7 +315,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     // Create app state
     let mut app_state = AppState::new(
         gateway_config,
-        db_arc.clone(),
         registry,
         embedding_client,
         redis_client,

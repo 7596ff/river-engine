@@ -63,7 +63,7 @@ pub struct AgentConfig {
     /// Path to agent's workspace directory
     pub workspace: PathBuf,
 
-    /// Path to agent's data directory (contains river.db)
+    /// Path to agent's data directory (contains vectors.db, birth.json, home channel)
     pub data_dir: PathBuf,
 
     /// Gateway HTTP port

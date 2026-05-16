@@ -1,7 +1,6 @@
 //! Shared application state
 
 use crate::channels::writer::HomeChannelWriter;
-use crate::db::Database;
 use crate::memory::{EmbeddingClient, EmbeddingConfig};
 use crate::metrics::AgentMetrics;
 use crate::policy::HealthPolicy;
@@ -11,13 +10,12 @@ use crate::subagent::SubagentManager;
 use crate::tools::{ToolExecutor, ToolRegistry};
 use river_core::{AgentBirth, SnowflakeGenerator};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Shared application state
 pub struct AppState {
     pub config: GatewayConfig,
-    pub db: Arc<Mutex<Database>>,
     pub snowflake_gen: Arc<SnowflakeGenerator>,
     pub tool_executor: Arc<RwLock<ToolExecutor>>,
     pub embedding_client: Option<Arc<EmbeddingClient>>,
@@ -56,15 +54,14 @@ pub struct GatewayConfig {
 }
 
 impl GatewayConfig {
-    pub fn db_path(&self) -> std::path::PathBuf {
-        self.data_dir.join("river.db")
+    pub fn vectors_db_path(&self) -> std::path::PathBuf {
+        self.data_dir.join("vectors.db")
     }
 }
 
 impl AppState {
     pub fn new(
         config: GatewayConfig,
-        db: Arc<Mutex<Database>>,
         registry: ToolRegistry,
         embedding_client: Option<EmbeddingClient>,
         redis_client: Option<RedisClient>,
@@ -80,7 +77,6 @@ impl AppState {
 
         Self {
             snowflake_gen,
-            db,
             tool_executor: Arc::new(RwLock::new(executor)),
             embedding_client: embedding_client.map(Arc::new),
             redis_client: redis_client.map(Arc::new),
@@ -100,7 +96,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
     use crate::metrics::AgentMetrics;
     use crate::policy::HealthPolicy;
     use crate::tools::ToolRegistry;
@@ -124,7 +119,6 @@ mod tests {
             redis: None,
         };
 
-        let db = Arc::new(Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
@@ -140,7 +134,6 @@ mod tests {
         )));
         let state = AppState::new(
             config,
-            db,
             registry,
             None,
             None,

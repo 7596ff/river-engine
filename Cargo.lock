@@ -2072,18 +2072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "river-db"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "river-core",
- "rusqlite",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "river-discord"
 version = "0.1.0"
 dependencies = [
@@ -2127,7 +2115,6 @@ dependencies = [
  "reqwest",
  "river-adapter",
  "river-core",
- "river-db",
  "rusqlite",
  "sd-notify",
  "serde",
@@ -2144,21 +2131,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "urlencoding",
-]
-
-[[package]]
-name = "river-migrate"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "river-core",
- "rusqlite",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

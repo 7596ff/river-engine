@@ -111,8 +111,8 @@ async fn health_check(State(state): State<Arc<AppState>>) -> (StatusCode, Json<H
     let metrics = state.metrics.read().await;
     let policy = state.policy.read().await;
 
-    // Get current DB size
-    let db_size = std::fs::metadata(state.config.db_path())
+    // Get current vectors DB size
+    let db_size = std::fs::metadata(state.config.vectors_db_path())
         .map(|m| m.len())
         .unwrap_or(0);
 
@@ -360,7 +360,6 @@ async fn register_adapter(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
     use crate::metrics::AgentMetrics;
     use crate::policy::HealthPolicy;
     use crate::queue::MessageQueue;
@@ -391,7 +390,6 @@ mod tests {
             redis: None,
         };
 
-        let db = Arc::new(std::sync::Mutex::new(Database::open_in_memory().unwrap()));
         let registry = ToolRegistry::new();
         let message_queue = Arc::new(MessageQueue::new());
         let snowflake_gen = Arc::new(SnowflakeGenerator::new(agent_birth));
@@ -407,7 +405,6 @@ mod tests {
         )));
         Arc::new(AppState::new(
             config,
-            db,
             registry,
             None,
             None,

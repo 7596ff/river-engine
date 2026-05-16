@@ -12,7 +12,6 @@ pub use adapters::AdapterRegistry;
 pub mod api;
 pub mod channels;
 pub mod config;
-pub mod db;
 pub mod git;
 pub mod heartbeat;
 pub mod memory;
