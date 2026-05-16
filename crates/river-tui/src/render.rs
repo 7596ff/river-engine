@@ -50,8 +50,38 @@ async fn run_inner(
     let mut scroll_offset: u16 = 0;
     let mut follow_tail = true;
     let mut _status_error: Option<String> = None;
+    let mut needs_redraw = true;
 
     loop {
+        if !needs_redraw {
+            // Wait for something to happen before redrawing
+            tokio::select! {
+                poll_result = tokio::task::spawn_blocking(|| {
+                    // Block until an event is available (no timeout — true idle)
+                    event::poll(std::time::Duration::from_secs(1)).unwrap_or(false)
+                }) => {
+                    if poll_result.unwrap_or(false) {
+                        needs_redraw = true;
+                    }
+                    // If poll timed out, loop again — still no redraw needed
+                }
+                entry = entry_rx.recv() => {
+                    match entry {
+                        Some(e) => {
+                            lines.push(format_entry(e));
+                            needs_redraw = true;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            if !needs_redraw {
+                continue;
+            }
+        }
+
+        needs_redraw = false;
+
         // Calculate input height (expands with content)
         let input_line_count = {
             let width = terminal.size()?.width.saturating_sub(4) as usize;
@@ -146,17 +176,19 @@ async fn run_inner(
             frame.render_widget(input_widget, chunks[2]);
         })?;
 
-        // Event loop
+        // Event loop — process any pending terminal events
         tokio::select! {
             poll_result = tokio::task::spawn_blocking(|| {
                 event::poll(std::time::Duration::from_millis(50)).unwrap_or(false)
             }) => {
                 if !poll_result.unwrap_or(false) {
+                    // Nothing pending — go back to idle wait
                     continue;
                 }
                 let evt = tokio::task::block_in_place(|| event::read())?;
                 match evt {
                     Event::Key(key) => {
+                        needs_redraw = true;
                         match (key.code, key.modifiers) {
                             (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
                             (KeyCode::Enter, _) if !input.is_empty() => {
@@ -195,6 +227,7 @@ async fn run_inner(
                     }
                     Event::Mouse(mouse) => {
                         use crossterm::event::MouseEventKind;
+                        needs_redraw = true;
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
                                 follow_tail = false;
@@ -208,7 +241,7 @@ async fn run_inner(
                             _ => {}
                         }
                     }
-                    Event::Resize(_, _) => {}
+                    Event::Resize(_, _) => { needs_redraw = true; }
                     _ => {}
                 }
             }
@@ -216,6 +249,7 @@ async fn run_inner(
                 match entry {
                     Some(e) => {
                         lines.push(format_entry(e));
+                        needs_redraw = true;
                     }
                     None => break,
                 }
