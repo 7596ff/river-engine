@@ -79,7 +79,7 @@ One chapter ≈ one implementation plan, in roadmap order.
    activation + flash), file-tool memory capture, channels, in-process
    adapters (discord + local), tool framework, birth + workspace
    contract, dual-provider model client (Anthropic native +
-   OpenAI-compatible), secrets as file paths only, both runners.
+   OpenAI-compatible), secrets via .env file, both runners.
    Out: subagents, web tools, multi-agent resource scheduling,
    orchestrator-mediated file operations, model scanning/GGUF/VRAM
    management.
@@ -194,8 +194,14 @@ prompts.
 
 **09 — running.** One config file: agents (workspace, data_dir, model,
 witness model, context knobs, tool profile, adapter bindings), models
-(endpoint, name, context limit; **secrets only as file paths**, never
-env or config values); `$VAR` expansion against optional env file;
+(endpoint, name, context limit, `api_key_env` naming the variable);
+**secrets live in a .env file** (gitignored; `--env-file` in dev,
+`EnvironmentFile=` under systemd). Two guards: secrets are read from
+the environment directly by the client at call time and never pass
+through `$VAR` expansion (config text never contains a secret; config
+logging stays safe), and the tool executor scrubs secret variables
+from child-process environments (the bash tool never inherits keys).
+`$VAR` expansion against the same env file for non-secret values;
 unresolvable var fatal with line number. Runners: nix module (systemd
 service per agent) + `river` CLI (same config; spawn, supervise,
 restart with backoff; ctrl-c graceful). Health endpoint reports state
