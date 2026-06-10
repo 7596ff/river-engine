@@ -35,7 +35,7 @@ invariants and formats stated with full implementation precision.
 01-turn-cycle    wake sources, turn anatomy, settle, shutdown
 02-memory        four layers, digestion, activation, file-capture
 03-context       persistent context, compaction, calibration, memory slot
-04-witness       second voice: compression, gleaning, STM curation
+04-witness       second voice: compression, gleaning
 05-channels      JSONL logs, me/not-me, cursors, notification queue
 06-adapters      in-process Adapter trait, discord impl, local chat surface
 07-tools         registry, per-agent tool surface config, core tools
@@ -52,7 +52,7 @@ One chapter ≈ one implementation plan, in roadmap order.
 1. **Memory is integrated into the engine.** Fully self-contained
    engine+memory in one binary. Rationale: file reads/writes must be
    captured natively as memory events. No external memory service.
-2. **No Redis.** STM, extraction queue, and activation live in the
+2. **No Redis.** The extraction queue and activation graph live in the
    engine's SQLite / in-process state. One binary, one data directory.
 3. **Adapters are in-process.** An `Adapter` trait; implementations run
    as supervised tokio tasks (panic-caught, restart with backoff). No
@@ -75,8 +75,8 @@ One chapter ≈ one implementation plan, in roadmap order.
    capability; config names what each agent's model is offered.
    Default profile: read, write, edit, glob, grep, bash, speak, search.
 8. **v1 scope.** In: turn loop with heartbeat, witness voice, full
-   memory body (record / atomic web / chunks / STM + digestion +
-   activation + flash), file-tool memory capture, channels, in-process
+   memory body (record / atomic web + digestion + activation + flash),
+   file-tool memory capture, channels, in-process
    adapters (discord + local), tool framework, birth + workspace
    contract, dual-provider model client (Anthropic native +
    OpenAI-compatible), secrets via .env file, both runners.
@@ -121,26 +121,30 @@ their channels cursor-tracked.
 
 **02 — memory.** Layers: record (channel logs + messages + moves,
 turn-coordinated); atomic web (single-claim notes ≤100 words,
-mandatory typed links, open vocabulary, workspace files); chunks
-(named mutable ID lists; split/merge/rename/dissolve; dissolve below 2
-notes, split above ~20); STM (~7 chunks, use-intensity eviction, starts empty).
+mandatory typed links, open vocabulary, workspace files). **There is
+no grouping layer and no separate working-set structure**: a note's
+cluster is its typed-link neighborhood, computed by traversal; the
+working set is the warm region of the activation graph; hub notes
+emerge organically as knowledge rather than bookkeeping.
 Digestive cycle: witness gleans (flat per-turn chance + guaranteed
 end-of-session pass) → extraction candidates (prose with citations +
-suggested chunks/links) into queue → quiet trigger drains: agent
+suggested typed links) into queue → quiet trigger drains: agent
 re-engages and writes atomic notes fresh, or rejects. Anti-enclosure
 guarantee is architectural: the agent cannot harvest its own margins;
 the witness writes no knowledge. Activation: cognitive bump 1.0,
 ambient 0.5; propagation ½ per hop, 3 hops, single-pass (no
 re-propagation, no oscillation); decay as discrete hourly tick ×0.8
 (S(t) = S₀·0.8^t; scores stable between ticks); flash at ≥1.0, halve
-on flash, flashed note's chunk loads into STM. File capture: every
+on flash, flashed note arrives with its 1-hop typed-link neighbors.
+File capture: every
 read tool access = cognitive access to touched indexed content; writes
 re-index + bump; continuous watcher; index fully rebuildable from
 workspace.
 
 **03 — context.** Persistent context object, built once, appended in
 place. Assembly: system (identity files + environment) → arc (moves,
-one block) → memory slot (flashes, STM surfacings, retrieved) → hot
+one block) → memory slot (flashes with their 1-hop neighbors, warmest
+notes token-budget-bounded, retrieved results) → hot
 messages. Compaction at 80%: drop whole turns ≤ witness cursor only
 (**lossless guarantee** — nothing uncompressed is ever dropped),
 turn-atomic, 20-message floor with backfill, refill to 40%, no
@@ -156,8 +160,8 @@ missing event file disables that handler; **missing identity file
 fails the harness at startup** (witness liveness is a startup
 invariant — forgetting-safety depends on it). Duties: per-turn moves
 (queries the record by turn_number; never trusts agent self-summary;
-heuristic fallback so a turn is never lost), gleaning, chunk
-management recommendations, STM curation. **Compression stops at
+heuristic fallback so a turn is never lost) and gleaning. Two duties,
+two prompt files. **Compression stops at
 moves** — there is no second compression layer; old moves fall out of
 the context arc budget but remain in the record, and the long horizon
 belongs to the knowledge layer.
@@ -188,7 +192,7 @@ turn; execution bounded by iteration ceiling.
 <name>" + birth timestamp); engine refuses to start unbirthed.
 AGENTS.md / IDENTITY.md / RULES.md required at workspace root,
 fail-fast naming the missing file. Workspace contract: `witness/`,
-`knowledge/` (atomic notes, chunks — watched + indexed),
+`knowledge/` (atomic notes — watched + indexed),
 `channels/`; the rest belongs to the agent. Seed files ship in-repo:
 minimal honest identity, rules (no deleting, no secrets, no
 irreversible ops without Ground, no confabulated continuity), witness
@@ -212,10 +216,10 @@ the live path must not exist.
 
 **10 — data.** One SQLite DB per agent: birth, messages (ulid,
 channel, role, content, tool payload, turn_number, ts), moves,
-extraction_queue, stm, activation, vector index, file_hashes. Atomic
-notes and chunks are workspace files, not rows. Truth hierarchy:
+extraction_queue, activation, vector index, file_hashes. Atomic
+notes are workspace files, not rows. Truth hierarchy:
 workspace files + record tables are ground truth; vector index +
-file_hashes derived (rebuildable); activation + STM ephemeral (loss
+file_hashes derived (rebuildable); activation ephemeral (loss
 costs warmth, never knowledge). Invariants: persist-once;
 turn-atomicity.
 
