@@ -119,8 +119,8 @@ it arrived in); **clean shutdown** (SIGTERM finishes current turn,
 settles, exits); mid-turn arrivals are injected as system notices and
 their channels cursor-tracked.
 
-**02 — memory.** Layers: record (channel logs + messages + moves/
-moments, turn-coordinated); atomic web (single-claim notes ≤100 words,
+**02 — memory.** Layers: record (channel logs + messages + moves,
+turn-coordinated); atomic web (single-claim notes ≤100 words,
 mandatory typed links, open vocabulary, workspace files); chunks
 (named mutable ID lists; split/merge/rename/dissolve; dissolve below 2
 notes, split above ~20); STM (~7 chunks, use-intensity eviction, starts empty).
@@ -156,9 +156,11 @@ missing event file disables that handler; **missing identity file
 fails the harness at startup** (witness liveness is a startup
 invariant — forgetting-safety depends on it). Duties: per-turn moves
 (queries the record by turn_number; never trusts agent self-summary;
-heuristic fallback so a turn is never lost), moments above a move
-threshold (strict parse, drop-and-retry on malformed, never guess),
-gleaning, chunk management recommendations, STM curation.
+heuristic fallback so a turn is never lost), gleaning, chunk
+management recommendations, STM curation. **Compression stops at
+moves** — there is no second compression layer; old moves fall out of
+the context arc budget but remain in the record, and the long horizon
+belongs to the knowledge layer.
 
 **05 — channels.** One JSONL per channel, flat `{adapter}_{channel_id}`
 namespace. Entries: ULID + adapter msg_id (dual IDs: engine ordering
@@ -186,7 +188,7 @@ turn; execution bounded by iteration ceiling.
 <name>" + birth timestamp); engine refuses to start unbirthed.
 AGENTS.md / IDENTITY.md / RULES.md required at workspace root,
 fail-fast naming the missing file. Workspace contract: `witness/`,
-`knowledge/` (atomic notes, chunks, moments — watched + indexed),
+`knowledge/` (atomic notes, chunks — watched + indexed),
 `channels/`; the rest belongs to the agent. Seed files ship in-repo:
 minimal honest identity, rules (no deleting, no secrets, no
 irreversible ops without Ground, no confabulated continuity), witness
@@ -210,8 +212,8 @@ the live path must not exist.
 
 **10 — data.** One SQLite DB per agent: birth, messages (ulid,
 channel, role, content, tool payload, turn_number, ts), moves,
-extraction_queue, stm, activation, vector index, file_hashes. Moments
-and atomic notes are workspace files, not rows. Truth hierarchy:
+extraction_queue, stm, activation, vector index, file_hashes. Atomic
+notes and chunks are workspace files, not rows. Truth hierarchy:
 workspace files + record tables are ground truth; vector index +
 file_hashes derived (rebuildable); activation + STM ephemeral (loss
 costs warmth, never knowledge). Invariants: persist-once;
@@ -220,7 +222,7 @@ turn-atomicity.
 **11 — roadmap.** Walking skeleton, conversational from step 1:
 (1) skeleton — birth, identity files, minimal turn loop, local chat
 surface; (2) record + context — persistence, compaction machinery;
-(3) witness — moves/moments, compaction live end-to-end; (4) memory
+(3) witness — moves, compaction live end-to-end; (4) memory
 body — knowledge sync, vector index, search tool, file capture;
 (5) digestion + activation — gleaning, queue, quiet trigger, decay
 tick, flash into slot; (6) discord impl + TUI client; (7) runners —
