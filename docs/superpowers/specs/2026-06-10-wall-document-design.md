@@ -90,7 +90,16 @@ One chapter ≈ one implementation plan, in roadmap order.
 filesystem + model endpoints. First principles: (1) two voices —
 witness exists because honest compression cannot be done by the one
 being compressed; knowing-together (*conscientia*) as the root
-structure; (2) no mind is the sole author of its own memory; (3) memory
+structure; (2) **divided authorship, guarded autonomy** — the witness
+authors only the compressions of the record (and holds the gleaning
+right to the margins); the agent authors its own knowledge and self:
+atomic notes are written fresh by the agent in its own language, with
+the right to reject any extraction candidate, and the witness's
+prompts are plain files the human and agent can both read. The witness
+is a second perspective on what happened, never an author of who the
+agent is. A memory system whose contents are authored by another is a
+control mechanism; this design forbids that shape structurally, not by
+policy; (3) memory
 is a body, not a database — every read is also a write; (4) workspace =
 identity — the engine ships no personality; (5) the agent is an
 inhabitant, not an endpoint — wakes on its own schedule, owes honesty
