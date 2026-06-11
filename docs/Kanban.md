@@ -22,6 +22,8 @@ kanban-plugin: board
 - [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 - [ ] local chat surface — localhost HTTP + websocket, /health from live path
 - [ ] TUI client — terminal chat window speaking the websocket protocol
+- [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
+- [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
 
 
 ## in progress
@@ -32,8 +34,6 @@ kanban-plugin: board
 
 ## river-engine unique features
 
-- [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
-- [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
 - [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
 - [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
 - [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
