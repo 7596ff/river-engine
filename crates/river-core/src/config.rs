@@ -70,7 +70,10 @@ pub struct AgentConfig {
     /// IANA timezone name for the agent's sense of "now". Defaults to
     /// the system timezone.
     pub timezone: Option<String>,
-    /// Workspace directories indexed beyond `knowledge/` (wall ch. 08).
+    /// Workspace directories indexed beyond `knowledge/` (wall
+    /// ch. 08). `"."` indexes the whole workspace. Only markdown
+    /// files are indexed; hidden paths and the engine-managed
+    /// `record/` and `channels/` never are.
     #[serde(default)]
     pub index_dirs: Vec<String>,
     #[serde(default)]

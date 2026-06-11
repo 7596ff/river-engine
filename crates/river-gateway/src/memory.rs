@@ -316,13 +316,24 @@ impl Memory {
     }
 
     /// Is this path under a watched directory (and so indexed)?
+    /// Hidden components and the engine-managed record/ and channels/
+    /// are never indexed, judged relative to the workspace.
     pub fn is_watched(&self, path: &Path) -> bool {
-        self.watched.iter().any(|dir| path.starts_with(dir))
+        if !self.watched.iter().any(|dir| path.starts_with(dir)) {
+            return false;
+        }
+        let Ok(relative) = path.strip_prefix(&self.workspace) else {
+            return true; // watched dir outside the workspace: its call
+        };
+        !relative.components().any(|c| {
+            let name = c.as_os_str().to_string_lossy();
+            (name.starts_with('.') && name.len() > 1) || name == "record" || name == "channels"
+        })
     }
 
     /// A cognitive access through the file-tool seam (wall ch. 07).
     pub fn on_read(&self, path: &Path) -> anyhow::Result<()> {
-        if self.is_watched(path) {
+        if self.is_watched(path) && indexable(path) {
             self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
         }
         Ok(())
@@ -330,7 +341,7 @@ impl Memory {
 
     /// A watched write: bump now; the next sweep re-indexes.
     pub fn on_write(&self, path: &Path) -> anyhow::Result<bool> {
-        if self.is_watched(path) {
+        if self.is_watched(path) && indexable(path) {
             self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
             return Ok(true);
         }
@@ -673,15 +684,29 @@ fn segment(text: &str) -> Vec<String> {
     segments
 }
 
+/// Indexable file type: markdown only.
+fn indexable(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("md")
+}
+
 fn collect_files(dir: &Path, out: &mut Vec<(String, String, String)>) -> anyhow::Result<()> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(()); // a watched dir may not exist yet
     };
     for entry in entries {
         let path = entry?.path();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name.starts_with('.') || name == "record" || name == "channels" {
+            continue;
+        }
         if path.is_dir() {
             collect_files(&path, out)?;
-        } else if let Ok(text) = std::fs::read_to_string(&path) {
+        } else if indexable(&path)
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
             let hash = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
             out.push((path.display().to_string(), hash, text));
         }
@@ -1020,6 +1045,51 @@ pub mod tests {
         assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("first"));
         assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("second"));
         assert_eq!(mem.pop_candidate().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn whole_workspace_indexes_markdown_only_and_skips_managed_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        for sub in ["knowledge", "record", "channels", "loom", ".git"] {
+            std::fs::create_dir_all(ws.join(sub)).unwrap();
+        }
+        std::fs::write(ws.join("loom/note.md"), "the heron waits by the water").unwrap();
+        std::fs::write(ws.join("top-level.md"), "a workspace-root markdown file").unwrap();
+        std::fs::write(ws.join("BSKY"), "app-password-secret").unwrap();
+        std::fs::write(ws.join("record/turns.jsonl"), "{\"x\":1}").unwrap();
+        std::fs::write(ws.join("channels/c.jsonl"), "{\"x\":1}").unwrap();
+        std::fs::write(ws.join(".git/config.md"), "hidden markdown").unwrap();
+        std::fs::write(ws.join("data.jsonl"), "not markdown").unwrap();
+
+        let mem = Memory::open(
+            &dir.path().join("data"),
+            &ws,
+            &[".".to_string()],
+            Arc::new(FakeEmbedder),
+        )
+        .unwrap();
+        let (indexed, _) = mem.sweep().await.unwrap();
+        assert_eq!(indexed, 2, "only the two markdown files");
+
+        let hits = mem.search("heron water").await.unwrap();
+        assert!(hits.iter().all(|h| h.file_path.ends_with(".md")));
+        assert!(!hits.iter().any(|h| h.file_path.contains("BSKY")));
+
+        // Capture seam honors the same rule.
+        mem.on_read(&ws.join("record/turns.jsonl")).unwrap();
+        assert_eq!(
+            mem.activation(&ws.join("record/turns.jsonl").display().to_string())
+                .unwrap(),
+            None,
+            "engine-managed files never bump"
+        );
+        mem.on_read(&ws.join("loom/note.md")).unwrap();
+        assert!(
+            mem.activation(&ws.join("loom/note.md").display().to_string())
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

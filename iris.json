@@ -30,7 +30,7 @@
       "witness_model": "local",
       "embedding_model": "embed",
       "timezone": "America/New_York",
-      "index_dirs": ["iris-loom", "embeddings/atomic", "notes", "writing"],
+      "index_dirs": ["."],
       "adapters": [
         { "type": "local", "port": 7700 },
         { "type": "discord", "token_env": "DISCORD_TOKEN_IRIS" }

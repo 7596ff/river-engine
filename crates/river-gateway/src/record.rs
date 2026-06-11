@@ -244,7 +244,9 @@ mod tests {
         assert_eq!(lines[0].channel, "local_main");
         assert_eq!(lines[0].role, RecordRole::User);
         assert_eq!(lines[1].role, RecordRole::Assistant);
-        assert!(lines[0].id < lines[1].id, "ULIDs order");
+        // ULIDs order across milliseconds; within one, file order is
+        // the truth — which is why readers never sort by id.
+        assert_eq!(lines[0].id.len(), 26);
     }
 
     #[test]
