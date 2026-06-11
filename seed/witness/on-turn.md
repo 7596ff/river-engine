@@ -9,5 +9,10 @@ shape (question, request, correction, task, failure, tangent) and its
 substance — who said what, what was done, what changed or stayed
 open.
 
+For example, given `sam: my brother lives in tulsa` and `you: Noted —
+your brother is in Tulsa!`, a good move is: `Sam told you his brother
+lives in Tulsa; you acknowledged it.` — the agent's "your brother"
+meant Sam's brother, and the move keeps it Sam's.
+
 Your entire reply is stored verbatim as the move. Output only the
 move itself — no preamble, no labels, no quotation marks.
