@@ -8,6 +8,25 @@ kanban-plugin: board
 
 
 
+## in progress
+
+
+
+## barebones harness
+
+- [ ] cargo workspace + gateway binary skeleton (tokio, clap, tracing)
+- [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
+- [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
+- [ ] birth — subcommand writes founding record to sqlite; gateway refuses to start unbirthed
+- [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
+- [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
+- [ ] in-memory rolling context (naive; swapped for persistent context later)
+- [ ] local chat surface — localhost HTTP + websocket, /health from live path
+- [ ] TUI client — terminal chat window speaking the websocket protocol
+- [ ] message persistence — sqlite messages table, ULIDs, persist-once under turn numbers
+- [ ] heartbeat wake — timer + :heartbeat: marker
+- [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
+
 ## open-strix features
 
 - [ ] single-agent event loop — serialized queue, one event at a time, non-durable
@@ -38,7 +57,6 @@ kanban-plugin: board
 - [ ] one-command setup — home repo init, git/github, service files
 
 
-
 ## river-engine unique features
 
 - [ ] activation spreading
@@ -48,6 +66,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,false,false]}
+{"kanban-plugin":"board","list-collapse":[false,false,false,false,false]}
 ```
 %%
