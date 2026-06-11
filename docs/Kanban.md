@@ -10,13 +10,13 @@ kanban-plugin: board
 - [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
 - [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
 - [ ] birth — subcommand writes record/birth.json; gateway refuses to start unbirthed
+- [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
 
 
 ## in progress
 
 
 ## barebones harness
-- [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
 - [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
 - [ ] in-memory rolling context (naive; swapped for persistent context later)
 - [ ] local chat surface — localhost HTTP + websocket, /health from live path

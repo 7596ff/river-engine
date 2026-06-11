@@ -57,6 +57,9 @@ pub struct AgentConfig {
     pub tools: Option<Vec<String>>,
     #[serde(default = "default_heartbeat_minutes")]
     pub heartbeat_minutes: u64,
+    /// IANA timezone name for the agent's sense of "now". Defaults to
+    /// the system timezone.
+    pub timezone: Option<String>,
     #[serde(default)]
     pub adapters: Vec<AdapterConfig>,
 }

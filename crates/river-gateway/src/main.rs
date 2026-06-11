@@ -1,6 +1,7 @@
 mod birth;
 mod config;
 mod env_file;
+mod identity;
 mod model;
 
 use std::path::PathBuf;
@@ -111,6 +112,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     };
 
     let founding = birth::read_birth(&agent.workspace)?;
+    let identity = identity::load(&agent.workspace)?;
+    let tz = identity::timezone(agent.timezone.as_deref())?;
 
     tracing::info!(
         agent = %args.agent,
@@ -118,6 +121,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         born_at = %founding.born_at,
         workspace = %agent.workspace.display(),
         model = %agent.model,
+        system_prompt_bytes = identity.system_prompt(&jiff::Zoned::now().with_time_zone(tz)).len(),
         "river-gateway starting"
     );
     bail!("nothing to run yet: the gateway is a skeleton")

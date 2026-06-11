@@ -41,6 +41,18 @@ gateway.
 - Omitted `tools` = the eight core tools; omitted `witness_model` = the
   agent's model (per wall ch. 09); `heartbeat_minutes` default 45.
 
+## 2026-06-11 — identity details the wall delegates
+
+- The "workspace-configured timezone" (chs. 03, 08) is an optional
+  `timezone` field (IANA name) on the agent's config entry, defaulting
+  to the system timezone. The config is the workspace's operational
+  description; a dotfile inside the workspace would be engine state
+  leaking into the agent's body.
+- System prompt separator: each identity file trimmed and joined with
+  `\n\n---\n\n`, then `Current time: <zoned timestamp>`.
+- Missing identity files are collected and reported together, matching
+  the validate-everything-report-together posture of ch. 09.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a
