@@ -32,7 +32,8 @@ pub struct SpeakRequest {
 
 #[derive(Clone)]
 pub struct DiscordSettings {
-    pub guild_id: u64,
+    /// None = DM-only: no guild channels listened.
+    pub guild_id: Option<u64>,
     pub listen_names: Vec<String>,
     pub token: String,
 }
@@ -77,20 +78,25 @@ async fn run_once(
     let http = twilight_http::Client::new(settings.token.clone());
 
     let me = http.current_user().await?.model().await?;
-    let guild: Id<GuildMarker> = Id::new(settings.guild_id);
-    let guild_channels = http.guild_channels(guild).await?.model().await?;
-    let listen: HashSet<u64> = guild_channels
-        .iter()
-        .filter(|c| {
-            c.name
-                .as_deref()
-                .is_some_and(|n| settings.listen_names.iter().any(|l| l == n))
-        })
-        .map(|c| c.id.get())
-        .collect();
+    let listen: HashSet<u64> = match settings.guild_id {
+        Some(guild_id) => {
+            let guild: Id<GuildMarker> = Id::new(guild_id);
+            let guild_channels = http.guild_channels(guild).await?.model().await?;
+            guild_channels
+                .iter()
+                .filter(|c| {
+                    c.name
+                        .as_deref()
+                        .is_some_and(|n| settings.listen_names.iter().any(|l| l == n))
+                })
+                .map(|c| c.id.get())
+                .collect()
+        }
+        None => HashSet::new(), // DM-only
+    };
     tracing::info!(
         listening = listen.len(),
-        of = settings.listen_names.len(),
+        dm_only = settings.guild_id.is_none(),
         "discord adapter connected as {}",
         me.name
     );

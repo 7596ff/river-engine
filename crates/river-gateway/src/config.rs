@@ -118,7 +118,9 @@ impl Default for ContextConfig {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum AdapterConfig {
     Discord {
-        guild_id: String,
+        /// Optional: without a guild the adapter is DM-only.
+        guild_id: Option<String>,
+        #[serde(default)]
         channels: Vec<String>,
         /// Names the environment variable holding the bot token.
         token_env: String,

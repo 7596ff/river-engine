@@ -189,10 +189,15 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         Some((guild_id, listen_names, token_env)) => {
             let token = std::env::var(&token_env)
                 .map_err(|_| anyhow::anyhow!("token_env {token_env} is not set"))?;
+            let guild_id = match guild_id {
+                Some(text) => Some(
+                    text.parse()
+                        .map_err(|_| anyhow::anyhow!("bad guild_id {text:?}"))?,
+                ),
+                None => None,
+            };
             let settings = discord::DiscordSettings {
-                guild_id: guild_id
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad guild_id {guild_id:?}"))?,
+                guild_id,
                 listen_names,
                 token,
             };
