@@ -42,6 +42,12 @@ pub struct ChannelEntry {
     pub msg_id: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub cursor: bool,
+    /// Explicit cursors point at the last entry actually consumed.
+    /// Without this, a cursor appended at settle would falsely cover
+    /// entries that arrived (unread) during the turn's final model
+    /// call.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub up_to: Option<String>,
 }
 
 /// A queued wake pointer. Pointers, never payloads.
@@ -96,6 +102,7 @@ impl Channels {
             adapter: Some(adapter.to_string()),
             msg_id: msg_id.map(str::to_string),
             cursor: false,
+            up_to: None,
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?; // ← must succeed first
@@ -128,15 +135,18 @@ impl Channels {
             adapter: Some(adapter.to_string()),
             msg_id: msg_id.map(str::to_string),
             cursor: false,
+            up_to: None,
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?;
         Ok(ulid)
     }
 
-    /// Explicit cursor: "I read to here" without speaking. Written at
-    /// settle for every channel read this turn (wall ch. 01).
-    pub fn mark_read(&self, channel: &str) -> anyhow::Result<String> {
+    /// Explicit cursor: "I read to `up_to`" without speaking. Written
+    /// at settle for every channel read this turn (wall ch. 01).
+    /// Entries after `up_to` stay unread even though the cursor entry
+    /// itself sits later in the log.
+    pub fn mark_read(&self, channel: &str, up_to: &str) -> anyhow::Result<String> {
         let entry = ChannelEntry {
             id: ulid::Ulid::new().to_string(),
             role: EntryRole::Agent,
@@ -146,27 +156,54 @@ impl Channels {
             adapter: None,
             msg_id: None,
             cursor: true,
+            up_to: Some(up_to.to_string()),
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?;
         Ok(ulid)
     }
 
-    /// Everything after the agent's read position (the last agent
-    /// entry of any kind). Never visited → the last 50 entries.
+    /// Everything after the agent's read position. The position is
+    /// the last agent entry — or, for an explicit cursor, the entry
+    /// it points at. Never visited → the last 50 entries.
     pub fn read_since_cursor(&self, channel: &str) -> anyhow::Result<Vec<ChannelEntry>> {
         let entries = self.scan(channel)?;
-        let cursor_pos = entries
-            .iter()
-            .rposition(|e| e.role == EntryRole::Agent);
-        let unread: Vec<ChannelEntry> = match cursor_pos {
-            Some(pos) => entries[pos + 1..].to_vec(),
-            None => {
-                let start = entries.len().saturating_sub(NEVER_VISITED_TAIL);
-                entries[start..].to_vec()
-            }
+        let Some(agent_pos) = entries.iter().rposition(|e| e.role == EntryRole::Agent) else {
+            let start = entries.len().saturating_sub(NEVER_VISITED_TAIL);
+            return Ok(entries[start..].to_vec());
         };
-        Ok(unread)
+        let position = match &entries[agent_pos].up_to {
+            Some(target_id) => entries
+                .iter()
+                .position(|e| &e.id == target_id)
+                .unwrap_or(agent_pos),
+            None => agent_pos,
+        };
+        Ok(entries[position + 1..]
+            .iter()
+            .filter(|e| e.role == EntryRole::Other)
+            .cloned()
+            .collect())
+    }
+
+    /// The log position of the agent's read cursor vs. a given entry:
+    /// true when the agent's last agent-entry already covers it.
+    pub fn covered(&self, channel: &str, entry_id: &str) -> anyhow::Result<bool> {
+        let entries = self.scan(channel)?;
+        let Some(agent_pos) = entries.iter().rposition(|e| e.role == EntryRole::Agent) else {
+            return Ok(false);
+        };
+        let position = match &entries[agent_pos].up_to {
+            Some(target_id) => entries
+                .iter()
+                .position(|e| &e.id == target_id)
+                .unwrap_or(agent_pos),
+            None => agent_pos,
+        };
+        let Some(entry_pos) = entries.iter().position(|e| e.id == entry_id) else {
+            return Ok(false);
+        };
+        Ok(position >= entry_pos)
     }
 
     /// Full log scan, torn lines skipped with a warning.
@@ -298,19 +335,42 @@ mod tests {
     #[tokio::test]
     async fn explicit_cursor_marks_read_without_speaking() {
         let (channels, _rx, _dir) = layer().await;
-        channels
+        let id = channels
             .inbound("c", "cass", None, "one", "local", None)
             .await
             .unwrap();
-        channels.mark_read("c").unwrap();
+        channels.mark_read("c", &id).unwrap();
 
         assert!(channels.read_since_cursor("c").unwrap().is_empty());
+        assert!(channels.covered("c", &id).unwrap());
 
         let entries = channels.scan("c").unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries[1].cursor);
         assert_eq!(entries[1].role, EntryRole::Agent);
         assert!(entries[1].content.is_none());
+        assert_eq!(entries[1].up_to.as_deref(), Some(id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn positional_cursor_keeps_late_arrivals_unread() {
+        let (channels, _rx, _dir) = layer().await;
+        let read_id = channels
+            .inbound("c", "cass", None, "read by the agent", "local", None)
+            .await
+            .unwrap();
+        let late_id = channels
+            .inbound("c", "cass", None, "arrived during the model call", "local", None)
+            .await
+            .unwrap();
+        // Settle writes the cursor pointing at what was actually
+        // consumed — the cursor entry sits after the late arrival.
+        channels.mark_read("c", &read_id).unwrap();
+
+        let unread = channels.read_since_cursor("c").unwrap();
+        assert_eq!(unread.len(), 1, "the late arrival is not lost");
+        assert_eq!(unread[0].id, late_id);
+        assert!(!channels.covered("c", &late_id).unwrap());
     }
 
     #[tokio::test]

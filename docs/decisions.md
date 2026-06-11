@@ -113,6 +113,27 @@ prose instead of a convention the agent has to be told about.
 - **Empty witness output** falls back mechanically, same as model
   failure.
 
+## 2026-06-11 — cursor races found while building the tool loop
+
+Two message-loss races, both fixed structurally:
+
+1. **Settle cursors are positional.** A cursor entry appended at
+   settle would falsely cover entries that arrived (unread) during
+   the turn's final model call. Cursor entries now carry `up_to` —
+   the last entry actually consumed; `read_since_cursor` resolves the
+   position through it. (Ch. 10 permits added fields; "I read to
+   here" now names the *here*.)
+2. **The turn loop owns its read positions in memory.** Speak's
+   implicit cursor (a real agent entry) lands after any message that
+   arrived during the model call and would swallow it. Mid-turn reads
+   therefore advance an in-process per-channel position map instead
+   of re-deriving from the log; the log cursor recovers positions
+   across restarts only.
+
+Also: bash gets a 300s timeout (a wedged child should not pin a turn
+forever); tool results truncate at 64KB; `max_iterations` is an agent
+config field (default 50).
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

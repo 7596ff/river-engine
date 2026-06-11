@@ -155,6 +155,12 @@ pub fn format_transcript(lines: &[RecordLine]) -> String {
             RecordRole::Assistant => {
                 transcript.push_str("you: ");
                 transcript.push_str(content);
+                if let Some(calls) = &line.tool_calls
+                    && !calls.is_empty()
+                {
+                    let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+                    transcript.push_str(&format!(" [called: {}]", names.join(", ")));
+                }
             }
             RecordRole::System => {
                 transcript.push_str("[system] ");

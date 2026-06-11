@@ -61,6 +61,9 @@ pub struct AgentConfig {
     pub tools: Option<Vec<String>>,
     #[serde(default = "default_heartbeat_minutes")]
     pub heartbeat_minutes: u64,
+    /// Think/act iteration ceiling per turn (wall ch. 01).
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
     /// IANA timezone name for the agent's sense of "now". Defaults to
     /// the system timezone.
     pub timezone: Option<String>,
@@ -74,6 +77,10 @@ fn default_heartbeat_minutes() -> u64 {
 
 fn default_request_timeout() -> u64 {
     120
+}
+
+fn default_max_iterations() -> u32 {
+    50
 }
 
 /// Context knobs (wall ch. 03). Everything optional; defaults bind here.
@@ -109,6 +116,28 @@ pub enum AdapterConfig {
     Local {
         port: u16,
     },
+}
+
+impl Config {
+    /// Every secret-bearing variable name in the config — the scrub
+    /// list for tool child environments (wall chs. 07, 09).
+    pub fn secret_env_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .models
+            .values()
+            .filter_map(|m| m.api_key_env.clone())
+            .collect();
+        for agent in self.agents.values() {
+            for adapter in &agent.adapters {
+                if let AdapterConfig::Discord { token_env, .. } = adapter {
+                    names.push(token_env.clone());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 impl AgentConfig {

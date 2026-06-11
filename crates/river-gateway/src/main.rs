@@ -7,6 +7,7 @@ mod identity;
 mod model;
 mod record;
 mod surface;
+mod tools;
 mod turn;
 mod witness;
 
@@ -156,6 +157,10 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         health_tx,
         settled_tx,
         std::time::Duration::from_secs(agent.heartbeat_minutes * 60),
+        tools::Registry::core(),
+        agent.tool_profile(),
+        cfg.secret_env_names(),
+        agent.max_iterations,
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
