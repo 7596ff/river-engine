@@ -32,7 +32,7 @@
       "timezone": "America/New_York",
       "index_dirs": ["."],
       "adapters": [
-        { "type": "local", "port": 7700 },
+        { "type": "local", "port": 9253 },
         { "type": "discord", "token_env": "DISCORD_TOKEN_IRIS" }
       ]
     }
