@@ -35,6 +35,10 @@ kanban-plugin: board
 - [ ] semantic propagation — warmth spreads along embedding-space neighbors (low factor, cosine threshold); a flash of an unlinked-but-near note is a link candidate the digestion loop can formalize
 - [ ] conversation resonance — each turn's text faintly bumps the nearest notes (0.2×similarity); the web trembles with the topic before anyone searches
 - [ ] discord adapter — supervised twilight task, DM + guild listen-set, speak routed post-acceptance with msg_id
+- [ ] discord typing indicator — turn loop broadcasts the working channel; adapter ticks the indicator
+- [ ] river CLI — validate-then-spawn, [name]-prefixed output, backoff restarts, SIGTERM cascade w/ grace, status
+- [ ] nix module — per-agent systemd services from the same config, EnvironmentFile, restart knobs
+- [ ] live-path health — turn number, settle time, context %, witness lag, queue depth
 
 
 ## in progress
