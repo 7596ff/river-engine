@@ -15,6 +15,10 @@ kanban-plugin: board
 - [ ] in-memory rolling context (naive; swapped for persistent context later)
 - [ ] turn record — record/turns.jsonl one-stream append + tail-scan, ULIDs, channel tags, persist-once under turn numbers
 - [ ] heartbeat wake — timer + "Read HEARTBEAT.md." marker
+- [ ] channel cursors — me/not-me roles, read position = last agent entry, explicit cursor on read-without-speak
+- [ ] lossless compaction — context folds only what the witness has compressed; nothing uncompressed ever dropped
+- [ ] calibrated token estimator — WMA against reported prompt tokens
+- [ ] memory slot — designated injection point in context assembly between arc and hot
 - [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 - [ ] local chat surface — localhost HTTP + websocket, /health from live path
 - [ ] TUI client — terminal chat window speaking the websocket protocol
@@ -30,7 +34,6 @@ kanban-plugin: board
 
 - [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
 - [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
-- [ ] lossless compaction — context folds only what the witness has compressed; nothing uncompressed ever dropped
 - [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
 - [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
 - [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
@@ -39,9 +42,6 @@ kanban-plugin: board
 - [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
 - [ ] vector index over workspace — embedded semantic search, derived + rebuildable, db disposable
 - [ ] file-tool memory capture — reads bump activation, writes re-index
-- [ ] memory slot — designated injection point in context assembly between arc and hot
-- [ ] calibrated token estimator — WMA against reported prompt tokens
-- [ ] channel cursors — me/not-me roles, read position = last agent entry, explicit cursor on read-without-speak
 - [ ] per-agent tool surface — which tools a model is offered is config, not code
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
 - [ ] adapter trait with feature declaration folded into the system prompt
