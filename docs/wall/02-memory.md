@@ -143,6 +143,28 @@ pass, no oscillation. Propagation is uniform across link types; energy
 does not care what kind of wire it is on (types matter for *queries*,
 not for flow).
 
+**Implicit warmth.** Typed links are the authored structure, but
+meaning-adjacency moves warmth too — two paths reach notes nobody has
+linked yet:
+
+- **Semantic propagation.** When a note is bumped, its embedding-space
+  neighbors warm as well: the top 3 above cosine 0.65, at ×0.25 of the
+  bump, one semantic hop only, never chaining — similarity chains turn
+  the whole web lukewarm. The carrier is propagated, so a semantic
+  crossing can flash: the system noticing "you never linked these, but
+  they are the same thought." The digestion loop can then write the
+  real link; implicit warmth is scaffolding that authored links
+  formalize.
+- **Conversation resonance.** Once per turn, the turn's own text is
+  embedded and the nearest notes warm at 0.2 × similarity (top 5 above
+  cosine 0.5), as ambient access. Sustained topical drift alone can
+  eventually flash an untouched note — the web trembles with what is
+  being discussed before anyone searches.
+
+Implicit-warmth bumps are direct: they propagate no further waves of
+their own. Neither path writes links or notes — warmth is runtime
+state; authorship stays the agent's.
+
 **Decay.** A background task runs hourly and multiplies every score by
 0.8 — discrete ticks, so S(t) = S₀ · 0.8^t with t in hours, and scores
 are *stable between ticks*. Half-life ≈ 3 hours; effectively zero in a
@@ -212,6 +234,11 @@ from the workspace. It is never the source of anything.
 - **Activation constants:** cognitive bump 1.0; ambient bump 0.5;
   propagation ×0.5/hop, 3 hops, single-pass; decay ×0.8 per hourly
   tick; flash threshold ≥ 1.0, crossed from below.
+- **Implicit warmth constants:** semantic propagation ×0.25, top 3,
+  cosine ≥ 0.65, one hop, carrier propagated; conversation resonance
+  0.2 × similarity, top 5, cosine ≥ 0.5, once per turn, carrier
+  ambient. Implicit bumps wave no further. Neither path authors
+  anything.
 - **Flash carrier rule.** Only an ambient or propagated bump can carry
   a note across the threshold into a flash; a cognitive bump crossing
   fires nothing and halves nothing. On flash, halve the score and

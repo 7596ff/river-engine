@@ -407,6 +407,18 @@ impl<C: Chat> TurnLoop<C> {
                 self.channels.mark_read(channel, last_id)?;
             }
         }
+        // Conversation resonance (wall ch. 02): the turn's own text
+        // warms the nearest notes; fire-and-forget, never blocks.
+        if let Some(memory) = &self.memory {
+            let m = memory.clone();
+            let text = self.context.turn_text(n);
+            tokio::spawn(async move {
+                if let Err(e) = m.resonate(&text).await {
+                    tracing::debug!(error = %e, "resonance failed");
+                }
+            });
+        }
+
         let _ = self.health.send(Health {
             turn_number: n,
             last_settle: Some(jiff::Timestamp::now().to_string()),

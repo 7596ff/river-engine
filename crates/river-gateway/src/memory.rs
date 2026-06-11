@@ -31,6 +31,12 @@ const PROPAGATION_FACTOR: f64 = 0.5;
 const PROPAGATION_HOPS: usize = 3;
 const DECAY_FACTOR: f64 = 0.8;
 const DECAY_INTERVAL_SECS: u64 = 3600;
+const SEMANTIC_FACTOR: f64 = 0.25;
+const SEMANTIC_TOP_K: usize = 3;
+const SEMANTIC_THRESHOLD: f32 = 0.65;
+const RESONANCE_FACTOR: f64 = 0.2;
+const RESONANCE_TOP_K: usize = 5;
+const RESONANCE_THRESHOLD: f32 = 0.5;
 
 /// What carried a bump (wall ch. 02): only ambient or propagated
 /// warmth can flash a note — the flash carrier rule.
@@ -373,6 +379,106 @@ impl Memory {
             if frontier.is_empty() {
                 break;
             }
+        }
+
+        // Implicit warmth: semantic neighbors of the origin, one hop,
+        // skipping anything the typed-link wave already reached.
+        let origin_path = notes
+            .iter()
+            .find(|n| n.id == origin)
+            .map(|n| n.path.display().to_string())
+            .unwrap_or_else(|| origin.to_string());
+        self.semantic_spread(&origin_path, amount, &notes, &visited)?;
+        Ok(())
+    }
+
+    /// Mean stored vector per indexed file.
+    fn file_vectors(&self) -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+        let rows: Vec<(String, Vec<u8>)> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare("SELECT file_path, embedding FROM segments")?;
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut sums: std::collections::HashMap<String, (Vec<f32>, usize)> = Default::default();
+        for (path, blob) in rows {
+            let vector: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let entry = sums.entry(path).or_insert_with(|| (vec![0.0; vector.len()], 0));
+            for (s, v) in entry.0.iter_mut().zip(&vector) {
+                *s += v;
+            }
+            entry.1 += 1;
+        }
+        Ok(sums
+            .into_iter()
+            .map(|(path, (sum, n))| {
+                (path, sum.into_iter().map(|x| x / n as f32).collect())
+            })
+            .collect())
+    }
+
+    /// Semantic propagation (wall ch. 02, implicit warmth): the bump
+    /// origin's embedding neighbors warm at ×0.25, one hop, no chain.
+    fn semantic_spread(
+        &self,
+        origin_path: &str,
+        amount: f64,
+        notes: &[NoteInfo],
+        already: &std::collections::HashSet<String>,
+    ) -> anyhow::Result<()> {
+        let vectors = self.file_vectors()?;
+        let Some((_, origin_vec)) = vectors.iter().find(|(p, _)| p == origin_path) else {
+            return Ok(());
+        };
+        let mut scored: Vec<(&String, f32)> = vectors
+            .iter()
+            .filter(|(p, _)| p != origin_path)
+            .map(|(p, v)| (p, cosine(origin_vec, v)))
+            .filter(|(_, s)| *s >= SEMANTIC_THRESHOLD)
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (path, _) in scored.into_iter().take(SEMANTIC_TOP_K) {
+            let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
+            if already.contains(&id) {
+                continue; // the typed-link wave already reached it
+            }
+            self.apply_bump(&id, amount * SEMANTIC_FACTOR, Carrier::Propagated, notes)?;
+        }
+        Ok(())
+    }
+
+    /// Conversation resonance (wall ch. 02, implicit warmth): the
+    /// turn's own text warms the nearest notes ambiently, no waves.
+    pub async fn resonate(&self, turn_text: &str) -> anyhow::Result<()> {
+        if turn_text.trim().is_empty() {
+            return Ok(());
+        }
+        let query = self
+            .embedder
+            .embed(&[turn_text.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let vectors = self.file_vectors()?;
+        let notes = self.notes();
+        let mut scored: Vec<(&String, f32)> = vectors
+            .iter()
+            .map(|(p, v)| (p, cosine(&query, v)))
+            .filter(|(_, s)| *s >= RESONANCE_THRESHOLD)
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (path, similarity) in scored.into_iter().take(RESONANCE_TOP_K) {
+            let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
+            self.apply_bump(
+                &id,
+                RESONANCE_FACTOR * similarity as f64,
+                Carrier::Ambient,
+                &notes,
+            )?;
         }
         Ok(())
     }
@@ -831,6 +937,62 @@ pub mod tests {
         assert_eq!(flashes[0].neighbors.len(), 1);
         assert_eq!(flashes[0].neighbors[0].0, "same-pattern-as");
         assert!(flashes[0].neighbors[0].1.contains("owl"));
+    }
+
+    #[tokio::test]
+    async fn semantic_propagation_warms_unlinked_neighbors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        // Similar bodies, NO typed links between them; one outlier
+        // with an orthogonal letter histogram.
+        write_note(&k, "a.md", "NA", &[], "the heron waits in shallow water for fish");
+        write_note(&k, "b.md", "NB", &[], "the heron waited by the shallow water for a fish");
+        write_note(
+            &k,
+            "z.md",
+            "NZ",
+            &[],
+            &"zzzz qqqq xxxx jjjj ".repeat(30),
+        );
+        mem.sweep().await.unwrap();
+
+        mem.bump("NA", 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(1.0));
+        assert_eq!(
+            mem.activation("NB").unwrap(),
+            Some(0.25),
+            "unlinked but near: warmed semantically"
+        );
+        assert_eq!(mem.activation("NZ").unwrap(), None, "dissimilar: cold");
+    }
+
+    #[tokio::test]
+    async fn resonance_warms_topical_notes_and_can_flash() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        write_note(&k, "z.md", "NZ", &[], &"zzzz qqqq xxxx jjjj ".repeat(30));
+        mem.sweep().await.unwrap();
+
+        mem.resonate("we were talking about the heron in the water and what it waits for")
+            .await
+            .unwrap();
+        let warmth = mem.activation("NH").unwrap().expect("resonated");
+        assert!(warmth > 0.1 && warmth <= 0.2, "{warmth}");
+        assert_eq!(mem.activation("NZ").unwrap(), None);
+
+        // Sustained drift can flash: pre-warm just under threshold,
+        // resonate over it — ambient carrier, so it fires.
+        mem.bump("NH", 0.95 - warmth, Carrier::Ambient).unwrap();
+        let _ = mem.take_flashes();
+        mem.resonate("still on the subject of herons waiting in water")
+            .await
+            .unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1, "topical drift alone flashed it");
+        assert_eq!(flashes[0].note_id, "NH");
     }
 
     #[tokio::test]

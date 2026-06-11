@@ -163,6 +163,20 @@ amended spec).
   exactly one turn; the slot clears at the next turn start.
 - **End-of-session glean pass** runs on graceful shutdown.
 
+## 2026-06-11 — wall amendment: implicit warmth (Cass's ruling)
+
+Unlinked notes were islands — only direct hits could warm them. Two
+paths added to ch. 02 (constants in its contracts): semantic
+propagation (bump origin's embedding neighbors, ×0.25, top 3, cosine
+≥0.65, one hop, never chains, carrier propagated) and conversation
+resonance (turn text embeds once per turn at settle; nearest notes
+warm at 0.2×similarity — Cass raised from my proposed 0.1 — top 5,
+cosine ≥0.5, carrier ambient, fire-and-forget). Implicit bumps wave no
+further. Resonance text is user+assistant only — tool dumps would
+dominate any embedding. Warmth is runtime state; neither path authors
+links or notes, so divided authorship is untouched. A semantic flash
+is a link candidate the digestion loop can formalize.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

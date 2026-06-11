@@ -335,6 +335,21 @@ impl PersistentContext {
     pub fn len(&self) -> usize {
         self.hot.len()
     }
+
+    /// The conversational text of one turn (user + assistant only —
+    /// tool dumps would dominate any embedding), for resonance.
+    pub fn turn_text(&self, turn: u64) -> String {
+        self.hot
+            .iter()
+            .filter(|e| {
+                e.turn == turn
+                    && matches!(e.role, RecordRole::User | RecordRole::Assistant)
+                    && !e.content.is_empty()
+            })
+            .map(|e| e.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 #[cfg(test)]
