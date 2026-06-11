@@ -1,5 +1,6 @@
 mod config;
 mod env_file;
+mod model;
 
 use std::path::PathBuf;
 
