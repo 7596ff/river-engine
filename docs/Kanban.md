@@ -34,6 +34,7 @@ kanban-plugin: board
 - [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
 - [ ] semantic propagation — warmth spreads along embedding-space neighbors (low factor, cosine threshold); a flash of an unlinked-but-near note is a link candidate the digestion loop can formalize
 - [ ] conversation resonance — each turn's text faintly bumps the nearest notes (0.2×similarity); the web trembles with the topic before anyone searches
+- [ ] discord adapter — supervised twilight task, DM + guild listen-set, speak routed post-acceptance with msg_id
 
 
 ## in progress
