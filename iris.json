@@ -1,0 +1,40 @@
+{
+  "models": {
+    "deepseek": {
+      "provider": "openai",
+      "endpoint": "https://api.deepseek.com/v1",
+      "name": "deepseek-v4-pro",
+      "api_key_env": "DEEPSEEK_KEY",
+      "context_limit": 64000,
+      "request_timeout_seconds": 300
+    },
+    "local": {
+      "provider": "openai",
+      "endpoint": "http://127.0.0.1:11434/v1",
+      "name": "gemma4:latest",
+      "context_limit": 32000,
+      "request_timeout_seconds": 600
+    },
+    "embed": {
+      "provider": "openai",
+      "endpoint": "http://127.0.0.1:11434/v1",
+      "name": "nomic-embed-text",
+      "dimensions": 768
+    }
+  },
+  "agents": {
+    "iris": {
+      "workspace": "$HOME/stream",
+      "data_dir": "$HOME/.local/state/river/iris",
+      "model": "deepseek",
+      "witness_model": "local",
+      "embedding_model": "embed",
+      "timezone": "America/New_York",
+      "index_dirs": ["iris-loom", "embeddings/atomic", "notes", "writing"],
+      "adapters": [
+        { "type": "local", "port": 7700 },
+        { "type": "discord", "token_env": "DISCORD_TOKEN_IRIS" }
+      ]
+    }
+  }
+}
