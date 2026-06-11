@@ -1,4 +1,5 @@
 mod birth;
+mod channels;
 mod config;
 mod context;
 mod env_file;

@@ -135,6 +135,50 @@ pub fn last_turn(path: &Path) -> anyhow::Result<u64> {
     Ok(scan(path)?.last().map(|l| l.turn).unwrap_or(0))
 }
 
+/// A witness move (wall ch. 04): one line per turn in
+/// `record/moves.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MoveLine {
+    pub id: String,
+    pub turn: u64,
+    pub summary: String,
+}
+
+pub fn moves_path(workspace: &Path) -> PathBuf {
+    workspace.join("record").join("moves.jsonl")
+}
+
+/// All moves, in order, torn lines skipped.
+pub fn read_moves(path: &Path) -> anyhow::Result<Vec<MoveLine>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut moves = Vec::new();
+    for (line_no, raw) in text.lines().enumerate() {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<MoveLine>(raw) {
+            Ok(line) => moves.push(line),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                line = line_no + 1,
+                error = %e,
+                "skipping malformed move line"
+            ),
+        }
+    }
+    Ok(moves)
+}
+
+/// The witness cursor: the turn number on the moves file's last line.
+/// No moves file, or an empty one — the cursor is 0 (wall ch. 03).
+pub fn witness_cursor(path: &Path) -> anyhow::Result<u64> {
+    Ok(read_moves(path)?.last().map(|m| m.turn).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
