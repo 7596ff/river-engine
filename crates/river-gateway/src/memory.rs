@@ -122,6 +122,7 @@ pub struct Memory {
     workspace: PathBuf,
     watched: Vec<PathBuf>,
     pending_flashes: Arc<Mutex<Vec<Flash>>>,
+    queue_notify: Arc<tokio::sync::Notify>,
 }
 
 /// One atomic note's identity and typed links, parsed live from the
@@ -181,6 +182,7 @@ impl Memory {
             workspace: workspace.to_path_buf(),
             watched,
             pending_flashes: Arc::new(Mutex::new(Vec::new())),
+            queue_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -459,7 +461,16 @@ impl Memory {
             "INSERT INTO extraction_queue (id, candidate, created_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![id, candidate, now()],
         )?;
+        drop(db);
+        // Wake anyone waiting on the quiet trigger's re-evaluation.
+        self.queue_notify.notify_one();
         Ok(id)
+    }
+
+    /// Resolves when a candidate is enqueued (level-triggered enough:
+    /// callers re-check the depth after waking).
+    pub async fn queue_wait(&self) {
+        self.queue_notify.notified().await;
     }
 
     /// Agent-side: take the front of the FIFO queue.

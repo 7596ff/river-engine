@@ -48,6 +48,8 @@ enum Wake {
     /// A quiet-trigger digestion turn carrying one extraction
     /// candidate (wall ch. 02).
     Digestion(String),
+    /// The queue changed while parked: recompute the select arms.
+    Recheck,
     Shutdown,
 }
 
@@ -168,14 +170,17 @@ impl<C: Chat> TurnLoop<C> {
     /// always runs to settle.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         loop {
-            // The quiet trigger arms only when candidates wait and
-            // the silence has not yet reached the threshold's edge.
+            // The quiet trigger: when candidates wait, sleep out the
+            // remaining silence; when none do, wait for the queue to
+            // gain one (then recompute). Never polls.
             let quiet_in: Option<Duration> = match &self.memory {
                 Some(memory) if memory.queue_depth().unwrap_or(0) > 0 => {
                     Some(QUIET_TRIGGER.saturating_sub(self.last_inbound.elapsed()))
                 }
-                _ => None,
+                Some(_) => None, // armed on queue_wait below
+                None => None,
             };
+            let memory = self.memory.clone();
 
             let wake = tokio::select! {
                 biased;
@@ -190,15 +195,26 @@ impl<C: Chat> TurnLoop<C> {
                     }
                     None => Wake::Shutdown,
                 },
-                _ = async {
-                    match quiet_in {
-                        Some(wait) => tokio::time::sleep(wait).await,
-                        None => std::future::pending().await,
+                wake = async {
+                    match (&memory, quiet_in) {
+                        (Some(_), Some(wait)) => {
+                            tokio::time::sleep(wait).await;
+                            Wake::Recheck // depth re-checked below
+                        }
+                        (Some(m), None) => {
+                            m.queue_wait().await;
+                            Wake::Recheck
+                        }
+                        (None, _) => std::future::pending().await,
                     }
                 } => {
-                    match self.memory.as_ref().and_then(|m| m.pop_candidate().ok().flatten()) {
-                        Some(candidate) => Wake::Digestion(candidate),
-                        None => Wake::Heartbeat,
+                    if matches!(quiet_in, Some(_)) {
+                        match memory.as_ref().and_then(|m| m.pop_candidate().ok().flatten()) {
+                            Some(candidate) => Wake::Digestion(candidate),
+                            None => Wake::Recheck,
+                        }
+                    } else {
+                        wake
                     }
                 }
                 _ = tokio::time::sleep(self.heartbeat) => Wake::Heartbeat,
@@ -209,6 +225,7 @@ impl<C: Chat> TurnLoop<C> {
                     tracing::info!("shutdown: no turn in flight, exiting cleanly");
                     return Ok(());
                 }
+                Wake::Recheck => continue,
                 wake => self.turn(wake).await?,
             }
         }
@@ -292,7 +309,7 @@ impl<C: Chat> TurnLoop<C> {
                 );
                 self.append(n, RecordRole::User, &framing)?;
             }
-            Wake::Shutdown => unreachable!("handled by run"),
+            Wake::Shutdown | Wake::Recheck => unreachable!("handled by run"),
         }
 
         if self.context.needs_compaction() {
