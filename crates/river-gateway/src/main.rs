@@ -1,3 +1,4 @@
+mod birth;
 mod config;
 mod env_file;
 mod model;
@@ -22,6 +23,19 @@ struct Cli {
 enum Command {
     /// Run the gateway for one agent.
     Run(RunArgs),
+    /// The birth ritual: write the founding record for a new agent.
+    Birth(BirthArgs),
+}
+
+#[derive(Args)]
+struct BirthArgs {
+    /// The agent's workspace directory.
+    #[arg(long)]
+    workspace: PathBuf,
+
+    /// The agent's name.
+    #[arg(long)]
+    name: String,
 }
 
 #[derive(Args)]
@@ -52,6 +66,17 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Run(args) => run(args).await,
+        Command::Birth(args) => {
+            let record = birth::perform_birth(&args.workspace, &args.name)?;
+            println!(
+                "born: {} ({}) at {} in {}",
+                record.name,
+                record.id,
+                record.born_at,
+                args.workspace.display()
+            );
+            Ok(())
+        }
     }
 }
 
@@ -85,8 +110,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         );
     };
 
+    let founding = birth::read_birth(&agent.workspace)?;
+
     tracing::info!(
         agent = %args.agent,
+        name = %founding.name,
+        born_at = %founding.born_at,
         workspace = %agent.workspace.display(),
         model = %agent.model,
         "river-gateway starting"
@@ -114,7 +143,9 @@ mod tests {
             "--agent",
             "ada",
         ]);
-        let Command::Run(args) = cli.command;
+        let Command::Run(args) = cli.command else {
+            panic!("expected run subcommand");
+        };
         assert_eq!(args.agent, "ada");
         assert_eq!(args.config, PathBuf::from("river.json"));
         assert!(args.env_file.is_none());
