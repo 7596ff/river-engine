@@ -1,8 +1,11 @@
 mod birth;
 mod config;
+mod context;
 mod env_file;
 mod identity;
 mod model;
+mod record;
+mod turn;
 
 use std::path::PathBuf;
 
@@ -115,16 +118,55 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     let identity = identity::load(&agent.workspace)?;
     let tz = identity::timezone(agent.timezone.as_deref())?;
 
+    let model_config = cfg
+        .models
+        .get(&agent.model)
+        .expect("validated: model reference resolves");
+    let client = model::ModelClient::new(model_config)?;
+    let system_prompt =
+        identity.system_prompt(&jiff::Zoned::now().with_time_zone(tz.clone()));
+
+    let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
+    let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
+    let (health_tx, health_rx) = tokio::sync::watch::channel(turn::Health::default());
+
+    let turn_loop = turn::TurnLoop::new(
+        agent.workspace.clone(),
+        system_prompt,
+        client,
+        inbound_rx,
+        outbound_tx.clone(),
+        health_tx,
+        std::time::Duration::from_secs(agent.heartbeat_minutes * 60),
+    )?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("installing SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+        tracing::info!("signal received; finishing the current turn");
+        let _ = shutdown_tx.send(true);
+    });
+
     tracing::info!(
         agent = %args.agent,
         name = %founding.name,
         born_at = %founding.born_at,
         workspace = %agent.workspace.display(),
         model = %agent.model,
-        system_prompt_bytes = identity.system_prompt(&jiff::Zoned::now().with_time_zone(tz)).len(),
-        "river-gateway starting"
+        "river-gateway running"
     );
-    bail!("nothing to run yet: the gateway is a skeleton")
+
+    // The local surface (next card) takes these handles; until then
+    // the agent wakes only by heartbeat.
+    let _surface_handles = (inbound_tx, outbound_tx, health_rx);
+
+    turn_loop.run(shutdown_rx).await
 }
 
 #[cfg(test)]

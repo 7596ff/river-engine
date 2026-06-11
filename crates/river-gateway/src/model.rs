@@ -41,6 +41,21 @@ pub struct ChatResponse {
     pub prompt_tokens: Option<u64>,
 }
 
+/// The model-call seam: the turn loop talks to this, tests fake it.
+pub trait Chat {
+    fn chat(
+        &self,
+        system: &str,
+        messages: &[ChatMessage],
+    ) -> impl Future<Output = anyhow::Result<ChatResponse>> + Send;
+}
+
+impl Chat for ModelClient {
+    async fn chat(&self, system: &str, messages: &[ChatMessage]) -> anyhow::Result<ChatResponse> {
+        ModelClient::chat(self, system, messages).await
+    }
+}
+
 pub struct ModelClient {
     http: reqwest::Client,
     provider: Provider,

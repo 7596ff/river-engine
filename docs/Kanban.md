@@ -11,19 +11,19 @@ kanban-plugin: board
 - [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
 - [ ] birth — subcommand writes record/birth.json; gateway refuses to start unbirthed
 - [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
+- [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
+- [ ] in-memory rolling context (naive; swapped for persistent context later)
+- [ ] turn record — record/{channel}.jsonl append + tail-scan, ULIDs, persist-once under turn numbers
+- [ ] heartbeat wake — timer + :heartbeat: marker
+- [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 
 
 ## in progress
 
 
 ## barebones harness
-- [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
-- [ ] in-memory rolling context (naive; swapped for persistent context later)
 - [ ] local chat surface — localhost HTTP + websocket, /health from live path
 - [ ] TUI client — terminal chat window speaking the websocket protocol
-- [ ] turn record — record/{channel}.jsonl append + tail-scan, ULIDs, persist-once under turn numbers
-- [ ] heartbeat wake — timer + :heartbeat: marker
-- [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 
 
 ## river-engine unique features
