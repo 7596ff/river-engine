@@ -117,7 +117,9 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     };
 
     let founding = birth::read_birth(&agent.workspace)?;
-    let identity = identity::load(&agent.workspace)?;
+    // Fail-fast startup invariant (wall ch. 08); the turn loop
+    // re-reads at every boundary thereafter.
+    identity::load(&agent.workspace)?;
     let tz = identity::timezone(agent.timezone.as_deref())?;
 
     let model_config = cfg
@@ -125,18 +127,19 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         .get(&agent.model)
         .expect("validated: model reference resolves");
     let client = model::ModelClient::new(model_config)?;
-    let system_prompt =
-        identity.system_prompt(&jiff::Zoned::now().with_time_zone(tz.clone()));
 
-    let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
+    let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
     let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
     let (health_tx, health_rx) = tokio::sync::watch::channel(turn::Health::default());
 
     let turn_loop = turn::TurnLoop::new(
         agent.workspace.clone(),
-        system_prompt,
+        tz,
+        agent.context.clone(),
         client,
-        inbound_rx,
+        channels.clone(),
+        notify_rx,
         outbound_tx.clone(),
         health_tx,
         std::time::Duration::from_secs(agent.heartbeat_minutes * 60),
@@ -168,13 +171,11 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         config::AdapterConfig::Local { port } => Some(*port),
         _ => None,
     });
-    // Held so the queue stays open even with no adapter to feed it.
-    let _inbound_keepalive = inbound_tx.clone();
     match local_port {
         Some(port) => {
             tokio::spawn(surface::serve(
                 port,
-                inbound_tx,
+                channels.clone(),
                 outbound_tx,
                 health_rx,
                 shutdown_rx.clone(),

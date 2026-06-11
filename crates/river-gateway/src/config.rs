@@ -77,7 +77,7 @@ fn default_request_timeout() -> u64 {
 }
 
 /// Context knobs (wall ch. 03). Everything optional; defaults bind here.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ContextConfig {
     pub limit: u64,

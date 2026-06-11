@@ -14,13 +14,14 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde::Deserialize;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, watch};
 
-use crate::turn::{DEFAULT_CHANNEL, Health, InboundMessage, OutboundMessage};
+use crate::channels::Channels;
+use crate::turn::{DEFAULT_CHANNEL, Health, LOCAL_ADAPTER, OutboundMessage};
 
 #[derive(Clone)]
 struct SurfaceState {
-    inbound: mpsc::Sender<InboundMessage>,
+    channels: Channels,
     outbound: broadcast::Sender<OutboundMessage>,
     health: watch::Receiver<Health>,
 }
@@ -35,25 +36,25 @@ struct ClientMessage {
 /// this is the gateway's sole HTTP exposure.
 pub async fn serve(
     port: u16,
-    inbound: mpsc::Sender<InboundMessage>,
+    channels: Channels,
     outbound: broadcast::Sender<OutboundMessage>,
     health: watch::Receiver<Health>,
     shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    serve_on(listener, inbound, outbound, health, shutdown).await
+    serve_on(listener, channels, outbound, health, shutdown).await
 }
 
 async fn serve_on(
     listener: tokio::net::TcpListener,
-    inbound: mpsc::Sender<InboundMessage>,
+    channels: Channels,
     outbound: broadcast::Sender<OutboundMessage>,
     health: watch::Receiver<Health>,
     mut shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let state = SurfaceState {
-        inbound,
+        channels,
         outbound,
         health,
     };
@@ -80,13 +81,19 @@ async fn message_handler(
     State(state): State<SurfaceState>,
     Json(msg): Json<ClientMessage>,
 ) -> Json<serde_json::Value> {
+    // Write-then-notify happens inside the channel layer; a failure
+    // here means the message is NOT durably logged and the caller is
+    // told so (wall ch. 05).
     let ok = state
-        .inbound
-        .send(InboundMessage {
-            channel: DEFAULT_CHANNEL.to_string(),
-            author: msg.author,
-            content: msg.content,
-        })
+        .channels
+        .inbound(
+            DEFAULT_CHANNEL,
+            &msg.author,
+            None,
+            &msg.content,
+            LOCAL_ADAPTER,
+            None,
+        )
         .await
         .is_ok();
     Json(serde_json::json!({ "ok": ok }))
@@ -130,12 +137,15 @@ async fn chat_connection(socket: WebSocket, state: SurfaceState) {
                     match serde_json::from_str::<ClientMessage>(&text) {
                         Ok(msg) => {
                             if state
-                                .inbound
-                                .send(InboundMessage {
-                                    channel: DEFAULT_CHANNEL.to_string(),
-                                    author: msg.author,
-                                    content: msg.content,
-                                })
+                                .channels
+                                .inbound(
+                                    DEFAULT_CHANNEL,
+                                    &msg.author,
+                                    None,
+                                    &msg.content,
+                                    LOCAL_ADAPTER,
+                                    None,
+                                )
                                 .await
                                 .is_err()
                             {
@@ -161,18 +171,24 @@ async fn chat_connection(socket: WebSocket, state: SurfaceState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::Notification;
+    use tokio::sync::mpsc;
     use tokio_tungstenite::tungstenite;
 
     struct Surface {
         addr: SocketAddr,
-        inbound_rx: mpsc::Receiver<InboundMessage>,
+        channels: Channels,
+        notify_rx: mpsc::Receiver<Notification>,
         outbound: broadcast::Sender<OutboundMessage>,
         health_tx: watch::Sender<Health>,
         _shutdown_tx: watch::Sender<bool>,
+        _dir: tempfile::TempDir,
     }
 
     async fn start() -> Surface {
-        let (inbound_tx, inbound_rx) = mpsc::channel(16);
+        let dir = tempfile::tempdir().unwrap();
+        let (notify_tx, notify_rx) = mpsc::channel(256);
+        let channels = Channels::open(dir.path(), notify_tx).unwrap();
         let (outbound, _) = broadcast::channel(16);
         let (health_tx, health_rx) = watch::channel(Health::default());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -183,22 +199,24 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(serve_on(
             listener,
-            inbound_tx,
+            channels.clone(),
             outbound.clone(),
             health_rx,
             shutdown_rx,
         ));
         Surface {
             addr,
-            inbound_rx,
+            channels,
+            notify_rx,
             outbound,
             health_tx,
             _shutdown_tx: shutdown_tx,
+            _dir: dir,
         }
     }
 
     #[tokio::test]
-    async fn post_message_reaches_the_queue() {
+    async fn post_message_logs_then_notifies() {
         let mut surface = start().await;
         let client = reqwest::Client::new();
         let response: serde_json::Value = client
@@ -212,10 +230,14 @@ mod tests {
             .unwrap();
         assert_eq!(response["ok"], true);
 
-        let inbound = surface.inbound_rx.recv().await.unwrap();
-        assert_eq!(inbound.channel, DEFAULT_CHANNEL);
-        assert_eq!(inbound.author, "cass");
-        assert_eq!(inbound.content, "hello");
+        let note = surface.notify_rx.recv().await.unwrap();
+        assert_eq!(note.channel, DEFAULT_CHANNEL);
+
+        let entries = surface.channels.scan(DEFAULT_CHANNEL).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].author.as_deref(), Some("cass"));
+        assert_eq!(entries[0].content.as_deref(), Some("hello"));
+        assert_eq!(entries[0].id, note.ulid);
     }
 
     #[tokio::test]
@@ -248,14 +270,14 @@ mod tests {
                 .await
                 .unwrap();
 
-        // Client speaks → inbound queue.
+        // Client speaks → channel log + notification.
         ws.send(tungstenite::Message::Text(
             r#"{"author":"cass","content":"hello"}"#.into(),
         ))
         .await
         .unwrap();
-        let inbound = surface.inbound_rx.recv().await.unwrap();
-        assert_eq!(inbound.content, "hello");
+        let note = surface.notify_rx.recv().await.unwrap();
+        assert_eq!(note.channel, DEFAULT_CHANNEL);
 
         // Agent speaks → client receives.
         surface

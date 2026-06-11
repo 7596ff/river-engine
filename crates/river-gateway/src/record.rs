@@ -113,23 +113,6 @@ pub fn scan(path: &Path) -> anyhow::Result<Vec<RecordLine>> {
     Ok(lines)
 }
 
-/// The last `n` whole turns that touch `channel`, in order. A
-/// tail-scan: collect from the end, never split a turn.
-pub fn tail_turns(path: &Path, channel: &str, n: usize) -> anyhow::Result<Vec<RecordLine>> {
-    let lines = scan(path)?;
-    let mut touching: Vec<u64> = lines
-        .iter()
-        .filter(|l| l.channel == channel)
-        .map(|l| l.turn)
-        .collect();
-    touching.dedup();
-    let keep: std::collections::BTreeSet<u64> = touching.into_iter().rev().take(n).collect();
-    Ok(lines
-        .into_iter()
-        .filter(|l| keep.contains(&l.turn))
-        .collect())
-}
-
 /// The highest turn number in the record, or 0 for none.
 pub fn last_turn(path: &Path) -> anyhow::Result<u64> {
     Ok(scan(path)?.last().map(|l| l.turn).unwrap_or(0))
@@ -249,30 +232,6 @@ mod tests {
         let lines = scan(record.path()).unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].turn, 2);
-    }
-
-    #[test]
-    fn tail_turns_collects_whole_turns_touching_the_channel() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut record = TurnRecord::open(dir.path()).unwrap();
-        // Turn 1: local only. Turn 2: discord inbound handled while
-        // facing local. Turn 3: local only.
-        record.append(1, "local_main", RecordRole::User, Some("q1")).unwrap();
-        record.append(1, "local_main", RecordRole::Assistant, Some("a1")).unwrap();
-        record.append(2, "discord_general", RecordRole::User, Some("q2")).unwrap();
-        record.append(2, "local_main", RecordRole::Assistant, Some("a2")).unwrap();
-        record.append(3, "local_main", RecordRole::User, Some("q3")).unwrap();
-
-        // Discord's view: the whole of turn 2 rides in, including the
-        // local-tagged reply.
-        let discord = tail_turns(record.path(), "discord_general", 5).unwrap();
-        assert_eq!(discord.len(), 2);
-        assert!(discord.iter().all(|l| l.turn == 2));
-
-        // Local's last two touching turns are 2 and 3, whole.
-        let local = tail_turns(record.path(), "local_main", 2).unwrap();
-        assert!(local.iter().all(|l| l.turn >= 2));
-        assert_eq!(local.len(), 3);
     }
 
     #[test]

@@ -78,6 +78,22 @@ instruction `Read HEARTBEAT.md.` — pointing at a seeded, agent-owned
 briefing file at the workspace root. Idle behavior becomes editable
 prose instead of a convention the agent has to be told about.
 
+## 2026-06-11 — step-2 details the wall delegates
+
+- **Channel switch policy:** ch. 03 defers switches to turn start but
+  does not say what triggers one. Decision: the first notified channel
+  of a wake is where attention goes — if it differs from the context's
+  channel, rebuild for it before reading. Later channels in the same
+  wake are read (and cursored) into that context.
+- **Assembly for both protocols:** SYSTEM + ARC + MEMORY SLOT fold
+  into the model client's system string in wall order (Anthropic
+  requires system content top-level); HOT is the message list. One
+  code path, both providers. System-role hot entries (lag warnings)
+  go to the model as user-role messages but persist as role:system.
+- **Lag-warning plumbing:** compaction returns the warning text and
+  the turn loop appends it through the normal persist-once path, so
+  the warning is itself in the record under the turn it happened.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a
