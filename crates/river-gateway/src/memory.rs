@@ -26,6 +26,28 @@ pub const COGNITIVE_BUMP: f64 = 1.0;
 pub const AMBIENT_BUMP: f64 = 0.5;
 const SEGMENT_TARGET_BYTES: usize = 1200;
 const SEARCH_TOP_K: usize = 8;
+const FLASH_THRESHOLD: f64 = 1.0;
+const PROPAGATION_FACTOR: f64 = 0.5;
+const PROPAGATION_HOPS: usize = 3;
+const DECAY_FACTOR: f64 = 0.8;
+const DECAY_INTERVAL_SECS: u64 = 3600;
+
+/// What carried a bump (wall ch. 02): only ambient or propagated
+/// warmth can flash a note — the flash carrier rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carrier {
+    Cognitive,
+    Ambient,
+    Propagated,
+}
+
+/// A pending flash: surfaced into the next context's memory slot.
+#[derive(Debug, Clone)]
+pub struct Flash {
+    pub note_id: String,
+    pub text: String,
+    pub neighbors: Vec<(String, String)>, // (link type, neighbor text)
+}
 
 type EmbedFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>>;
 
@@ -99,6 +121,17 @@ pub struct Memory {
     embedder: Arc<dyn Embed>,
     workspace: PathBuf,
     watched: Vec<PathBuf>,
+    pending_flashes: Arc<Mutex<Vec<Flash>>>,
+}
+
+/// One atomic note's identity and typed links, parsed live from the
+/// workspace — links are ground truth, never cached.
+#[derive(Debug)]
+struct NoteInfo {
+    id: String,
+    path: PathBuf,
+    body: String,
+    links: Vec<(String, String)>, // (type, target id)
 }
 
 impl Memory {
@@ -147,7 +180,23 @@ impl Memory {
             embedder,
             workspace: workspace.to_path_buf(),
             watched,
+            pending_flashes: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Every atomic note under the watched dirs, parsed live.
+    fn notes(&self) -> Vec<NoteInfo> {
+        let mut out = Vec::new();
+        for dir in &self.watched {
+            let mut files: Vec<(String, String, String)> = Vec::new();
+            let _ = collect_files(dir, &mut files);
+            for (path, _, text) in files {
+                if let Some(info) = parse_note(Path::new(&path), &text) {
+                    out.push(info);
+                }
+            }
+        }
+        out
     }
 
     /// One sweep: hash every watched file, (re)index changes, remove
@@ -253,7 +302,7 @@ impl Memory {
         hits.truncate(SEARCH_TOP_K);
 
         for hit in &hits {
-            self.bump_path(&hit.file_path, AMBIENT_BUMP)?;
+            self.bump_path(&hit.file_path, AMBIENT_BUMP, Carrier::Ambient)?;
         }
         Ok(hits)
     }
@@ -266,7 +315,7 @@ impl Memory {
     /// A cognitive access through the file-tool seam (wall ch. 07).
     pub fn on_read(&self, path: &Path) -> anyhow::Result<()> {
         if self.is_watched(path) {
-            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP)?;
+            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
         }
         Ok(())
     }
@@ -274,23 +323,165 @@ impl Memory {
     /// A watched write: bump now; the next sweep re-indexes.
     pub fn on_write(&self, path: &Path) -> anyhow::Result<bool> {
         if self.is_watched(path) {
-            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP)?;
+            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
             return Ok(true);
         }
         Ok(false)
     }
 
-    /// Record a bump (note identity = frontmatter id when the file
-    /// has one, else the path). Propagation and decay are step 5.
-    fn bump_path(&self, path: &str, amount: f64) -> anyhow::Result<()> {
-        let note_id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.to_string());
+    fn bump_path(&self, path: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
+        let note_id =
+            frontmatter_id(Path::new(path)).unwrap_or_else(|| path.to_string());
+        self.bump(&note_id, amount, carrier)
+    }
+
+    /// Apply a bump and its single-pass wave (wall ch. 02): ×0.5 per
+    /// hop, 3 hops deep, one wave outward — propagated bumps trigger
+    /// no further waves. Energy ignores link direction and type.
+    pub fn bump(&self, origin: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
+        let notes = self.notes();
+        let mut adjacency: std::collections::HashMap<&str, Vec<&str>> = Default::default();
+        for note in &notes {
+            for (_, target) in &note.links {
+                adjacency.entry(note.id.as_str()).or_default().push(target);
+                adjacency.entry(target.as_str()).or_default().push(&note.id);
+            }
+        }
+
+        let mut visited: std::collections::HashSet<String> = Default::default();
+        let mut frontier = vec![origin.to_string()];
+        visited.insert(origin.to_string());
+        let mut wave_amount = amount;
+
+        for hop in 0..=PROPAGATION_HOPS {
+            let mut next: Vec<String> = Vec::new();
+            for id in &frontier {
+                let hop_carrier = if hop == 0 { carrier } else { Carrier::Propagated };
+                self.apply_bump(id, wave_amount, hop_carrier, &notes)?;
+                if let Some(neighbors) = adjacency.get(id.as_str()) {
+                    for n in neighbors {
+                        if visited.insert(n.to_string()) {
+                            next.push(n.to_string());
+                        }
+                    }
+                }
+            }
+            frontier = next;
+            wave_amount *= PROPAGATION_FACTOR;
+            if frontier.is_empty() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// One note's bump, with the flash carrier rule: only ambient or
+    /// propagated warmth crossing the threshold from below fires a
+    /// flash (halve + pend); a cognitive crossing stands silently.
+    fn apply_bump(
+        &self,
+        note_id: &str,
+        amount: f64,
+        carrier: Carrier,
+        notes: &[NoteInfo],
+    ) -> anyhow::Result<()> {
+        let old: f64 = {
+            let db = self.db.lock().expect("db lock");
+            db.query_row(
+                "SELECT score FROM activation WHERE note_id = ?1",
+                [note_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0.0)
+        };
+        let mut new = old + amount;
+        let crossed = old < FLASH_THRESHOLD && new >= FLASH_THRESHOLD;
+
+        if crossed && carrier != Carrier::Cognitive {
+            new /= 2.0;
+            let flash = match notes.iter().find(|n| n.id == note_id) {
+                Some(note) => Flash {
+                    note_id: note_id.to_string(),
+                    text: note.body.clone(),
+                    neighbors: note
+                        .links
+                        .iter()
+                        .filter_map(|(link_type, target)| {
+                            notes
+                                .iter()
+                                .find(|n| &n.id == target)
+                                .map(|n| (link_type.clone(), n.body.clone()))
+                        })
+                        .collect(),
+                },
+                None => Flash {
+                    note_id: note_id.to_string(),
+                    text: std::fs::read_to_string(note_id)
+                        .map(|t| t.chars().take(400).collect())
+                        .unwrap_or_default(),
+                    neighbors: Vec::new(),
+                },
+            };
+            tracing::info!(note = %flash.note_id, "flash: crossed the threshold");
+            self.pending_flashes.lock().expect("flash lock").push(flash);
+        }
+
         let db = self.db.lock().expect("db lock");
         db.execute(
             "INSERT INTO activation (note_id, score, bumped_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(note_id) DO UPDATE SET score = score + ?2, bumped_at = ?3",
-            rusqlite::params![note_id, amount, now()],
+             ON CONFLICT(note_id) DO UPDATE SET score = ?2, bumped_at = ?3",
+            rusqlite::params![note_id, new, now()],
         )?;
         Ok(())
+    }
+
+    /// Drain pending flashes for the memory slot.
+    pub fn take_flashes(&self) -> Vec<Flash> {
+        std::mem::take(&mut *self.pending_flashes.lock().expect("flash lock"))
+    }
+
+    /// The hourly tick: S(t) = S₀ · 0.8^t, stable between ticks.
+    pub fn decay_tick(&self) -> anyhow::Result<()> {
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            &format!("UPDATE activation SET score = score * {DECAY_FACTOR}"),
+            [],
+        )?;
+        db.execute("DELETE FROM activation WHERE score < 0.01", [])?;
+        Ok(())
+    }
+
+    /// Witness-side: append an extraction candidate (wall ch. 02).
+    pub fn enqueue_candidate(&self, candidate: &str) -> anyhow::Result<String> {
+        let id = ulid::Ulid::new().to_string();
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            "INSERT INTO extraction_queue (id, candidate, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, candidate, now()],
+        )?;
+        Ok(id)
+    }
+
+    /// Agent-side: take the front of the FIFO queue.
+    pub fn pop_candidate(&self) -> anyhow::Result<Option<String>> {
+        let db = self.db.lock().expect("db lock");
+        let front: Option<(String, String)> = db
+            .query_row(
+                "SELECT id, candidate FROM extraction_queue ORDER BY id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if let Some((id, candidate)) = front {
+            db.execute("DELETE FROM extraction_queue WHERE id = ?1", [&id])?;
+            return Ok(Some(candidate));
+        }
+        Ok(None)
+    }
+
+    pub fn queue_depth(&self) -> anyhow::Result<u64> {
+        let db = self.db.lock().expect("db lock");
+        Ok(db.query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| row.get(0))?)
     }
 
     pub fn activation(&self, note_id: &str) -> anyhow::Result<Option<f64>> {
@@ -304,15 +495,23 @@ impl Memory {
         &self.workspace
     }
 
-    /// Run the periodic sweep until shutdown.
+    /// Run the periodic sweep and the hourly decay tick until
+    /// shutdown.
     pub async fn run_sync(
         self,
         mut reindex: tokio::sync::mpsc::Receiver<()>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
+        let mut last_decay = std::time::Instant::now();
         loop {
             if let Err(e) = self.sweep().await {
                 tracing::warn!(error = %e, "sync sweep failed");
+            }
+            if last_decay.elapsed().as_secs() >= DECAY_INTERVAL_SECS {
+                if let Err(e) = self.decay_tick() {
+                    tracing::warn!(error = %e, "decay tick failed");
+                }
+                last_decay = std::time::Instant::now();
             }
             tokio::select! {
                 biased;
@@ -371,6 +570,40 @@ fn collect_files(dir: &Path, out: &mut Vec<(String, String, String)>) -> anyhow:
         }
     }
     Ok(())
+}
+
+/// Parse an atomic note (wall ch. 02): frontmatter id + typed links
+/// (`- type: target`), body after the closing `---`.
+fn parse_note(path: &Path, text: &str) -> Option<NoteInfo> {
+    let rest = text.strip_prefix("---")?;
+    let end = rest.find("\n---")?;
+    let (frontmatter, body) = rest.split_at(end);
+    let body = body.trim_start_matches("\n---").trim().to_string();
+
+    let mut id = None;
+    let mut links = Vec::new();
+    let mut in_links = false;
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("id:") {
+            id = Some(value.trim().to_string());
+            in_links = false;
+        } else if trimmed == "links:" {
+            in_links = true;
+        } else if in_links && let Some(item) = trimmed.strip_prefix("- ") {
+            if let Some((link_type, target)) = item.split_once(':') {
+                links.push((link_type.trim().to_string(), target.trim().to_string()));
+            }
+        } else if !trimmed.starts_with('-') && trimmed.contains(':') {
+            in_links = false;
+        }
+    }
+    Some(NoteInfo {
+        id: id?,
+        path: path.to_path_buf(),
+        body,
+        links,
+    })
 }
 
 /// The `id:` from a leading `---` frontmatter block, if any.
@@ -506,6 +739,114 @@ pub mod tests {
             !mem.search("river").await.unwrap().is_empty(),
             "rebuilt from the workspace"
         );
+    }
+
+    fn write_note(dir: &Path, name: &str, id: &str, links: &[(&str, &str)], body: &str) {
+        let mut text = format!("---\nid: {id}\n");
+        if !links.is_empty() {
+            text.push_str("links:\n");
+            for (t, target) in links {
+                text.push_str(&format!("  - {t}: {target}\n"));
+            }
+        }
+        text.push_str(&format!("tags: [test]\n---\n\n{body}\n"));
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+
+    #[tokio::test]
+    async fn propagation_waves_three_hops_single_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        // a — b — c — d — e (chain)
+        write_note(&k, "a.md", "NA", &[("extends", "NB")], "claim a");
+        write_note(&k, "b.md", "NB", &[("extends", "NC")], "claim b");
+        write_note(&k, "c.md", "NC", &[("extends", "ND")], "claim c");
+        write_note(&k, "d.md", "ND", &[("extends", "NE")], "claim d");
+        write_note(&k, "e.md", "NE", &[], "claim e");
+
+        mem.bump("NA", 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(1.0));
+        assert_eq!(mem.activation("NB").unwrap(), Some(0.5));
+        assert_eq!(mem.activation("NC").unwrap(), Some(0.25));
+        assert_eq!(mem.activation("ND").unwrap(), Some(0.125));
+        assert_eq!(mem.activation("NE").unwrap(), None, "3 hops only");
+    }
+
+    #[tokio::test]
+    async fn flash_carrier_rule_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "h.md", "NH", &[("same-pattern-as", "NO")], "the heron waits");
+        write_note(&k, "o.md", "NO", &[], "the owl is silent");
+
+        // Two direct reads: NH crosses 1.0 cognitively — never
+        // flashes, never halves. But its wave warms NO by propagation
+        // (0.5 + 0.5 = 1.0): NO crosses on a propagated carrier and
+        // flashes — the edge of attention, not the center.
+        mem.bump("NH", 1.0, Carrier::Cognitive).unwrap();
+        mem.bump("NH", 1.0, Carrier::Cognitive).unwrap();
+        let flashes = mem.take_flashes();
+        assert!(
+            flashes.iter().all(|f| f.note_id != "NH"),
+            "cognitive crossings never flash the touched note"
+        );
+        assert_eq!(mem.activation("NH").unwrap(), Some(2.0), "no halving");
+        assert_eq!(flashes.len(), 1, "the propagated neighbor flashed");
+        assert_eq!(flashes[0].note_id, "NO");
+        assert_eq!(mem.activation("NO").unwrap(), Some(0.5), "halved on flash");
+
+        // Ambient crossing flashes too.
+        mem.bump("NO", 0.6, Carrier::Ambient).unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1);
+        assert_eq!(flashes[0].note_id, "NO");
+        assert!(flashes[0].text.contains("owl"));
+    }
+
+    #[tokio::test]
+    async fn flash_carries_neighbors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "h.md", "NH", &[("same-pattern-as", "NO")], "the heron waits");
+        write_note(&k, "o.md", "NO", &[], "the owl is silent");
+
+        mem.bump("NH", 1.2, Carrier::Ambient).unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1);
+        assert_eq!(flashes[0].note_id, "NH");
+        assert_eq!(flashes[0].neighbors.len(), 1);
+        assert_eq!(flashes[0].neighbors[0].0, "same-pattern-as");
+        assert!(flashes[0].neighbors[0].1.contains("owl"));
+    }
+
+    #[tokio::test]
+    async fn decay_tick_multiplies_and_prunes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[], "claim a");
+        mem.bump("NA", 0.5, Carrier::Cognitive).unwrap();
+        mem.decay_tick().unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(0.4));
+        for _ in 0..20 {
+            mem.decay_tick().unwrap();
+        }
+        assert_eq!(mem.activation("NA").unwrap(), None, "pruned below 0.01");
+    }
+
+    #[tokio::test]
+    async fn extraction_queue_is_fifo() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.enqueue_candidate("first").unwrap();
+        mem.enqueue_candidate("second").unwrap();
+        assert_eq!(mem.queue_depth().unwrap(), 2);
+        assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("first"));
+        assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("second"));
+        assert_eq!(mem.pop_candidate().unwrap(), None);
     }
 
     #[test]
