@@ -11,4 +11,7 @@ pkgs.mkShell {
     openssl
     sqlite
   ];
+
+  RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+  LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
 }
