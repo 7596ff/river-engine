@@ -177,6 +177,23 @@ dominate any embedding. Warmth is runtime state; neither path authors
 links or notes, so divided authorship is untouched. A semantic flash
 is a link candidate the digestion loop can formalize.
 
+## 2026-06-11 — discord details the wall delegates
+
+- Channel names key by id (`discord_<channel_id>`): names collide and
+  change; ids don't. The config listen-set still uses names, resolved
+  against the guild at startup.
+- `/listen` and `/unlisten` slash commands deferred to their own card;
+  the listen-set is config + DMs-always-pass for now.
+- Speak routing: `discord_*` channels go through a request/oneshot to
+  the adapter task, which delivers over HTTP, logs post-acceptance
+  with the platform msg_id, and returns it (or the error) as
+  tool-result text. 15s delivery timeout.
+- Another bot is just "not-me" (ch. 05's binary roles); only the
+  agent's own messages are excluded.
+- The formal Adapter trait retrofit (with feature declarations folded
+  into the system prompt) remains its own card; discord lands shaped
+  like the local surface: a supervised task.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

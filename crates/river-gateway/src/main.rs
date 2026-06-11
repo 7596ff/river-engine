@@ -2,6 +2,7 @@ mod birth;
 mod channels;
 mod config;
 mod context;
+mod discord;
 mod env_file;
 mod identity;
 mod memory;
@@ -176,6 +177,32 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     let last_settled = record::last_turn(&agent.workspace.join("record").join("turns.jsonl"))?;
     let (settled_tx, settled_rx) = tokio::sync::watch::channel(last_settled);
 
+    // Discord, when configured: token from the environment only.
+    let discord_setup = match agent.adapters.iter().find_map(|adapter| match adapter {
+        config::AdapterConfig::Discord {
+            guild_id,
+            channels,
+            token_env,
+        } => Some((guild_id.clone(), channels.clone(), token_env.clone())),
+        _ => None,
+    }) {
+        Some((guild_id, listen_names, token_env)) => {
+            let token = std::env::var(&token_env)
+                .map_err(|_| anyhow::anyhow!("token_env {token_env} is not set"))?;
+            let settings = discord::DiscordSettings {
+                guild_id: guild_id
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad guild_id {guild_id:?}"))?,
+                listen_names,
+                token,
+            };
+            let (speak_tx, speak_rx) = tokio::sync::mpsc::channel(64);
+            Some((settings, speak_tx, speak_rx))
+        }
+        None => None,
+    };
+    let discord_tx = discord_setup.as_ref().map(|(_, tx, _)| tx.clone());
+
     let turn_loop = turn::TurnLoop::new(
         agent.workspace.clone(),
         tz,
@@ -193,6 +220,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         agent.max_iterations,
         mem.clone(),
         reindex_tx,
+        discord_tx,
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -221,6 +249,14 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         config::AdapterConfig::Local { port } => Some(*port),
         _ => None,
     });
+    if let Some((settings, _tx, speak_rx)) = discord_setup {
+        tokio::spawn(discord::run_supervised(
+            settings,
+            channels.clone(),
+            speak_rx,
+            shutdown_rx.clone(),
+        ));
+    }
     match local_port {
         Some(port) => {
             tokio::spawn(surface::serve(

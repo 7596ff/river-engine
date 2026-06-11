@@ -50,6 +50,7 @@ kanban-plugin: board
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
 - [ ] adapter trait with feature declaration folded into the system prompt
 - [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
+- [ ] /listen + /unlisten slash commands — runtime listen-set management, persisted in the data dir
 
 
 ## open-strix features

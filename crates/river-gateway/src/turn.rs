@@ -78,6 +78,7 @@ pub struct TurnLoop<C: Chat> {
     max_iterations: u32,
     memory: Option<crate::memory::Memory>,
     reindex: Option<mpsc::Sender<()>>,
+    discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
     /// When the last inbound message arrived; the quiet trigger
     /// measures from here and any inbound resets it.
     last_inbound: std::time::Instant,
@@ -107,6 +108,7 @@ impl<C: Chat> TurnLoop<C> {
         max_iterations: u32,
         memory: Option<crate::memory::Memory>,
         reindex: Option<mpsc::Sender<()>>,
+        discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
     ) -> anyhow::Result<Self> {
         let record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
@@ -135,6 +137,7 @@ impl<C: Chat> TurnLoop<C> {
             max_iterations,
             memory,
             reindex,
+            discord,
             last_inbound: std::time::Instant::now(),
             positions: HashMap::new(),
         })
@@ -332,6 +335,7 @@ impl<C: Chat> TurnLoop<C> {
             scrub: self.scrub.clone(),
             memory: self.memory.clone(),
             reindex: self.reindex.clone(),
+            discord: self.discord.clone(),
         };
 
         for iteration in 0..self.max_iterations {
@@ -600,6 +604,7 @@ mod tests {
             10,
             None,
             None,
+            None,
         )
         .unwrap();
         Harness {
@@ -862,7 +867,7 @@ mod tests {
         let model = FakeModel::replying(vec![
             speak("hi local"),
             done(""),
-            speak("hi discord"),
+            speak("hi front porch"),
             done(""),
         ]);
         let mut h = harness(dir.path(), model.clone());
@@ -873,15 +878,15 @@ mod tests {
             .await
             .unwrap();
 
-        let n2 = say(&mut h, "discord_general", "discord hello").await;
+        let n2 = say(&mut h, "porch_main", "porch hello").await;
         h.turn_loop
             .turn(Wake::Notifications(vec![n2]))
             .await
             .unwrap();
 
-        assert_eq!(h.turn_loop.context.channel(), "discord_general");
-        // The reply was spoken (and cursored) on discord.
-        let discord = h.channels.scan("discord_general").unwrap();
-        assert_eq!(discord.last().unwrap().content.as_deref(), Some("hi discord"));
+        assert_eq!(h.turn_loop.context.channel(), "porch_main");
+        // The reply was spoken (and cursored) on the new channel.
+        let porch = h.channels.scan("porch_main").unwrap();
+        assert_eq!(porch.last().unwrap().content.as_deref(), Some("hi front porch"));
     }
 }

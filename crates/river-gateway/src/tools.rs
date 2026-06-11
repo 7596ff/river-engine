@@ -37,6 +37,8 @@ pub struct ToolContext {
     pub memory: Option<Memory>,
     /// Nudges the sync service after watched writes.
     pub reindex: Option<tokio::sync::mpsc::Sender<()>>,
+    /// Routes speak requests for discord_* channels to the adapter.
+    pub discord: Option<tokio::sync::mpsc::Sender<crate::discord::SpeakRequest>>,
 }
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>>;
@@ -409,8 +411,31 @@ impl Tool for SpeakTool {
                 .as_str()
                 .unwrap_or(&ctx.current_channel)
                 .to_string();
-            // Deliver, then log post-acceptance: the agent entry is
-            // the implicit cursor (wall ch. 05).
+            // Discord channels route to the adapter, which delivers
+            // and logs post-acceptance; the platform msg_id (or the
+            // error) comes back as tool-result text (wall ch. 06).
+            if channel.starts_with(crate::discord::CHANNEL_PREFIX) {
+                let Some(discord) = &ctx.discord else {
+                    anyhow::bail!("no discord adapter configured");
+                };
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                discord
+                    .send(crate::discord::SpeakRequest {
+                        channel: channel.clone(),
+                        content: content.to_string(),
+                        reply: reply_tx,
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("discord adapter is down"))?;
+                let msg_id = tokio::time::timeout(Duration::from_secs(15), reply_rx)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("discord delivery timed out"))?
+                    .map_err(|_| anyhow::anyhow!("discord adapter dropped the request"))??;
+                return Ok(format!("spoken on {channel} (msg {msg_id})"));
+            }
+
+            // Local: the broadcast is the delivery; the agent entry
+            // doubles as the cursor (wall ch. 05).
             let _ = ctx.outbound.send(OutboundMessage {
                 channel: channel.clone(),
                 content: content.to_string(),
@@ -475,6 +500,7 @@ mod tests {
             scrub: vec!["SECRET_KEY".into()],
             memory: None,
             reindex: None,
+            discord: None,
         };
         (ctx, dir, outbound_rx)
     }
