@@ -24,12 +24,17 @@ kanban-plugin: board
 - [ ] TUI client — terminal chat window speaking the websocket protocol
 - [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
 - [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
+- [ ] vector index over workspace — embedded semantic search, derived + rebuildable, db disposable
+- [ ] file-tool memory capture — reads bump activation, writes re-index
+- [ ] per-agent tool surface — which tools a model is offered is config, not code
 
 
 ## in progress
 
 
+
 ## barebones harness
+
 
 
 ## river-engine unique features
@@ -40,13 +45,9 @@ kanban-plugin: board
 - [ ] flash — notes crossing 1.0 surface into context with 1-hop neighbors, score halves
 - [ ] digestive cycle — witness gleans → extraction queue → quiet-trigger re-engagement by the agent
 - [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
-- [ ] vector index over workspace — embedded semantic search, derived + rebuildable, db disposable
-- [ ] file-tool memory capture — reads bump activation, writes re-index
-- [ ] per-agent tool surface — which tools a model is offered is config, not code
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
 - [ ] adapter trait with feature declaration folded into the system prompt
 - [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
-
 
 
 ## open-strix features
@@ -83,6 +84,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,false,false,false,false]}
+{"kanban-plugin":"board","list-collapse":[false,true,true,false,false]}
 ```
 %%
