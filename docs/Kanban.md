@@ -48,6 +48,8 @@ kanban-plugin: board
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
 - [ ] adapter trait with feature declaration folded into the system prompt
 - [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
+- [ ] semantic propagation — warmth spreads along embedding-space neighbors (low factor, cosine threshold); a flash of an unlinked-but-near note is a link candidate the digestion loop can formalize
+- [ ] conversation resonance — each turn's text faintly bumps the nearest notes (~0.1×similarity); the web trembles with the topic before anyone searches
 
 
 ## open-strix features
