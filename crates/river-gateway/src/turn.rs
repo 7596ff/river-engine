@@ -57,6 +57,10 @@ pub struct TurnLoop<C: Chat> {
     notifications: mpsc::Receiver<Notification>,
     outbound: broadcast::Sender<OutboundMessage>,
     health: watch::Sender<Health>,
+    /// The latest settled turn — the witness's wake signal. Sent only
+    /// after the turn's lines are durably in the record
+    /// (persist-before-announce, wall ch. 01).
+    settled: watch::Sender<u64>,
     heartbeat: Duration,
 }
 
@@ -71,6 +75,7 @@ impl<C: Chat> TurnLoop<C> {
         notifications: mpsc::Receiver<Notification>,
         outbound: broadcast::Sender<OutboundMessage>,
         health: watch::Sender<Health>,
+        settled: watch::Sender<u64>,
         heartbeat: Duration,
     ) -> anyhow::Result<Self> {
         let record = TurnRecord::open(&workspace)?;
@@ -92,6 +97,7 @@ impl<C: Chat> TurnLoop<C> {
             notifications,
             outbound,
             health,
+            settled,
             heartbeat,
         })
     }
@@ -221,6 +227,9 @@ impl<C: Chat> TurnLoop<C> {
             last_settle: Some(jiff::Timestamp::now().to_string()),
             context_messages: self.context.len(),
         });
+        // Persist-before-announce: every append above fsynced inline,
+        // so the record already holds the whole turn.
+        let _ = self.settled.send(n);
         tracing::debug!(turn = n, "settled");
         Ok(())
     }
@@ -306,6 +315,7 @@ mod tests {
         let channels = Channels::open(dir, notify_tx).unwrap();
         let (outbound_tx, outbound_rx) = broadcast::channel(64);
         let (health_tx, health_rx) = watch::channel(Health::default());
+        let (settled_tx, _settled_rx) = watch::channel(0u64);
         let turn_loop = TurnLoop::new(
             dir.to_path_buf(),
             jiff::tz::TimeZone::UTC,
@@ -315,6 +325,7 @@ mod tests {
             notify_rx,
             outbound_tx,
             health_tx,
+            settled_tx,
             Duration::from_secs(3600),
         )
         .unwrap();

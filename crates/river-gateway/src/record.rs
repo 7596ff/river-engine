@@ -131,6 +131,48 @@ pub fn moves_path(workspace: &Path) -> PathBuf {
     workspace.join("record").join("moves.jsonl")
 }
 
+/// The single writer for the moves file (the witness's, wall ch. 04).
+pub struct MovesFile {
+    path: PathBuf,
+    file: File,
+}
+
+impl MovesFile {
+    pub fn open(workspace: &Path) -> anyhow::Result<Self> {
+        let path = moves_path(workspace);
+        std::fs::create_dir_all(path.parent().expect("moves path has a parent"))?;
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        Ok(Self { path, file })
+    }
+
+    /// Append one move line and fsync. Appending turn N moves the
+    /// witness cursor to N — the cursor is the tail.
+    pub fn append(&mut self, turn: u64, summary: &str) -> anyhow::Result<String> {
+        let line = MoveLine {
+            id: ulid::Ulid::new().to_string(),
+            turn,
+            summary: summary.to_string(),
+        };
+        let mut json = serde_json::to_string(&line)?;
+        json.push('\n');
+        self.file
+            .write_all(json.as_bytes())
+            .with_context(|| format!("appending to {}", self.path.display()))?;
+        self.file
+            .sync_data()
+            .with_context(|| format!("fsyncing {}", self.path.display()))?;
+        Ok(line.id)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// All moves, in order, torn lines skipped.
 pub fn read_moves(path: &Path) -> anyhow::Result<Vec<MoveLine>> {
     let text = match std::fs::read_to_string(path) {

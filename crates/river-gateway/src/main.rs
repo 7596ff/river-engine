@@ -8,6 +8,7 @@ mod model;
 mod record;
 mod surface;
 mod turn;
+mod witness;
 
 use std::path::PathBuf;
 
@@ -128,10 +129,21 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         .expect("validated: model reference resolves");
     let client = model::ModelClient::new(model_config)?;
 
+    // The witness: its own client (often a cheaper model), its own
+    // startup invariant — no witness identity, no gateway.
+    let witness_config = cfg
+        .models
+        .get(agent.witness_model_name())
+        .expect("validated: witness model reference resolves");
+    let witness_client = model::ModelClient::new(witness_config)?;
+    let witness = witness::Witness::load(&agent.workspace, witness_client)?;
+
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
     let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
     let (health_tx, health_rx) = tokio::sync::watch::channel(turn::Health::default());
+    let last_settled = record::last_turn(&agent.workspace.join("record").join("turns.jsonl"))?;
+    let (settled_tx, settled_rx) = tokio::sync::watch::channel(last_settled);
 
     let turn_loop = turn::TurnLoop::new(
         agent.workspace.clone(),
@@ -142,6 +154,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         notify_rx,
         outbound_tx.clone(),
         health_tx,
+        settled_tx,
         std::time::Duration::from_secs(agent.heartbeat_minutes * 60),
     )?;
 
@@ -185,6 +198,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
             tracing::warn!("no local adapter configured; the agent wakes only by heartbeat");
         }
     }
+
+    tokio::spawn(witness.run(settled_rx, shutdown_rx.clone()));
 
     turn_loop.run(shutdown_rx).await
 }

@@ -179,6 +179,13 @@ impl PersistentContext {
         //    now it is legitimately empty — assembly never blocks).
         self.memory_slot.clear();
 
+        tracing::info!(
+            cursor,
+            kept_messages = self.hot.len(),
+            estimate = self.estimate_total() as u64,
+            "compacted: dropped whole turns at or below the witness cursor"
+        );
+
         // 7. Never re-trigger: accept the result as-is.
         // 8. Lag warning.
         let midpoint =

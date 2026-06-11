@@ -94,6 +94,25 @@ prose instead of a convention the agent has to be told about.
   the turn loop appends it through the normal persist-once path, so
   the warning is itself in the record under the turn it happened.
 
+## 2026-06-11 — witness details the wall delegates
+
+- **TurnComplete as a watch channel.** The "event bus" for the
+  witness's wake is a watch of the latest settled turn number, and the
+  witness processes every turn from cursor+1 up to it. Self-healing by
+  construction: dropped signals, restarts, and downtime all recover by
+  catch-up, which is what "a turn is never lost" wants structurally.
+  Persist-before-announce holds because record appends fsync inline,
+  before settle sends the watch update.
+- **Moves are verbatim model output** (Cass's ruling): the entire
+  trimmed response is the move — no format, no parsing. The prompt
+  carries the discipline; the tuning surface is prose.
+- **Transcript deixis:** the agent's lines render as `you:` in the
+  on-turn transcript, so the second-person frame is in the data and
+  the prompt's pronouns stay clean (Cass caught the "what you did"
+  ambiguity in drafting).
+- **Empty witness output** falls back mechanically, same as model
+  failure.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a
