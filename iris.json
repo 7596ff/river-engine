@@ -5,7 +5,7 @@
       "endpoint": "https://api.deepseek.com/v1",
       "name": "deepseek-v4-pro",
       "api_key_env": "DEEPSEEK_KEY",
-      "context_limit": 64000,
+      "context_limit": 1000000,
       "request_timeout_seconds": 300
     },
     "local": {
