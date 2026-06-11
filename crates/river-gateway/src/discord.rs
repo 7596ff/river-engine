@@ -93,9 +93,10 @@ async fn typing_loop(
             .and_then(|c| c.strip_prefix(CHANNEL_PREFIX).and_then(|s| s.parse::<u64>().ok()));
         match target {
             Some(id) => {
-                let _ = http
-                    .create_typing_trigger(Id::<ChannelMarker>::new(id))
-                    .await;
+                match http.create_typing_trigger(Id::<ChannelMarker>::new(id)).await {
+                    Ok(_) => tracing::debug!(channel = id, "typing trigger sent"),
+                    Err(e) => tracing::warn!(channel = id, error = %e, "typing trigger failed"),
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {}
                     changed = working.changed() => {
