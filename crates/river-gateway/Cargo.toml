@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
+futures-util.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -18,3 +20,4 @@ ulid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio-tungstenite.workspace = true

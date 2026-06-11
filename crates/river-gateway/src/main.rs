@@ -5,6 +5,7 @@ mod env_file;
 mod identity;
 mod model;
 mod record;
+mod surface;
 mod turn;
 
 use std::path::PathBuf;
@@ -162,9 +163,26 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         "river-gateway running"
     );
 
-    // The local surface (next card) takes these handles; until then
-    // the agent wakes only by heartbeat.
-    let _surface_handles = (inbound_tx, outbound_tx, health_rx);
+    let local_port = agent.adapters.iter().find_map(|adapter| match adapter {
+        config::AdapterConfig::Local { port } => Some(*port),
+        _ => None,
+    });
+    // Held so the queue stays open even with no adapter to feed it.
+    let _inbound_keepalive = inbound_tx.clone();
+    match local_port {
+        Some(port) => {
+            tokio::spawn(surface::serve(
+                port,
+                inbound_tx,
+                outbound_tx,
+                health_rx,
+                shutdown_rx.clone(),
+            ));
+        }
+        None => {
+            tracing::warn!("no local adapter configured; the agent wakes only by heartbeat");
+        }
+    }
 
     turn_loop.run(shutdown_rx).await
 }
