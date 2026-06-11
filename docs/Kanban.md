@@ -16,14 +16,14 @@ kanban-plugin: board
 - [ ] turn record — record/{channel}.jsonl append + tail-scan, ULIDs, persist-once under turn numbers
 - [ ] heartbeat wake — timer + :heartbeat: marker
 - [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
+- [ ] local chat surface — localhost HTTP + websocket, /health from live path
+- [ ] TUI client — terminal chat window speaking the websocket protocol
 
 
 ## in progress
 
 
 ## barebones harness
-- [ ] local chat surface — localhost HTTP + websocket, /health from live path
-- [ ] TUI client — terminal chat window speaking the websocket protocol
 
 
 ## river-engine unique features
