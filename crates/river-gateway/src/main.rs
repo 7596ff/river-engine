@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod env_file;
 mod identity;
+mod memory;
 mod model;
 mod record;
 mod surface;
@@ -139,6 +140,29 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     let witness_client = model::ModelClient::new(witness_config)?;
     let witness = witness::Witness::load(&agent.workspace, witness_client)?;
 
+    // The memory body, when an embedding model is configured.
+    let (mem, reindex_tx, reindex_rx) = match &agent.embedding_model {
+        Some(embed_ref) => {
+            let embed_config = cfg
+                .models
+                .get(embed_ref)
+                .expect("validated: embedding model reference resolves");
+            let embedder = memory::EmbeddingClient::new(embed_config)?;
+            let mem = memory::Memory::open(
+                &agent.data_dir,
+                &agent.workspace,
+                &agent.index_dirs,
+                std::sync::Arc::new(embedder),
+            )?;
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            (Some(mem), Some(tx), Some(rx))
+        }
+        None => {
+            tracing::info!("no embedding model configured; memory features disabled");
+            (None, None, None)
+        }
+    };
+
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
     let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
@@ -161,6 +185,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         agent.tool_profile(),
         cfg.secret_env_names(),
         agent.max_iterations,
+        mem.clone(),
+        reindex_tx,
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -205,6 +231,9 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     tokio::spawn(witness.run(settled_rx, shutdown_rx.clone()));
+    if let (Some(mem), Some(reindex_rx)) = (mem, reindex_rx) {
+        tokio::spawn(mem.run_sync(reindex_rx, shutdown_rx.clone()));
+    }
 
     turn_loop.run(shutdown_rx).await
 }

@@ -67,6 +67,9 @@ pub struct AgentConfig {
     /// IANA timezone name for the agent's sense of "now". Defaults to
     /// the system timezone.
     pub timezone: Option<String>,
+    /// Workspace directories indexed beyond `knowledge/` (wall ch. 08).
+    #[serde(default)]
+    pub index_dirs: Vec<String>,
     #[serde(default)]
     pub adapters: Vec<AdapterConfig>,
 }

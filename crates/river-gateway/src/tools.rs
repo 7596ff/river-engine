@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::channels::Channels;
+use crate::memory::Memory;
 use crate::model::{ToolCall, ToolSchema};
 use crate::turn::{LOCAL_ADAPTER, OutboundMessage};
 
@@ -30,6 +31,12 @@ pub struct ToolContext {
     pub current_channel: String,
     /// Secret variable names stripped from child environments.
     pub scrub: Vec<String>,
+    /// The memory system, when the agent has an embedding model. The
+    /// file tools are memory instruments through this seam (wall
+    /// ch. 07); None disables capture and the search tool.
+    pub memory: Option<Memory>,
+    /// Nudges the sync service after watched writes.
+    pub reindex: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>>;
@@ -56,6 +63,7 @@ impl Registry {
                 Box::new(GrepTool),
                 Box::new(BashTool),
                 Box::new(SpeakTool),
+                Box::new(SearchTool),
             ],
         }
     }
@@ -149,8 +157,13 @@ impl Tool for ReadTool {
     fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
         Box::pin(async move {
             let path = resolve(&ctx.workspace, required_str(&args, "path")?);
-            Ok(std::fs::read_to_string(&path)
-                .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?)
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+            // The capture seam: an indexed read is a cognitive access.
+            if let Some(memory) = &ctx.memory {
+                let _ = memory.on_read(&path);
+            }
+            Ok(text)
         })
     }
 }
@@ -181,8 +194,19 @@ impl Tool for WriteTool {
             }
             std::fs::write(&path, content)
                 .map_err(|e| anyhow::anyhow!("writing {}: {e}", path.display()))?;
+            capture_write(ctx, &path);
             Ok(format!("wrote {} bytes to {}", content.len(), path.display()))
         })
+    }
+}
+
+/// Watched writes bump and trigger re-indexing (wall ch. 07).
+fn capture_write(ctx: &ToolContext, path: &Path) {
+    if let Some(memory) = &ctx.memory
+        && matches!(memory.on_write(path), Ok(true))
+        && let Some(reindex) = &ctx.reindex
+    {
+        let _ = reindex.try_send(());
     }
 }
 
@@ -219,6 +243,7 @@ impl Tool for EditTool {
                 ),
             }
             std::fs::write(&path, text.replacen(old, new, 1))?;
+            capture_write(ctx, &path);
             Ok(format!("edited {}", path.display()))
         })
     }
@@ -397,6 +422,41 @@ impl Tool for SpeakTool {
     }
 }
 
+struct SearchTool;
+impl Tool for SearchTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "search".into(),
+            description: "Semantic search over the indexed workspace. Returns the most similar passages with file paths.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+                "required": ["query"]
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let query = required_str(&args, "query")?;
+            let Some(memory) = &ctx.memory else {
+                anyhow::bail!("no memory system configured (the agent has no embedding model)");
+            };
+            let hits = memory.search(query).await?;
+            if hits.is_empty() {
+                return Ok("no results".to_string());
+            }
+            let mut out = String::new();
+            for hit in hits {
+                out.push_str(&format!(
+                    "{} (score {:.3})\n{}\n---\n",
+                    hit.file_path, hit.score, hit.text
+                ));
+            }
+            Ok(out)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +473,8 @@ mod tests {
             outbound,
             current_channel: "local_main".into(),
             scrub: vec!["SECRET_KEY".into()],
+            memory: None,
+            reindex: None,
         };
         (ctx, dir, outbound_rx)
     }

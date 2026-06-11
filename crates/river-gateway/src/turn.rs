@@ -69,6 +69,8 @@ pub struct TurnLoop<C: Chat> {
     profile: Vec<String>,
     scrub: Vec<String>,
     max_iterations: u32,
+    memory: Option<crate::memory::Memory>,
+    reindex: Option<mpsc::Sender<()>>,
     /// In-memory read positions (channel → last consumed entry id).
     /// Authoritative within the process; the log cursor recovers the
     /// position across restarts. Without this, an agent entry written
@@ -93,6 +95,8 @@ impl<C: Chat> TurnLoop<C> {
         profile: Vec<String>,
         scrub: Vec<String>,
         max_iterations: u32,
+        memory: Option<crate::memory::Memory>,
+        reindex: Option<mpsc::Sender<()>>,
     ) -> anyhow::Result<Self> {
         let record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
@@ -119,6 +123,8 @@ impl<C: Chat> TurnLoop<C> {
             profile,
             scrub,
             max_iterations,
+            memory,
+            reindex,
             positions: HashMap::new(),
         })
     }
@@ -246,6 +252,8 @@ impl<C: Chat> TurnLoop<C> {
             outbound: self.outbound.clone(),
             current_channel: self.context.channel().to_string(),
             scrub: self.scrub.clone(),
+            memory: self.memory.clone(),
+            reindex: self.reindex.clone(),
         };
 
         for iteration in 0..self.max_iterations {
@@ -498,6 +506,8 @@ mod tests {
             crate::config::DEFAULT_TOOLS.iter().map(|s| s.to_string()).collect(),
             vec![],
             10,
+            None,
+            None,
         )
         .unwrap();
         Harness {
