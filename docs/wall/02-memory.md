@@ -20,16 +20,18 @@ as everything else. No part of the record lives in a database.
 
 - **Channel logs** (ch. 05): every message that crossed an adapter —
   `channels/{adapter}_{channel_id}.jsonl`.
-- **The turn record** — `record/{channel}.jsonl`: every context message
+- **The turn record** — `record/turns.jsonl`: every context message
   — user, assistant, tool call, tool result, system notice — one line
   each, appended at the moment it enters the context, under its turn
-  number (ch. 01).
-- **Moves** — `record/moves/{channel}.jsonl`: the witness's per-turn
+  number and tagged with the channel it concerns (ch. 01). One stream
+  for the whole life: the agent's experience is a single sequence,
+  whichever channel it was facing at the time.
+- **Moves** — `record/moves.jsonl`: the witness's per-turn
   compressions (ch. 04), appended one line per turn: a 1–2 sentence
   structural summary with its turn number. Moves are what make
   compaction lossless — a turn whose move exists can be dropped from
   context without losing the arc. The witness cursor is simply the
-  turn number on the **last line** of a channel's moves file.
+  turn number on the **last line** of the moves file.
 
 Compression stops at moves. There is no second summary layer: old moves
 fall out of the context's arc budget (ch. 03) but remain in the record,

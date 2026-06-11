@@ -15,13 +15,16 @@ task via async notification — the loop never polls. Multiple notifications
 may be waiting; the turn drains them all.
 
 **The heartbeat.** A timer fires after a configurable interval of silence
-(default 45 minutes). The turn proceeds normally, but the context gets an
-explicit marker — a user-role message containing only `:heartbeat:` — so
-the agent knows it woke on its own and not because anyone spoke. The
-heartbeat is the autonomy floor: an agent that only wakes when spoken to
-is a service, and this is not a harness for services. What the agent does
-with an empty wake-up is its own affair — review channels, work in its
-workspace, or settle immediately.
+(default 45 minutes), measured from the last turn's settle. The turn
+proceeds normally, but the context gets an explicit marker — a user-role
+message containing only `Read HEARTBEAT.md.` — so the agent knows it woke
+on its own and not because anyone spoke, and knows where its standing
+instructions for self-directed time live: `HEARTBEAT.md` at the workspace
+root, seeded by the engine (ch. 08), owned and editable by the agent and
+Ground alike. The heartbeat is the autonomy floor: an agent that only
+wakes when spoken to is a service, and this is not a harness for
+services. What the agent does with an empty wake-up is its own affair —
+the briefing file suggests; it never compels.
 
 **The quiet trigger.** After 5 minutes with no inbound messages, the
 digestive cycle (ch. 02) begins draining the extraction queue. This is
@@ -38,7 +41,7 @@ WAKE
   for each notified channel: read entries since cursor (ch. 05)
   append each new message to the context as a user message,
       tagged turn N, formatted "[channel] author: content"
-  if heartbeat and nothing new: append ":heartbeat:" tagged turn N
+  if heartbeat and nothing new: append "Read HEARTBEAT.md." tagged turn N
   if context needs compaction: compact (ch. 03)
 
 THINK / ACT  (repeat, bounded by max_iterations, default 50)
@@ -52,7 +55,7 @@ THINK / ACT  (repeat, bounded by max_iterations, default 50)
 
 SETTLE
   write a cursor entry to every channel read this turn (ch. 05)
-  emit TurnComplete { channel, turn_number: N } on the event bus
+  emit TurnComplete { turn_number: N } on the event bus
 ```
 
 Everything appended during turn N carries turn number N — user messages,
@@ -61,11 +64,13 @@ turn number is the coordinate that the witness, compaction, and the
 record all share; its integrity is what makes safe forgetting possible.
 
 Persistence is not a settle-time step: every message is appended to the
-turn record (`record/{channel}.jsonl`, ch. 10) **at the moment it is
+turn record (`record/turns.jsonl`, ch. 10) **at the moment it is
 appended to the context**, exactly once, with the turn number it was
-appended under. By the time `TurnComplete` fires, the record file
-already holds everything the witness needs — the event carries
-coordinates, never content.
+appended under and the channel it concerns. The record is one stream
+for the whole life — a turn that reads three channels is still one
+turn, in one place. By the time `TurnComplete` fires, the record file
+already holds everything the witness needs — the event carries a
+coordinate, never content.
 
 Mid-turn arrivals deserve their note: when messages land while tools are
 executing, they are folded into the *current* turn as a system notice
@@ -97,10 +102,16 @@ append-time, even that loses nothing already said.
 
 ## Contracts
 
+- **Turns are serial.** One turn at a time; a new turn begins only after
+  the previous turn's settle completes. Nothing in the engine ever
+  interleaves turns.
+- **Turn numbers are monotonic for life.** Turn numbers never repeat and
+  never reset; startup resumes from the highest turn number in the
+  record. Restarts are invisible to the numbering.
 - **Persist-once.** A message enters the record exactly once, at the
   moment it is appended to the context, with the turn number it was
-  appended under. Nothing re-persists, re-tags, or batches messages at
-  settle.
+  appended under and the channel it concerns. Nothing re-persists,
+  re-tags, or batches messages at settle.
 - **Turn tagging is total.** Every context message appended during turn N
   carries turn number N, including system notices and tool results.
 - **No polling.** Wake-on-notification is event-driven. The agent task
@@ -109,6 +120,15 @@ append-time, even that loses nothing already said.
   digestive cycle immediately; the quiet timer restarts from zero.
 - **Bounded turns.** The think/act loop has a configurable iteration
   ceiling. Hitting it ends the turn through the normal settle path.
+- **Every turn settles.** A failed model call, a hit iteration ceiling,
+  and a shutdown signal all end the turn through the same settle path;
+  what was persisted before the failure is never lost.
+- **Heartbeat floor.** After the configured interval with no turns, a
+  heartbeat turn begins. A self-wake with nothing new always carries the
+  `Read HEARTBEAT.md.` marker — a wake is never ambiguous about why it
+  happened.
+- **Cursors at settle.** Every channel read during the turn — including
+  mid-turn arrivals — receives a cursor entry at settle (ch. 05).
 - **Persist before announce.** `TurnComplete` is emitted only after all
   of the turn's messages are durably appended to the record file.
 - **Clean exit.** SIGTERM → finish current turn → settle → stop tasks →

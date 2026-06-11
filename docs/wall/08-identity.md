@@ -95,6 +95,11 @@ workspace, copied (never overwriting) by `river-gateway birth
   warms it, and the witness gleans from it (ch. 04), but no code
   enforces it. An agent that keeps no loom loses nothing but the
   telling.
+- **HEARTBEAT.md** — the self-wake briefing. The heartbeat marker
+  (ch. 01) is literally the instruction `Read HEARTBEAT.md.`, so what
+  an agent does with unprompted time is prose at the workspace root —
+  suggestions (review channels, tend the loom, settle and rest), never
+  obligations — editable by the agent and Ground, no code involved.
 - **witness/identity.md** — the second-person witness voice (ch. 04).
 - **witness/on-turn.md**, **witness/on-glean.md** — working duty
   prompts.

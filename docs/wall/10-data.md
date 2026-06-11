@@ -41,40 +41,46 @@ object, written once by the birth ritual:
 {"id":"01JXX...","name":"ada","born_at":"2026-06-11T03:00:00Z"}
 ```
 
-**`record/{channel}.jsonl`** — the turn record. Every context message,
-one line, appended at the moment it enters the context (ch. 01):
+**`record/turns.jsonl`** — the turn record, one stream for the whole
+life. Every context message, one line, appended at the moment it
+enters the context (ch. 01), tagged with the channel it concerns:
 
 ```json
-{"id":"01JXX...","turn":41,"role":"user","content":"[discord_general] cassie: hello"}
-{"id":"01JXX...","turn":41,"role":"assistant","content":"morning","tool_calls":null}
-{"id":"01JXX...","turn":42,"role":"assistant","content":null,
+{"id":"01JXX...","turn":41,"channel":"discord_general","role":"user","content":"[discord_general] cassie: hello"}
+{"id":"01JXX...","turn":41,"channel":"discord_general","role":"assistant","content":"morning","tool_calls":null}
+{"id":"01JXX...","turn":42,"channel":"local_main","role":"assistant","content":null,
  "tool_calls":[{"id":"call_1","name":"read","arguments":"{\"path\":\"notes.md\"}"}]}
-{"id":"01JXX...","turn":42,"role":"tool","tool_call_id":"call_1","content":"..."}
+{"id":"01JXX...","turn":42,"channel":"local_main","role":"tool","tool_call_id":"call_1","content":"..."}
 ```
 
 Fields: `id` (ULID), `turn` (the turn number it was appended under),
-`role` (`user` | `assistant` | `tool` | `system`), `content`,
-`tool_calls` (assistant lines), `tool_call_id` (tool lines). The ULID
-carries the timestamp; no separate time field.
+`channel` (inbound messages carry their home channel; everything else
+carries the channel the turn was facing), `role` (`user` | `assistant`
+| `tool` | `system`), `content`, `tool_calls` (assistant lines),
+`tool_call_id` (tool lines). The ULID carries the timestamp; no
+separate time field. One agent, one life, one file: a turn that reads
+three channels is still one turn in one place, and no exchange is ever
+invisible to a channel it touched.
 
-**`record/moves/{channel}.jsonl`** — the witness's compressions
-(ch. 04). One line per turn:
+**`record/moves.jsonl`** — the witness's compressions (ch. 04). One
+stream, one line per turn:
 
 ```json
 {"id":"01JXX...","turn":41,"summary":"Cassie asked about X; you answered from the notes and flagged an open question."}
 ```
 
-**The cursor is the tail.** The witness cursor for a channel — the
-highest turn compressed into a move — is the `turn` field of the last
-line of its moves file. Read the tail; no index, no query, no stored
-state. Compaction (ch. 03) and session start read it the same way.
+**The cursor is the tail.** The witness cursor — the highest turn
+compressed into a move — is the `turn` field of the last line of the
+moves file. Read the tail; no index, no query, no stored state.
+Compaction (ch. 03) and session start read it the same way.
 
 **Reading by turn** is a scan: session start and compaction backfill
-read `record/{channel}.jsonl` from the end, collecting whole turns
-until they have what they need; the witness reads a turn's lines the
-same way. At a personal scale — thousands of lines per channel — the
-scan is microseconds. This design does not serve analytical queries;
-the knowledge layer exists for what the record cannot answer.
+read `record/turns.jsonl` from the end, collecting whole turns that
+touch the wanted channel until they have what they need; the witness
+reads a turn's lines the same way. At a personal scale — thousands of
+lines — the scan is microseconds. This design does not serve
+analytical queries; the knowledge layer exists for what the record
+cannot answer.
 
 **`channels/*.jsonl`** is specified in ch. 05 and unchanged here: the
 wire record, with its own entry format and cursor semantics.

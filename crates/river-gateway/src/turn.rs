@@ -7,7 +7,6 @@
 //! Shutdown is cooperative: the loop only observes the shutdown
 //! signal between turns, so a turn in progress always runs to settle.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -17,7 +16,7 @@ use crate::context::RollingContext;
 use crate::model::{Chat, Role};
 use crate::record::{RecordRole, TurnRecord, last_turn};
 
-pub const HEARTBEAT_MARKER: &str = ":heartbeat:";
+pub const HEARTBEAT_MARKER: &str = "Read HEARTBEAT.md.";
 pub const DEFAULT_CHANNEL: &str = "local_main";
 
 #[derive(Debug, Clone)]
@@ -49,11 +48,10 @@ enum Wake {
 }
 
 pub struct TurnLoop<C: Chat> {
-    workspace: PathBuf,
     system_prompt: String,
     client: C,
     context: RollingContext,
-    records: HashMap<String, TurnRecord>,
+    record: TurnRecord,
     turn_number: u64,
     current_channel: String,
     inbound: mpsc::Receiver<InboundMessage>,
@@ -73,19 +71,16 @@ impl<C: Chat> TurnLoop<C> {
         health: watch::Sender<Health>,
         heartbeat: Duration,
     ) -> anyhow::Result<Self> {
-        // Resume turn numbering from the record: the life is one
-        // sequence, restarts included.
-        let main_record = TurnRecord::open(&workspace, DEFAULT_CHANNEL)?;
-        let turn_number = last_turn(main_record.path())?;
-        let mut records = HashMap::new();
-        records.insert(DEFAULT_CHANNEL.to_string(), main_record);
+        // Resume turn numbering from the record: turn numbers are
+        // monotonic for life, restarts invisible (wall ch. 01).
+        let record = TurnRecord::open(&workspace)?;
+        let turn_number = last_turn(record.path())?;
 
         Ok(Self {
-            workspace,
             system_prompt,
             client,
             context: RollingContext::new(),
-            records,
+            record,
             turn_number,
             current_channel: DEFAULT_CHANNEL.to_string(),
             inbound,
@@ -169,20 +164,15 @@ impl<C: Chat> TurnLoop<C> {
     }
 
     /// Persist-once: context append and record append are one act.
+    /// Inbound messages carry their home channel; everything else
+    /// carries the channel the turn is facing (wall ch. 10).
     fn append(&mut self, turn: u64, channel: &str, role: Role, content: &str) -> anyhow::Result<()> {
         self.context.push(turn, role, content);
-        let record = match self.records.get_mut(channel) {
-            Some(record) => record,
-            None => {
-                let record = TurnRecord::open(&self.workspace, channel)?;
-                self.records.entry(channel.to_string()).or_insert(record)
-            }
-        };
         let record_role = match role {
             Role::User => RecordRole::User,
             Role::Assistant => RecordRole::Assistant,
         };
-        record.append(turn, record_role, Some(content))?;
+        self.record.append(turn, channel, record_role, Some(content))?;
         Ok(())
     }
 
@@ -275,7 +265,7 @@ mod tests {
         assert_eq!(reply.content, "good morning");
         assert_eq!(reply.channel, DEFAULT_CHANNEL);
 
-        let lines = scan(&dir.path().join("record/local_main.jsonl")).unwrap();
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].turn, 1);
         assert_eq!(
@@ -308,7 +298,7 @@ mod tests {
             .unwrap();
 
         assert!(out.try_recv().is_err(), "no reply on model failure");
-        let lines = scan(&dir.path().join("record/local_main.jsonl")).unwrap();
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
         assert_eq!(lines.len(), 1, "the user message is already persisted");
         assert_eq!(health.borrow().turn_number, 1, "settle still ran");
     }
@@ -324,7 +314,7 @@ mod tests {
 
         turn_loop.turn(Wake::Heartbeat).await.unwrap();
 
-        let lines = scan(&dir.path().join("record/local_main.jsonl")).unwrap();
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
         assert_eq!(lines[0].content.as_deref(), Some(HEARTBEAT_MARKER));
         assert_eq!(lines[0].role, crate::record::RecordRole::User);
     }
@@ -333,8 +323,10 @@ mod tests {
     async fn turn_numbers_resume_from_the_record() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut record = TurnRecord::open(dir.path(), DEFAULT_CHANNEL).unwrap();
-            record.append(41, RecordRole::User, Some("old")).unwrap();
+            let mut record = TurnRecord::open(dir.path()).unwrap();
+            record
+                .append(41, DEFAULT_CHANNEL, RecordRole::User, Some("old"))
+                .unwrap();
         }
         let model = FakeModel::replying(vec![Ok(ChatResponse {
             content: "back".into(),
@@ -387,7 +379,7 @@ mod tests {
         handle.await.unwrap().unwrap();
 
         assert_eq!(health.borrow().turn_number, 1, "both messages in one turn");
-        let lines = scan(&dir.path().join("record/local_main.jsonl")).unwrap();
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
         assert_eq!(lines.len(), 3); // two user + one assistant
         assert!(lines.iter().all(|l| l.turn == 1));
     }

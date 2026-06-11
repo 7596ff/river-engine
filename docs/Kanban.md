@@ -13,8 +13,8 @@ kanban-plugin: board
 - [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
 - [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
 - [ ] in-memory rolling context (naive; swapped for persistent context later)
-- [ ] turn record — record/{channel}.jsonl append + tail-scan, ULIDs, persist-once under turn numbers
-- [ ] heartbeat wake — timer + :heartbeat: marker
+- [ ] turn record — record/turns.jsonl one-stream append + tail-scan, ULIDs, channel tags, persist-once under turn numbers
+- [ ] heartbeat wake — timer + "Read HEARTBEAT.md." marker
 - [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 - [ ] local chat surface — localhost HTTP + websocket, /health from live path
 - [ ] TUI client — terminal chat window speaking the websocket protocol
@@ -31,7 +31,7 @@ kanban-plugin: board
 - [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
 - [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
 - [ ] lossless compaction — context folds only what the witness has compressed; nothing uncompressed ever dropped
-- [ ] turn record — append-only full-history jsonl per channel, turn-coordinated, persist-once
+- [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
 - [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
 - [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
 - [ ] flash — notes crossing 1.0 surface into context with 1-hop neighbors, score halves

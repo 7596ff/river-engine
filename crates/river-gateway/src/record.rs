@@ -1,8 +1,9 @@
-//! The turn record (wall ch. 10): `record/{channel}.jsonl`,
-//! append-only, one JSON object per line, written by exactly one
-//! writer, fsynced on append. Every context message is persisted at
-//! the moment it enters the context, exactly once, under its turn
-//! number (persist-once, wall ch. 01). Readers skip torn lines with a
+//! The turn record (wall ch. 10): `record/turns.jsonl`, one stream
+//! for the whole life, append-only, one JSON object per line, written
+//! by exactly one writer, fsynced on append. Every context message is
+//! persisted at the moment it enters the context, exactly once, under
+//! its turn number and tagged with the channel it concerns
+//! (persist-once, wall ch. 01). Readers skip torn lines with a
 //! warning — a crash mid-append never poisons the file.
 
 use std::fs::{File, OpenOptions};
@@ -25,6 +26,7 @@ pub enum RecordRole {
 pub struct RecordLine {
     pub id: String,
     pub turn: u64,
+    pub channel: String,
     pub role: RecordRole,
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -33,17 +35,17 @@ pub struct RecordLine {
     pub tool_call_id: Option<String>,
 }
 
-/// The single writer for one channel's turn record.
+/// The single writer for the agent's turn record.
 pub struct TurnRecord {
     path: PathBuf,
     file: File,
 }
 
 impl TurnRecord {
-    pub fn open(workspace: &Path, channel: &str) -> anyhow::Result<Self> {
+    pub fn open(workspace: &Path) -> anyhow::Result<Self> {
         let dir = workspace.join("record");
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let path = dir.join(format!("{}.jsonl", sanitize(channel)));
+        let path = dir.join("turns.jsonl");
         let file = OpenOptions::new()
             .append(true)
             .create(true)
@@ -56,12 +58,14 @@ impl TurnRecord {
     pub fn append(
         &mut self,
         turn: u64,
+        channel: &str,
         role: RecordRole,
         content: Option<&str>,
     ) -> anyhow::Result<String> {
         let line = RecordLine {
             id: ulid::Ulid::new().to_string(),
             turn,
+            channel: channel.to_string(),
             role,
             content: content.map(str::to_string),
             tool_calls: None,
@@ -109,36 +113,26 @@ pub fn scan(path: &Path) -> anyhow::Result<Vec<RecordLine>> {
     Ok(lines)
 }
 
-/// The last `n` whole turns of a record file, in order. A tail-scan:
-/// collect from the end, never split a turn.
-pub fn tail_turns(path: &Path, n: usize) -> anyhow::Result<Vec<RecordLine>> {
+/// The last `n` whole turns that touch `channel`, in order. A
+/// tail-scan: collect from the end, never split a turn.
+pub fn tail_turns(path: &Path, channel: &str, n: usize) -> anyhow::Result<Vec<RecordLine>> {
     let lines = scan(path)?;
-    let mut turns: Vec<u64> = lines.iter().map(|l| l.turn).collect();
-    turns.dedup();
-    let keep: std::collections::BTreeSet<u64> =
-        turns.into_iter().rev().take(n).collect();
+    let mut touching: Vec<u64> = lines
+        .iter()
+        .filter(|l| l.channel == channel)
+        .map(|l| l.turn)
+        .collect();
+    touching.dedup();
+    let keep: std::collections::BTreeSet<u64> = touching.into_iter().rev().take(n).collect();
     Ok(lines
         .into_iter()
         .filter(|l| keep.contains(&l.turn))
         .collect())
 }
 
-/// The highest turn number in a record file, or 0 for none.
+/// The highest turn number in the record, or 0 for none.
 pub fn last_turn(path: &Path) -> anyhow::Result<u64> {
     Ok(scan(path)?.last().map(|l| l.turn).unwrap_or(0))
-}
-
-fn sanitize(channel: &str) -> String {
-    channel
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -148,25 +142,51 @@ mod tests {
     #[test]
     fn appends_and_scans_back() {
         let dir = tempfile::tempdir().unwrap();
-        let mut record = TurnRecord::open(dir.path(), "local_main").unwrap();
+        let mut record = TurnRecord::open(dir.path()).unwrap();
         record
-            .append(1, RecordRole::User, Some("[local_main] cass: hello"))
+            .append(
+                1,
+                "local_main",
+                RecordRole::User,
+                Some("[local_main] cass: hello"),
+            )
             .unwrap();
-        record.append(1, RecordRole::Assistant, Some("hi")).unwrap();
+        record
+            .append(1, "local_main", RecordRole::Assistant, Some("hi"))
+            .unwrap();
 
         let lines = scan(record.path()).unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].turn, 1);
+        assert_eq!(lines[0].channel, "local_main");
         assert_eq!(lines[0].role, RecordRole::User);
         assert_eq!(lines[1].role, RecordRole::Assistant);
         assert!(lines[0].id < lines[1].id, "ULIDs order");
     }
 
     #[test]
+    fn one_stream_holds_many_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = TurnRecord::open(dir.path()).unwrap();
+        record
+            .append(1, "discord_general", RecordRole::User, Some("a"))
+            .unwrap();
+        record
+            .append(1, "local_main", RecordRole::Assistant, Some("b"))
+            .unwrap();
+
+        let lines = scan(record.path()).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.turn == 1), "one turn, one place");
+    }
+
+    #[test]
     fn torn_line_is_skipped_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
-        let mut record = TurnRecord::open(dir.path(), "local_main").unwrap();
-        record.append(1, RecordRole::User, Some("a")).unwrap();
+        let mut record = TurnRecord::open(dir.path()).unwrap();
+        record
+            .append(1, "local_main", RecordRole::User, Some("a"))
+            .unwrap();
         // Simulate a crash mid-append.
         {
             use std::io::Write;
@@ -177,8 +197,10 @@ mod tests {
             f.write_all(b"{\"id\":\"torn").unwrap();
             f.write_all(b"\n").unwrap();
         }
-        let mut record = TurnRecord::open(dir.path(), "local_main").unwrap();
-        record.append(2, RecordRole::User, Some("b")).unwrap();
+        let mut record = TurnRecord::open(dir.path()).unwrap();
+        record
+            .append(2, "local_main", RecordRole::User, Some("b"))
+            .unwrap();
 
         let lines = scan(record.path()).unwrap();
         assert_eq!(lines.len(), 2);
@@ -186,40 +208,38 @@ mod tests {
     }
 
     #[test]
-    fn tail_turns_keeps_whole_turns() {
+    fn tail_turns_collects_whole_turns_touching_the_channel() {
         let dir = tempfile::tempdir().unwrap();
-        let mut record = TurnRecord::open(dir.path(), "c").unwrap();
-        for turn in 1..=3 {
-            record.append(turn, RecordRole::User, Some("q")).unwrap();
-            record.append(turn, RecordRole::Assistant, Some("a")).unwrap();
-        }
-        let tail = tail_turns(record.path(), 2).unwrap();
-        assert_eq!(tail.len(), 4);
-        assert!(tail.iter().all(|l| l.turn >= 2));
+        let mut record = TurnRecord::open(dir.path()).unwrap();
+        // Turn 1: local only. Turn 2: discord inbound handled while
+        // facing local. Turn 3: local only.
+        record.append(1, "local_main", RecordRole::User, Some("q1")).unwrap();
+        record.append(1, "local_main", RecordRole::Assistant, Some("a1")).unwrap();
+        record.append(2, "discord_general", RecordRole::User, Some("q2")).unwrap();
+        record.append(2, "local_main", RecordRole::Assistant, Some("a2")).unwrap();
+        record.append(3, "local_main", RecordRole::User, Some("q3")).unwrap();
+
+        // Discord's view: the whole of turn 2 rides in, including the
+        // local-tagged reply.
+        let discord = tail_turns(record.path(), "discord_general", 5).unwrap();
+        assert_eq!(discord.len(), 2);
+        assert!(discord.iter().all(|l| l.turn == 2));
+
+        // Local's last two touching turns are 2 and 3, whole.
+        let local = tail_turns(record.path(), "local_main", 2).unwrap();
+        assert!(local.iter().all(|l| l.turn >= 2));
+        assert_eq!(local.len(), 3);
     }
 
     #[test]
     fn last_turn_reads_the_tail() {
         let dir = tempfile::tempdir().unwrap();
-        let mut record = TurnRecord::open(dir.path(), "c").unwrap();
+        let mut record = TurnRecord::open(dir.path()).unwrap();
         assert_eq!(last_turn(record.path()).unwrap(), 0);
-        record.append(41, RecordRole::User, Some("x")).unwrap();
+        record
+            .append(41, "local_main", RecordRole::User, Some("x"))
+            .unwrap();
         assert_eq!(last_turn(record.path()).unwrap(), 41);
-    }
-
-    #[test]
-    fn channel_names_are_sanitized() {
-        let dir = tempfile::tempdir().unwrap();
-        let record = TurnRecord::open(dir.path(), "discord/general #1").unwrap();
-        assert!(
-            record
-                .path()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .eq("discord_general__1.jsonl")
-        );
     }
 
     #[test]

@@ -16,8 +16,9 @@ memory offers → what is happening now.*
 1. SYSTEM       identity files (AGENTS.md + IDENTITY.md + RULES.md,
                 ch. 08) joined with separators, plus environment:
                 current time (workspace-configured timezone)
-2. ARC          the witness's moves for this channel, oldest→newest,
-                as one system message headed "[Conversation arc]"
+2. ARC          the witness's moves — the life's arc, whichever
+                channel each turn faced — oldest→newest, as one
+                system message headed "[Conversation arc]"
 3. MEMORY SLOT  what the memory system offers this turn: flashes with
                 their 1-hop neighbors, the warmest notes, retrieved
                 results — token-budget-bounded (ch. 02)
@@ -38,8 +39,8 @@ model call:
 1. Re-read the system prompt from disk (identity edits take effect here
    and at channel switches — never mid-stretch).
 2. Read the **witness cursor**: the turn number on the last line of the
-   channel's moves file (ch. 10). If the witness has never run — no
-   moves file, or an empty one — the cursor is 0.
+   moves file (ch. 10). If the witness has never run — no moves file,
+   or an empty one — the cursor is 0.
 3. Drop all messages belonging to turns **at or below the cursor** —
    whole turns only, never a partial turn. These turns are represented
    in the arc; dropping them loses nothing.
@@ -60,11 +61,14 @@ model call:
    more briefly or say so. The agent can act on it or ignore it.
 
 Session start is the same algorithm with the record file as the message
-source: scan `record/{channel}.jsonl` backward for everything above the
-cursor, backfill whole turns to the floor, load the arc from the moves
-file, go. A channel switch (deferred to the next turn start, so a
-turn's tool calls are never split across contexts) rebuilds the same
-way for the new channel.
+source: scan `record/turns.jsonl` backward, collecting whole turns that
+**touch** the channel (any line tagged with it) above the cursor,
+backfill whole turns to the floor, load the arc from the moves file,
+go. A channel switch (deferred to the next turn start, so a turn's tool
+calls are never split across contexts) rebuilds the same way for the
+new channel — and because the record is one stream, an exchange
+conducted about this channel from elsewhere is not lost to it: the
+whole turn rides in with the switch.
 
 **The lossless guarantee**, stated once and bindingly: no message that
 the witness has not compressed into a move is ever dropped from context.
