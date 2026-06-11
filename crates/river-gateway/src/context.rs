@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use crate::config::ContextConfig;
-use crate::model::{ChatMessage, Role};
+use crate::model::{ChatMessage, Role, ToolCall};
 use crate::record::{self, MoveLine, RecordRole};
 
 /// Heuristic, self-correcting token estimator (wall ch. 03).
@@ -53,6 +53,8 @@ pub struct HotEntry {
     pub turn: u64,
     pub role: RecordRole,
     pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -103,12 +105,12 @@ impl PersistentContext {
             let entries: Vec<HotEntry> = lines
                 .iter()
                 .filter(|l| l.turn == *turn)
-                .filter_map(|l| {
-                    l.content.as_ref().map(|c| HotEntry {
-                        turn: l.turn,
-                        role: l.role,
-                        content: c.clone(),
-                    })
+                .map(|l| HotEntry {
+                    turn: l.turn,
+                    role: l.role,
+                    content: l.content.clone().unwrap_or_default(),
+                    tool_calls: l.tool_calls.clone().unwrap_or_default(),
+                    tool_call_id: l.tool_call_id.clone(),
                 })
                 .collect();
             if *turn > cursor {
@@ -129,10 +131,23 @@ impl PersistentContext {
     }
 
     pub fn append(&mut self, turn: u64, role: RecordRole, content: impl Into<String>) {
+        self.append_full(turn, role, content, Vec::new(), None);
+    }
+
+    pub fn append_full(
+        &mut self,
+        turn: u64,
+        role: RecordRole,
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+        tool_call_id: Option<String>,
+    ) {
         self.hot.push(HotEntry {
             turn,
             role,
             content: content.into(),
+            tool_calls,
+            tool_call_id,
         });
     }
 
@@ -263,21 +278,13 @@ impl PersistentContext {
             .hot
             .iter()
             .map(|e| match e.role {
-                RecordRole::Assistant => ChatMessage {
-                    role: Role::Assistant,
-                    content: e.content.clone(),
-                },
-                RecordRole::User => ChatMessage {
-                    role: Role::User,
-                    content: e.content.clone(),
-                },
-                RecordRole::System => ChatMessage {
-                    role: Role::User,
-                    content: e.content.clone(),
-                },
-                RecordRole::Tool => ChatMessage {
-                    role: Role::User,
-                    content: format!("[tool result] {}", e.content),
+                RecordRole::Assistant => {
+                    ChatMessage::assistant(e.content.clone(), e.tool_calls.clone())
+                }
+                RecordRole::User | RecordRole::System => ChatMessage::user(e.content.clone()),
+                RecordRole::Tool => match &e.tool_call_id {
+                    Some(id) => ChatMessage::tool_result(id.clone(), e.content.clone()),
+                    None => ChatMessage::user(format!("[tool result] {}", e.content)),
                 },
             })
             .collect();
@@ -300,10 +307,14 @@ impl PersistentContext {
         system
     }
 
+    /// Content plus tool-call payloads (wall ch. 03).
     pub fn estimate_total(&self) -> f64 {
         let mut total = self.estimator.estimate(&self.system_string());
         for entry in &self.hot {
             total += self.estimator.estimate(&entry.content);
+            for call in &entry.tool_calls {
+                total += self.estimator.estimate(&call.arguments);
+            }
         }
         total
     }

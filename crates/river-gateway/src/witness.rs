@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, bail};
 use tokio::sync::watch;
 
-use crate::model::{Chat, ChatMessage, Role};
+use crate::model::{Chat, ChatMessage};
 use crate::record::{self, MovesFile, RecordLine, RecordRole};
 
 pub struct Witness<C: Chat> {
@@ -120,11 +120,8 @@ impl<C: Chat> Witness<C> {
             let prompt = template
                 .replace("{turn_number}", &turn.to_string())
                 .replace("{transcript}", &transcript);
-            let messages = [ChatMessage {
-                role: Role::User,
-                content: prompt,
-            }];
-            match self.client.chat(&self.identity, &messages).await {
+            let messages = [ChatMessage::user(prompt)];
+            match self.client.chat(&self.identity, &messages, &[]).await {
                 Ok(response) if !response.content.trim().is_empty() => {
                     response.content.trim().to_string()
                 }
@@ -222,6 +219,7 @@ mod tests {
             &self,
             system: &str,
             messages: &[ChatMessage],
+            _tools: &[crate::model::ToolSchema],
         ) -> anyhow::Result<ChatResponse> {
             self.prompts
                 .lock()
@@ -234,6 +232,7 @@ mod tests {
     fn ok(content: &str) -> anyhow::Result<ChatResponse> {
         Ok(ChatResponse {
             content: content.into(),
+            tool_calls: Vec::new(),
             prompt_tokens: None,
         })
     }

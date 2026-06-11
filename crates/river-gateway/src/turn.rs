@@ -192,7 +192,7 @@ impl<C: Chat> TurnLoop<C> {
         }
 
         let (system, messages) = self.context.messages();
-        match self.client.chat(&system, &messages).await {
+        match self.client.chat(&system, &messages, &[]).await {
             Ok(response) => {
                 self.context.calibrate(response.prompt_tokens);
                 let channel = self.context.channel().to_string();
@@ -279,6 +279,7 @@ mod tests {
             &self,
             system: &str,
             messages: &[ChatMessage],
+            _tools: &[crate::model::ToolSchema],
         ) -> anyhow::Result<ChatResponse> {
             self.seen
                 .lock()
@@ -291,6 +292,7 @@ mod tests {
     fn ok(content: &str) -> anyhow::Result<ChatResponse> {
         Ok(ChatResponse {
             content: content.into(),
+            tool_calls: Vec::new(),
             prompt_tokens: Some(50),
         })
     }

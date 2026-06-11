@@ -30,7 +30,7 @@ pub struct RecordLine {
     pub role: RecordRole,
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub tool_calls: Option<serde_json::Value>,
+    pub tool_calls: Option<Vec<crate::model::ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tool_call_id: Option<String>,
 }
@@ -62,14 +62,28 @@ impl TurnRecord {
         role: RecordRole,
         content: Option<&str>,
     ) -> anyhow::Result<String> {
+        self.append_full(turn, channel, role, content, None, None)
+    }
+
+    /// The full line shape (wall ch. 10): tool calls on assistant
+    /// lines, tool_call_id on tool lines.
+    pub fn append_full(
+        &mut self,
+        turn: u64,
+        channel: &str,
+        role: RecordRole,
+        content: Option<&str>,
+        tool_calls: Option<Vec<crate::model::ToolCall>>,
+        tool_call_id: Option<String>,
+    ) -> anyhow::Result<String> {
         let line = RecordLine {
             id: ulid::Ulid::new().to_string(),
             turn,
             channel: channel.to_string(),
             role,
             content: content.map(str::to_string),
-            tool_calls: None,
-            tool_call_id: None,
+            tool_calls,
+            tool_call_id,
         };
         let mut json = serde_json::to_string(&line)?;
         json.push('\n');
