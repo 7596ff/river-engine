@@ -70,9 +70,12 @@ context's arc budget decides how many ride along (ch. 03).
 
 After any turn, with flat probability (default 0.25), plus one
 guaranteed pass at session end: the witness reviews the agent's recent
-record — the last few turns of messages and moves — against
-`on-glean.md`, and writes **extraction candidates** into the queue
-(ch. 02). Each candidate is prose addressed to the agent: what is worth
+activity — the last few turns of messages and moves, *and any notes
+the agent wrote in its workspace since the last pass* (its loom, if it
+keeps one) — against `on-glean.md`, and writes **extraction
+candidates** into the queue (ch. 02). The agent's own narrative notes
+are often where the best candidates live: the agent's telling of what
+happened carries claims its raw transcript does not. Each candidate is prose addressed to the agent: what is worth
 thinking about again, citations of the agent's actual words, suggested
 typed links. The flat rate is deliberate: the agent cannot predict
 which turns will be gleaned, and the unpredictability is structurally

@@ -87,7 +87,14 @@ workspace, copied (never overwriting) by `river-gateway birth
   experiences it, how memory works from the inside (your context is
   compacted only after your witness has compressed it; nothing
   uncompressed is lost), how to speak, what the workspace is, who
-  Ground is.
+  Ground is. It also teaches the **loom practice**: keeping a chain of
+  first-person narrative notes in `loom/` — written as the work
+  happens, each note linking to the previous — as the agent's own
+  telling of its life. The loom is practice, not mechanism: the engine
+  indexes it (name `loom/` among the watched directories), activation
+  warms it, and the witness gleans from it (ch. 04), but no code
+  enforces it. An agent that keeps no loom loses nothing but the
+  telling.
 - **witness/identity.md** — the second-person witness voice (ch. 04).
 - **witness/on-turn.md**, **witness/on-glean.md** — working duty
   prompts.

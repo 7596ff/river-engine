@@ -27,6 +27,30 @@ kanban-plugin: board
 - [ ] heartbeat wake — timer + :heartbeat: marker
 - [ ] graceful shutdown — SIGTERM finishes the turn, settles, exits
 
+
+## river-engine unique features
+
+- [ ] the witness — second voice in the same binary, prompt-driven, own (cheaper) model
+- [ ] moves — witness-written per-turn compressions, append-only, cursor = tail
+- [ ] lossless compaction — context folds only what the witness has compressed; nothing uncompressed ever dropped
+- [ ] turn record — append-only full-history jsonl per channel, turn-coordinated, persist-once
+- [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
+- [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
+- [ ] flash — notes crossing 1.0 surface into context with 1-hop neighbors, score halves
+- [ ] digestive cycle — witness gleans → extraction queue → quiet-trigger re-engagement by the agent
+- [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
+- [ ] vector index over workspace — embedded semantic search, derived + rebuildable, db disposable
+- [ ] file-tool memory capture — reads bump activation, writes re-index
+- [ ] memory slot — designated injection point in context assembly between arc and hot
+- [ ] calibrated token estimator — WMA against reported prompt tokens
+- [ ] channel cursors — me/not-me roles, read position = last agent entry, explicit cursor on read-without-speak
+- [ ] per-agent tool surface — which tools a model is offered is config, not code
+- [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
+- [ ] adapter trait with feature declaration folded into the system prompt
+- [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
+
+
+
 ## open-strix features
 
 - [ ] single-agent event loop — serialized queue, one event at a time, non-durable
@@ -55,11 +79,6 @@ kanban-plugin: board
 - [ ] mountaineering/climber — supervised self-improvement subprocesses (propose → test → keep/revert)
 - [ ] write policy — agent writes confined to state/ + skills/
 - [ ] one-command setup — home repo init, git/github, service files
-
-
-## river-engine unique features
-
-- [ ] activation spreading
 
 
 
