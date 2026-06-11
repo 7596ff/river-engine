@@ -194,6 +194,21 @@ is a link candidate the digestion loop can formalize.
   into the system prompt) remains its own card; discord lands shaped
   like the local surface: a supervised task.
 
+## 2026-06-11 — runner details the wall delegates
+
+- river-core lib extracted (config + env_file): the moment two
+  binaries consumed one config, per the crate-layout decision.
+- The gateway binary resolves as a sibling of the `river` binary
+  first, PATH second.
+- Grace period is the 30s default as a constant; a config knob can
+  arrive when someone needs a different one.
+- The nix module omits Type=notify/WatchdogSec from the wall's sketch:
+  the gateway has no sd_notify integration yet, and a watchdog nobody
+  pets kills healthy services — live-path health honesty applied to
+  systemd. Carded with the adapter-trait work.
+- `river status` reads each agent's /health on its local port; agents
+  without a local surface report as such.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

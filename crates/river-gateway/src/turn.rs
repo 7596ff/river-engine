@@ -16,7 +16,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use std::collections::HashMap;
 
 use crate::channels::{ChannelEntry, Channels, Notification};
-use crate::config::ContextConfig;
+use river_core::config::ContextConfig;
 use crate::context::PersistentContext;
 use crate::identity;
 use crate::model::{Chat, ToolCall};
@@ -40,6 +40,10 @@ pub struct Health {
     pub turn_number: u64,
     pub last_settle: Option<String>,
     pub context_messages: usize,
+    pub context_percent: u64,
+    /// Agent turn minus witness cursor (wall ch. 09).
+    pub witness_lag: u64,
+    pub queue_depth: u64,
 }
 
 enum Wake {
@@ -431,10 +435,21 @@ impl<C: Chat> TurnLoop<C> {
             });
         }
 
+        let witness_cursor =
+            crate::record::witness_cursor(&crate::record::moves_path(&self.workspace))
+                .unwrap_or(0);
         let _ = self.health.send(Health {
             turn_number: n,
             last_settle: Some(jiff::Timestamp::now().to_string()),
             context_messages: self.context.len(),
+            context_percent: (self.context.estimate_total() / self.knobs.limit as f64 * 100.0)
+                as u64,
+            witness_lag: n.saturating_sub(witness_cursor),
+            queue_depth: self
+                .memory
+                .as_ref()
+                .and_then(|m| m.queue_depth().ok())
+                .unwrap_or(0),
         });
         let _ = self.working.send(None);
         // Persist-before-announce: every append above fsynced inline,
@@ -608,7 +623,7 @@ mod tests {
             settled_tx,
             Duration::from_secs(3600),
             Registry::core(),
-            crate::config::DEFAULT_TOOLS.iter().map(|s| s.to_string()).collect(),
+            river_core::config::DEFAULT_TOOLS.iter().map(|s| s.to_string()).collect(),
             vec![],
             10,
             None,

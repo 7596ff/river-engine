@@ -1620,6 +1620,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "river-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libc",
+ "reqwest",
+ "river-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "river-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "river-gateway"
 version = "0.1.0"
 dependencies = [
@@ -1632,6 +1653,7 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "reqwest",
+ "river-core",
  "rusqlite",
  "serde",
  "serde_json",

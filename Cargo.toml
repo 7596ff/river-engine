@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/river-gateway", "crates/river-tui"]
+members = ["crates/river-core", "crates/river-gateway", "crates/river-tui", "crates/river-cli"]
 
 [workspace.package]
 edition = "2024"
@@ -13,6 +13,7 @@ clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 glob = "0.3"
 jiff = "0.2"
+libc = "0.2"
 rand = "0.8"
 ratatui = "0.29"
 regex = "1"

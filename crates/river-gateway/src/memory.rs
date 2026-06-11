@@ -20,7 +20,7 @@ use anyhow::Context as _;
 use rusqlite::Connection;
 use sha2::Digest as _;
 
-use crate::config::ModelConfig;
+use river_core::config::ModelConfig;
 
 pub const COGNITIVE_BUMP: f64 = 1.0;
 pub const AMBIENT_BUMP: f64 = 0.5;

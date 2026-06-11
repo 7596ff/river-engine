@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use crate::config::ContextConfig;
+use river_core::config::ContextConfig;
 use crate::model::{ChatMessage, Role, ToolCall};
 use crate::record::{self, MoveLine, RecordRole};
 

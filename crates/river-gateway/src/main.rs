@@ -1,9 +1,7 @@
 mod birth;
 mod channels;
-mod config;
 mod context;
 mod discord;
-mod env_file;
 mod identity;
 mod memory;
 mod model;
@@ -17,6 +15,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, bail};
 use clap::{Args, Parser, Subcommand};
+use river_core::{config, env_file};
 
 #[derive(Parser)]
 #[command(

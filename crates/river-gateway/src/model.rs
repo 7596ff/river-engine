@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::config::{ModelConfig, Provider};
+use river_core::config::{ModelConfig, Provider};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 8192;

@@ -249,6 +249,7 @@ mod tests {
                 turn_number: 7,
                 last_settle: Some("2026-06-11T04:00:00Z".into()),
                 context_messages: 3,
+                ..Health::default()
             })
             .unwrap();
 
