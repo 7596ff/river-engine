@@ -1,14 +1,14 @@
-{
-  pkgs ? import <nixpkgs> {}
-}:
-pkgs.mkShell {
-  buildInputs = [
-    pkgs.cargo
-    pkgs.rustc
-    pkgs.gcc
-    pkgs.sqlite
-    pkgs.nodejs_24
-  ];
+{ pkgs ? import <nixpkgs> { } }:
 
-  RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+pkgs.mkShell {
+  buildInputs = with pkgs; [
+    cargo
+    rustc
+    rustfmt
+    clippy
+    rust-analyzer
+    pkg-config
+    openssl
+    sqlite
+  ];
 }

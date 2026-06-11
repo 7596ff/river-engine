@@ -1,1 +1,0 @@
-Context usage is at {usage_percent}%. Write a brief warning (one sentence) about what the agent should consider.
