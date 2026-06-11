@@ -134,6 +134,19 @@ Also: bash gets a 300s timeout (a wedged child should not pin a turn
 forever); tool results truncate at 64KB; `max_iterations` is an agent
 config field (default 50).
 
+## 2026-06-11 — wall amendment: the flash carrier rule (Cass's ruling)
+
+The step-4 exit test left the heron note at 1.5 and Cass asked the
+right question: doesn't a just-read note then get read twice — once as
+the read, once as the flash? As written, yes — and since every direct
+read bumps 1.0, the flash channel would mostly echo the working set.
+Ruling (option 2 of 3): **only ambient or propagated warmth can carry
+a note across the threshold**; a cognitive crossing fires nothing and
+halves nothing. Reads still propagate, so neighbors can flash — the
+flash becomes the edge of attention, never the center. Ch. 02 prose +
+contracts amended before any flash code exists (step 5 builds to the
+amended spec).
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

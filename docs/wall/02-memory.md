@@ -149,13 +149,25 @@ are *stable between ticks*. Half-life ≈ 3 hours; effectively zero in a
 day. Warmth persists within a working session and fades overnight;
 anything used often enough simply outruns the decay.
 
-**Flash.** When a note's score crosses **1.0**, it becomes a flash: it
-is surfaced into the agent's next context via the memory slot (ch. 03),
-together with its 1-hop typed-link neighbors, and its score is halved.
-The flash costs energy — a note must keep earning attention to flash
-again — but a genuinely persistent signal will recross the threshold.
-Threshold-crossing is an event, not a poll: the stability of scores
-between decay ticks makes "crossed 1.0" well-defined.
+**Flash.** When a note's score crosses **1.0** from below, it becomes
+a flash: it is surfaced into the agent's next context via the memory
+slot (ch. 03), together with its 1-hop typed-link neighbors, and its
+score is halved. The flash costs energy — a note must keep earning
+attention to flash again — but a genuinely persistent signal will
+recross the threshold. Threshold-crossing is an event, not a poll: the
+stability of scores between decay ticks makes "crossed 1.0"
+well-defined.
+
+**The flash is the edge of attention, not the center.** Only ambient
+and propagated warmth can carry a note across the threshold into a
+flash. A direct cognitive access never flashes the note it touches —
+the agent is already holding that note; surfacing it again would make
+the flash channel an echo of the working set instead of the periphery
+speaking. When a cognitive bump carries a note over 1.0, nothing
+fires and nothing halves: the warmth simply stands, and decay returns
+the note to flashable range. The reads still propagate — and a
+*neighbor* pushed over 1.0 by that propagation flashes normally,
+which is the associative reminding the mechanism exists for.
 
 Activation is ephemeral by design. Losing the activation table costs
 warmth, never knowledge.
@@ -199,8 +211,11 @@ from the workspace. It is never the source of anything.
   never writes to `knowledge/`.
 - **Activation constants:** cognitive bump 1.0; ambient bump 0.5;
   propagation ×0.5/hop, 3 hops, single-pass; decay ×0.8 per hourly
-  tick; flash threshold ≥ 1.0; on flash, halve the score and surface
-  the note + 1-hop neighbors.
+  tick; flash threshold ≥ 1.0, crossed from below.
+- **Flash carrier rule.** Only an ambient or propagated bump can carry
+  a note across the threshold into a flash; a cognitive bump crossing
+  fires nothing and halves nothing. On flash, halve the score and
+  surface the note + 1-hop neighbors.
 - **File capture:** indexed reads are cognitive accesses; watched
   writes re-index and bump.
 - **No import.** The web grows only through digestion.
