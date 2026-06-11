@@ -18,7 +18,6 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 8192;
 const MAX_ATTEMPTS: u32 = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -68,7 +67,7 @@ impl ModelClient {
     pub fn new(config: &ModelConfig) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(Duration::from_secs(config.request_timeout_seconds))
             .build()?;
         Ok(Self {
             http,

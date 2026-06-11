@@ -31,6 +31,10 @@ pub struct ModelConfig {
     /// never appears in config text.
     pub api_key_env: Option<String>,
     pub context_limit: Option<u64>,
+    /// Per-request timeout. CPU-bound local inference can legitimately
+    /// take minutes; remote APIs should keep the tight default.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_seconds: u64,
     /// Present on embedding models only.
     pub dimensions: Option<u32>,
 }
@@ -66,6 +70,10 @@ pub struct AgentConfig {
 
 fn default_heartbeat_minutes() -> u64 {
     45
+}
+
+fn default_request_timeout() -> u64 {
+    120
 }
 
 /// Context knobs (wall ch. 03). Everything optional; defaults bind here.
