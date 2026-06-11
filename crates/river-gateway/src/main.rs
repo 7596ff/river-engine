@@ -207,6 +207,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         None => None,
     };
     let discord_tx = discord_setup.as_ref().map(|(_, tx, _)| tx.clone());
+    let (working_tx, working_rx) = tokio::sync::watch::channel(None);
 
     let turn_loop = turn::TurnLoop::new(
         agent.workspace.clone(),
@@ -226,6 +227,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         mem.clone(),
         reindex_tx,
         discord_tx,
+        working_tx,
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -260,6 +262,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
             channels.clone(),
             speak_rx,
             shutdown_rx.clone(),
+            working_rx,
         ));
     }
     match local_port {

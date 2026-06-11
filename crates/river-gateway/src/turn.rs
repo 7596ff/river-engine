@@ -79,6 +79,9 @@ pub struct TurnLoop<C: Chat> {
     memory: Option<crate::memory::Memory>,
     reindex: Option<mpsc::Sender<()>>,
     discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
+    /// The channel a turn is currently working, for presence
+    /// signals (discord typing); None between turns.
+    working: watch::Sender<Option<String>>,
     /// When the last inbound message arrived; the quiet trigger
     /// measures from here and any inbound resets it.
     last_inbound: std::time::Instant,
@@ -109,6 +112,7 @@ impl<C: Chat> TurnLoop<C> {
         memory: Option<crate::memory::Memory>,
         reindex: Option<mpsc::Sender<()>>,
         discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
+        working: watch::Sender<Option<String>>,
     ) -> anyhow::Result<Self> {
         let record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
@@ -138,6 +142,7 @@ impl<C: Chat> TurnLoop<C> {
             memory,
             reindex,
             discord,
+            working,
             last_inbound: std::time::Instant::now(),
             positions: HashMap::new(),
         })
@@ -325,6 +330,9 @@ impl<C: Chat> TurnLoop<C> {
             }
         }
 
+        // Presence: the agent is doing something on this channel.
+        let _ = self.working.send(Some(self.context.channel().to_string()));
+
         // THINK / ACT (wall ch. 01): bounded by max_iterations.
         let schemas = self.registry.schemas(&self.profile);
         let tool_ctx = ToolContext {
@@ -428,6 +436,7 @@ impl<C: Chat> TurnLoop<C> {
             last_settle: Some(jiff::Timestamp::now().to_string()),
             context_messages: self.context.len(),
         });
+        let _ = self.working.send(None);
         // Persist-before-announce: every append above fsynced inline,
         // so the record already holds the whole turn.
         let _ = self.settled.send(n);
@@ -605,6 +614,7 @@ mod tests {
             None,
             None,
             None,
+            watch::channel(None).0,
         )
         .unwrap();
         Harness {

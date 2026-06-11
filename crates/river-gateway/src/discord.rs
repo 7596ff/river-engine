@@ -46,11 +46,13 @@ pub async fn run_supervised(
     channels: Channels,
     mut speak_rx: mpsc::Receiver<SpeakRequest>,
     mut shutdown: watch::Receiver<bool>,
+    working: watch::Receiver<Option<String>>,
 ) {
     let mut backoff = std::time::Duration::from_secs(1);
     loop {
         let started = std::time::Instant::now();
-        let result = run_once(&settings, &channels, &mut speak_rx, &mut shutdown).await;
+        let result =
+            run_once(&settings, &channels, &mut speak_rx, &mut shutdown, &working).await;
         if *shutdown.borrow() {
             return;
         }
@@ -69,13 +71,58 @@ pub async fn run_supervised(
     }
 }
 
+/// Aborts a task when dropped — the typing ticker dies with its
+/// connection attempt.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Re-send the typing indicator every 8s while the agent is working
+/// a discord channel (the platform expires it at ~10s).
+async fn typing_loop(
+    http: std::sync::Arc<twilight_http::Client>,
+    mut working: watch::Receiver<Option<String>>,
+) {
+    loop {
+        let target = working
+            .borrow_and_update()
+            .clone()
+            .and_then(|c| c.strip_prefix(CHANNEL_PREFIX).and_then(|s| s.parse::<u64>().ok()));
+        match target {
+            Some(id) => {
+                let _ = http
+                    .create_typing_trigger(Id::<ChannelMarker>::new(id))
+                    .await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(8)) => {}
+                    changed = working.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+            None => {
+                if working.changed().await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 async fn run_once(
     settings: &DiscordSettings,
     channels: &Channels,
     speak_rx: &mut mpsc::Receiver<SpeakRequest>,
     shutdown: &mut watch::Receiver<bool>,
+    working: &watch::Receiver<Option<String>>,
 ) -> anyhow::Result<()> {
-    let http = twilight_http::Client::new(settings.token.clone());
+    let http = std::sync::Arc::new(twilight_http::Client::new(settings.token.clone()));
+    let _typing = AbortOnDrop(tokio::spawn(typing_loop(http.clone(), working.clone())));
 
     let me = http.current_user().await?.model().await?;
     let listen: HashSet<u64> = match settings.guild_id {
