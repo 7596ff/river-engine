@@ -27,6 +27,11 @@ kanban-plugin: board
 - [ ] vector index over workspace — embedded semantic search, derived + rebuildable, db disposable
 - [ ] file-tool memory capture — reads bump activation, writes re-index
 - [ ] per-agent tool surface — which tools a model is offered is config, not code
+- [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
+- [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
+- [ ] flash — notes crossing 1.0 surface into context with 1-hop neighbors, score halves
+- [ ] digestive cycle — witness gleans → extraction queue → quiet-trigger re-engagement by the agent
+- [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
 
 
 ## in progress
@@ -40,11 +45,6 @@ kanban-plugin: board
 ## river-engine unique features
 
 - [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
-- [ ] atomic knowledge web — single-claim notes, mandatory typed links, open vocabulary
-- [ ] activation spreading — cognitive/ambient bumps, 3-hop propagation, hourly ×0.8 decay
-- [ ] flash — notes crossing 1.0 surface into context with 1-hop neighbors, score halves
-- [ ] digestive cycle — witness gleans → extraction queue → quiet-trigger re-engagement by the agent
-- [ ] divided authorship — witness writes only compressions; agent writes all knowledge, rejection rights
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
 - [ ] adapter trait with feature declaration folded into the system prompt
 - [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
