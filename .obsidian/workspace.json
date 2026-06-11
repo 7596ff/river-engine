@@ -11,14 +11,36 @@
             "id": "c94e11a79564083c",
             "type": "leaf",
             "state": {
+              "type": "kanban",
+              "state": {
+                "file": "docs/Kanban.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    false,
+                    false,
+                    false,
+                    false,
+                    false
+                  ]
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "Kanban"
+            }
+          },
+          {
+            "id": "873e000eeca0af7f",
+            "type": "leaf",
+            "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/superpowers/specs/2026-05-03-channel-message-design.md",
+                "file": "docs/wall/02-memory.md",
                 "mode": "preview",
-                "source": false
+                "source": true
               },
               "icon": "lucide-file",
-              "title": "2026-05-03-channel-message-design"
+              "title": "02-memory"
             }
           }
         ]
@@ -180,47 +202,47 @@
       "daily-notes:Open today's daily note": false,
       "templates:Insert template": false,
       "command-palette:Open command palette": false,
-      "bases:Create new base": false
+      "bases:Create new base": false,
+      "obsidian-kanban:Create new board": false
     }
   },
   "active": "c94e11a79564083c",
   "lastOpenFiles": [
-    "target/debug/deps/river_orchestrator-7b868c1296b57b99",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/work-products.bin",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/query-cache.bin",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/f28i0k9ioolmgycxtmmyiu3us.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/f1j62vg4on457lcblg2y1cy2j.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/erqwnz3exyuk75e5echy1hb40.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/eo7221q6kwjd2r3z7bbsrcn74.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/ehhkkq0peixqhf5wu6ce2cr67.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/ecqpzc6ma8hn3otedk35xl7ql.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/ec3u62lqvw3p186d8vkas8s6l.o",
-    "target/debug/incremental/river_gateway-0ye65yhhy21q3/s-hi74x3aiyf-1p0wn12-akgqax64rsctesbb9zdnvkmn5/ebur28kaijic3x046m1n5vfqu.o",
+    "docs/wall/02-memory.md",
+    "docs/wall/01-turn-cycle.md",
+    "docs/Kanban.md",
+    "docs/Kanban.md.tmp.1079722.2030cdcf37a2",
+    "docs/wall/08-identity.md.tmp.1079722.c6e25fdcd6cf",
+    "docs/wall/04-witness.md.tmp.1079722.cb785c1b04d2",
+    "docs/Kanban.md.tmp.1079722.4e6b22f7701f",
+    "docs/Kanban.md.tmp.1079722.c94556236e86",
+    "docs/wall/11-roadmap.md.tmp.1079722.00e336b73217",
+    "docs/wall/09-running.md.tmp.1079722.e9c896b75335",
+    "docs/wall/08-identity.md.tmp.1079722.16e35404ea06",
+    "docs/wall/08-identity.md.tmp.1079722.94ae3c3484dc",
+    "docs/wall/08-identity.md.tmp.1079722.68cd7540b7bb",
+    "docs/wall/11-roadmap.md",
+    "docs/wall/10-data.md",
+    "docs/wall/09-running.md",
+    "docs/wall/08-identity.md",
+    "docs/wall/07-tools.md",
+    "docs/wall/06-adapters.md",
+    "docs/wall/05-channels.md",
+    "docs/wall/04-witness.md",
+    "docs/wall/03-context.md",
+    "docs/wall/00-overview.md",
+    "docs/superpowers/specs/2026-06-10-wall-document-design.md",
+    "docs/audit/2026-06-10-postmortem-and-boundaries.md",
+    "docs/audit/2026-06-10-behavior-extraction.md",
+    "docs/audit/2026-06-10-strata-triage.md",
+    "docs/DESIGN-PHILOSOPHY.md",
+    "docs/archive-v4/ARCHITECTURE-SUMMARY.md",
+    "docs/superpowers/specs/2026-05-03-channel-message-design.md",
     "docs/superpowers/reviews/2026-05-03-orchestrator-config-plan-review-prompt.md",
     "docs/superpowers/plans/2026-05-03-orchestrator-config.md",
     "docs/superpowers/reviews/2026-05-03-orchestrator-config-review.md",
     "docs/superpowers/reviews/2026-05-03-orchestrator-config-review-prompt.md",
     "docs/superpowers/specs/2026-05-03-orchestrator-config-design.md",
-    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review-v2.md",
-    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review.md",
-    "docs/superpowers/reviews/2026-05-03-channel-message-plan-review-prompt.md",
-    "docs/superpowers/plans/2026-05-03-channel-messages.md",
-    "docs/superpowers/specs/2026-04-30-context-assembly-rework-design.md",
-    "docs/superpowers/reviews/2026-05-03-channel-message-review.md",
-    "docs/superpowers/reviews/2026-05-03-channel-message-review-prompt.md",
-    "docs/superpowers/plans/2026-04-30-context-assembly-rework.md",
-    "docs/superpowers/reviews/2026-04-30-context-assembly-rework-review-v3.md",
-    "docs/superpowers/specs/2026-04-30-tool-consolidation-design.md",
-    "docs/superpowers/reviews/2026-04-30-context-assembly-rework-review-prompt.md",
-    "docs/superpowers/reviews/2026-04-30-context-assembly-rework-review.md",
-    "docs/superpowers/reviews/2026-04-30-context-assembly-rework-review-v2.md",
-    "docs/superpowers/reviews/2026-04-29-spectator-compression-review-prompt.md",
-    "docs/DESIGN-PHILOSOPHY.md",
-    "docs/archive-v4/code-review-guide.md",
-    "docs/context-assembly-design.md",
-    "docs/archive-v4/research/context-assembly-design.md",
-    "docs/superpowers/reviews/2026-04-29-spectator-compression-review.md",
-    "docs/superpowers/plans/2026-04-30-tool-consolidation.md",
     "target/doc/static.files/rust-logo-9a9549ea.svg",
     "target/doc/static.files/favicon-32x32-eab170b8.png",
     "target/doc/static.files/favicon-044be391.svg"
