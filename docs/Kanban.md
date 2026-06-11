@@ -6,16 +6,14 @@ kanban-plugin: board
 
 ## implemented features
 
+- [ ] cargo workspace + gateway binary skeleton (tokio, clap, tracing)
+- [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
 
 
 ## in progress
 
 
-
 ## barebones harness
-
-- [ ] cargo workspace + gateway binary skeleton (tokio, clap, tracing)
-- [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
 - [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
 - [ ] birth — subcommand writes record/birth.json; gateway refuses to start unbirthed
 - [ ] identity files — AGENTS/IDENTITY/RULES at workspace root → system prompt, fail-fast
