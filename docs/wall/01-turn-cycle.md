@@ -60,11 +60,12 @@ assistant responses, tool results, system notices. No exceptions. The
 turn number is the coordinate that the witness, compaction, and the
 record all share; its integrity is what makes safe forgetting possible.
 
-Persistence is not a settle-time step: every message is written to the
-record **at the moment it is appended to the context**, exactly once,
-with the turn number it was appended under. By the time `TurnComplete`
-fires, the record already holds everything the witness needs — the event
-carries coordinates, never content.
+Persistence is not a settle-time step: every message is appended to the
+turn record (`record/{channel}.jsonl`, ch. 10) **at the moment it is
+appended to the context**, exactly once, with the turn number it was
+appended under. By the time `TurnComplete` fires, the record file
+already holds everything the witness needs — the event carries
+coordinates, never content.
 
 Mid-turn arrivals deserve their note: when messages land while tools are
 executing, they are folded into the *current* turn as a system notice
@@ -109,6 +110,6 @@ append-time, even that loses nothing already said.
 - **Bounded turns.** The think/act loop has a configurable iteration
   ceiling. Hitting it ends the turn through the normal settle path.
 - **Persist before announce.** `TurnComplete` is emitted only after all
-  of the turn's messages are queryable in the record.
+  of the turn's messages are durably appended to the record file.
 - **Clean exit.** SIGTERM → finish current turn → settle → stop tasks →
   exit 0. A turn in progress is never abandoned mid-flight.

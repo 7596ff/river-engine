@@ -8,7 +8,7 @@ agent's; the work is summarization, not reasoning).
 
 It has exactly two duties: **moves** and **gleaning**. Compression of
 the record, and the harvest of its margins. Nothing else. It writes to
-the moves table and the extraction queue; it never writes to the
+the moves files and the extraction queue; it never writes to the
 agent's knowledge, never speaks on channels, never touches tools.
 
 ## Prompt-driven, entirely
@@ -48,16 +48,17 @@ its own life; what it skips is lost; that responsibility is the job.
 
 On every `TurnComplete { channel, turn_number }`:
 
-1. Query the record for the turn's messages — by turn number, from the
-   database. The witness never trusts a self-summary from the agent;
+1. Read the turn's messages from the turn record
+   (`record/{channel}.jsonl`, ch. 10) — a tail scan for the turn
+   number. The witness never trusts a self-summary from the agent;
    it reads what actually happened.
 2. Format a transcript; substitute into `on-turn.md`; call the model
    with `identity.md` as system prompt.
-3. Insert the response as a **move**: channel, turn number, a 1–2
-   sentence structural summary capturing shape (question, request,
-   correction, task, failure, tangent) and substance (what it was
-   about).
-4. If the model call fails, insert a **fallback move** built
+3. Append the response as a **move** line to the channel's moves file:
+   turn number plus a 1–2 sentence structural summary capturing shape
+   (question, request, correction, task, failure, tangent) and
+   substance (what it was about).
+4. If the model call fails, append a **fallback move** built
    mechanically from the roles and tool names involved — the turn is
    never lost from the arc. Log the failure.
 
@@ -84,18 +85,20 @@ walked past *because* it was not the one walking.
 ## Contracts
 
 - **Two duties only.** Moves and gleaning. The witness writes to the
-  moves table and the extraction queue, nowhere else. It never writes
+  moves files and the extraction queue, nowhere else. It never writes
   knowledge, never speaks, never executes tools.
 - **Identity required.** Missing `workspace/witness/identity.md` fails
   gateway startup with an error naming the file. Missing event prompts
   disable their duty and log once.
-- **Witness reads the record.** Move generation queries messages by
-  turn number; it never consumes agent-produced summaries.
+- **Witness reads the record.** Move generation reads the turn's
+  messages from the record file; it never consumes agent-produced
+  summaries.
 - **A turn is never lost.** Model failure during move generation
   produces a mechanical fallback move, not a gap.
-- **Move shape.** One move per turn: channel, turn_number, summary
-  text. The cursor used by compaction is `MAX(turn_number)` over a
-  channel's moves — derived, never stored.
+- **Move shape.** One move line per turn: turn number + summary text,
+  appended to `record/moves/{channel}.jsonl`. The cursor used by
+  compaction is the turn number on the file's last line — the tail,
+  never stored elsewhere.
 - **Glean cadence.** Flat per-turn probability (default 0.25,
   configurable) + guaranteed end-of-session pass.
 - **Second person.** The shipped identity seed writes the witness as

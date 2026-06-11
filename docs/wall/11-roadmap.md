@@ -11,8 +11,8 @@ against synthetic inputs, smoke the seams live.
 
 ## Build order
 
-**1. Skeleton.** Workspace crate layout, the data layer floor (ch. 10:
-ULIDs, migrations, birth + messages tables), the birth subcommand and
+**1. Skeleton.** Workspace crate layout, the record-file floor (ch. 10:
+ULIDs, JSONL append/scan, birth.json), the birth subcommand and
 gate (ch. 08), identity-file loading fail-fast, a minimal turn loop
 (wake → model call → respond, no tools yet, naive context), the model
 client (both providers), the local surface + a first TUI client

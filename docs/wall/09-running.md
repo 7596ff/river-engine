@@ -94,7 +94,7 @@ file. Two guards keep this simple scheme safe:
 ```
 river --config river.json [--env-file river.env]      # run everything
 river status                                          # health of each agent
-river-gateway birth --data-dir <dir> --name <name>    # the birth ritual
+river-gateway birth --workspace <dir> --name <name>   # the birth ritual
 ```
 
 The CLI parses and validates, then spawns one `river-gateway` process

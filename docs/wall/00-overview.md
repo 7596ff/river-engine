@@ -13,9 +13,11 @@ holds the agent's conversation loop, a second observing voice called the
 **witness**, an integrated memory system, and in-process adapters that
 connect the agent to the outside world (Discord, a local chat surface).
 Its runtime dependencies are a filesystem and one or more LLM endpoints.
-All state lives in files: the agent's **workspace** (a directory of
-markdown — identity, knowledge, channel logs) and one SQLite database per
-agent. No external services, no cache servers, no message brokers.
+The agent's entire life lives in its **workspace** — a directory of plain
+text: identity files, knowledge, channel logs, the turn record. One
+SQLite database per agent holds only derived and ephemeral state and is
+disposable (ch. 10). No external services, no cache servers, no message
+brokers.
 
 Around the gateway sit two small companions: a **TUI client** (a terminal
 chat window that talks to the gateway's local chat surface) and a runner —
@@ -94,10 +96,11 @@ visibly breaks.
    workspace/  ◄──────►│  agent voice ── turn cycle ── tools        │
    (identity,          │      │                          │          │
     knowledge,         │   event bus              memory system     │
-    channels)          │      │                (record · knowledge  │
-                       │  witness voice          · activation ·     │
-   data_dir/   ◄──────►│  (moves, gleaning)        vector index)    │
-   (sqlite)            │                                            │
+    channels,          │      │                (record · knowledge  │
+    record)            │  witness voice          · activation ·     │
+                       │  (moves, gleaning)        vector index)    │
+   data_dir/   ◄──────►│                                            │
+   (sqlite cache)      │                                            │
                        │  adapter tasks: discord · local surface    │
                        └───────┬───────────────────────┬────────────┘
                                │                       │
@@ -109,7 +112,7 @@ visibly breaks.
 ```
 
 Everything inside the box is one process. The voices are concurrent tasks
-sharing an event bus and the database. Adapters are supervised tasks, not
+sharing an event bus. Adapters are supervised tasks, not
 separate programs. The only processes besides the gateway are the TUI
 client and the runner.
 

@@ -14,14 +14,22 @@ and warmth decays unless use renews it.
 
 What happened, in order, by turn.
 
-- **Channel logs** (ch. 05): every message that crossed an adapter, on
-  disk as JSONL, the engine's communication ground truth.
-- **Messages** (SQLite): every context message — user, assistant, tool —
-  persisted append-time under its turn number (ch. 01).
-- **Moves** (SQLite): the witness's per-turn compressions (ch. 04). One
-  move per turn: a 1–2 sentence structural summary, keyed by channel and
-  turn number. Moves are what make compaction lossless — a turn whose
-  move exists can be dropped from context without losing the arc.
+The record is **JSONL files in the workspace** — the agent's life is
+plain text, readable with `cat`, greppable, diffable, in the same body
+as everything else. No part of the record lives in a database.
+
+- **Channel logs** (ch. 05): every message that crossed an adapter —
+  `channels/{adapter}_{channel_id}.jsonl`.
+- **The turn record** — `record/{channel}.jsonl`: every context message
+  — user, assistant, tool call, tool result, system notice — one line
+  each, appended at the moment it enters the context, under its turn
+  number (ch. 01).
+- **Moves** — `record/moves/{channel}.jsonl`: the witness's per-turn
+  compressions (ch. 04), appended one line per turn: a 1–2 sentence
+  structural summary with its turn number. Moves are what make
+  compaction lossless — a turn whose move exists can be dropped from
+  context without losing the arc. The witness cursor is simply the
+  turn number on the **last line** of a channel's moves file.
 
 Compression stops at moves. There is no second summary layer: old moves
 fall out of the context's arc budget (ch. 03) but remain in the record,
@@ -88,8 +96,8 @@ the record, and suggested typed links. The witness identifies knowledge.
 It never writes it.
 
 **Step 2 — the queue waits.** Candidates accumulate in a FIFO queue in
-SQLite. The queue is patient; it survives restarts; it does not demand
-attention.
+the engine's database. The queue is patient; it usually survives
+restarts; losing it is acceptable — the witness gleans again.
 
 **Step 3 — the quiet trigger drains it.** After 5 minutes without
 inbound messages (ch. 01), the agent takes candidates from the front of
@@ -173,15 +181,17 @@ from the workspace. It is never the source of anything.
 
 ## Contracts
 
-- **Two stores, one truth rule.** Workspace files and the record tables
-  are ground truth. The vector index and sync hashes are derived and
-  rebuildable. Activation is ephemeral.
+- **One truth rule.** Ground truth is workspace files only — identity,
+  knowledge, channel logs, the turn record, moves. The database holds
+  nothing but derived state (vector index, sync hashes) and ephemeral
+  state (activation, extraction queue); deleting it loses warmth and
+  pending digestion, never the life.
 - **Atomic notes:** one claim, ≤ ~100 words, typed links mandatory,
   open link vocabulary stored as free strings.
 - **No grouping layer.** No chunk files, no working-set table. Clusters
   are link neighborhoods; the working set is the warm region.
 - **Digestion:** glean probability flat per turn (default 0.25) +
-  guaranteed end-of-session pass; FIFO queue in SQLite; quiet trigger
+  guaranteed end-of-session pass; FIFO queue in the database; quiet trigger
   at 5 minutes; inbound messages preempt instantly; the agent writes
   every atomic note itself and may reject any candidate; the witness
   never writes to `knowledge/`.

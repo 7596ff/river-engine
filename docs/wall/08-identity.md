@@ -1,24 +1,24 @@
 # 08 — Identity
 
 The engine ships no personality. Identity enters from exactly two
-places: the **birth record** in the database and the **identity files**
-in the workspace. Both are required. The engine refuses to run as
-nobody.
+places: the **birth record** and the **identity files**, both in the
+workspace. Both are required. The engine refuses to run as nobody.
 
 ## The birth ritual
 
 Before a gateway can start, its agent must be born:
 
 ```
-river-gateway birth --data-dir <dir> --name <name>
+river-gateway birth --workspace <dir> --name <name>
 ```
 
-This creates the database and writes the **founding record**: the text
-`i am <name>` and the birth timestamp. Birth happens once; the
-subcommand refuses to re-birth an existing database. From then on, the
-gateway's startup sequence begins by reading the founding record — if
-it is absent, startup fails with the exact birth command to run. The
-birth timestamp is data the agent can always consult: when I began.
+This writes the **founding record** — `record/birth.json` (ch. 10):
+the agent's name and the birth timestamp. Birth happens once; the
+subcommand refuses to re-birth a workspace whose founding record
+exists. From then on, the gateway's startup sequence begins by reading
+the founding record — if it is absent, startup fails with the exact
+birth command to run. The birth timestamp is data the agent can always
+consult: when I began.
 
 Birth is deliberately a *ritual* — a human action, taken once, outside
 the engine's normal operation. Agents are made on purpose.
@@ -53,6 +53,8 @@ workspace/
                                        watched and indexed
   channels/                            channel logs (ch. 05) —
                                        engine-managed
+  record/                              birth, turn record, moves
+                                       (ch. 10) — engine-managed
 ```
 
 Everything else in the workspace belongs to the agent: notes, drafts,
@@ -95,7 +97,7 @@ agent should become. Expect every long-lived agent to outgrow them.
 
 ## Contracts
 
-- **Birth gate.** No founding record → no startup, error names the
+- **Birth gate.** No `record/birth.json` → no startup, error names the
   birth command. Birth is once; re-birth refuses.
 - **Identity files required.** All three at workspace root; fail-fast
   naming the missing file; no generic fallback.
@@ -103,6 +105,6 @@ agent should become. Expect every long-lived agent to outgrow them.
 - **System prompt freshness** at start, channel switch, compaction
   only.
 - **Engine-managed paths** are exactly: `witness/`, `knowledge/`
-  (read+index), `channels/`. The rest is the agent's.
+  (read+index), `channels/`, `record/`. The rest is the agent's.
 - **One workspace, one gateway.** Never shared.
 - **Seeding never overwrites** existing files.

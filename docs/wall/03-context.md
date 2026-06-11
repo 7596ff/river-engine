@@ -37,8 +37,9 @@ model call:
 
 1. Re-read the system prompt from disk (identity edits take effect here
    and at channel switches — never mid-stretch).
-2. Query the **witness cursor**: the highest turn number that has a move
-   for this channel. If the witness has never run, the cursor is 0.
+2. Read the **witness cursor**: the turn number on the last line of the
+   channel's moves file (ch. 10). If the witness has never run — no
+   moves file, or an empty one — the cursor is 0.
 3. Drop all messages belonging to turns **at or below the cursor** —
    whole turns only, never a partial turn. These turns are represented
    in the arc; dropping them loses nothing.
@@ -58,9 +59,10 @@ model call:
    compression is behind, by how much, and that it may want to respond
    more briefly or say so. The agent can act on it or ignore it.
 
-Session start is the same algorithm with the database as the message
-source: load everything above the cursor, backfill to the floor, load
-the arc, go. A channel switch (deferred to the next turn start, so a
+Session start is the same algorithm with the record file as the message
+source: scan `record/{channel}.jsonl` backward for everything above the
+cursor, backfill whole turns to the floor, load the arc from the moves
+file, go. A channel switch (deferred to the next turn start, so a
 turn's tool calls are never split across contexts) rebuilds the same
 way for the new channel.
 
