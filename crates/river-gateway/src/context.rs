@@ -151,6 +151,12 @@ impl PersistentContext {
         });
     }
 
+    /// The memory system fills the slot; assembly only places it
+    /// (slot discipline, wall ch. 03).
+    pub fn set_memory_slot(&mut self, text: String) {
+        self.memory_slot = text;
+    }
+
     pub fn needs_compaction(&self) -> bool {
         self.estimate_total() >= self.knobs.compaction_threshold * self.knobs.limit as f64
     }

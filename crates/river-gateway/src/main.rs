@@ -138,7 +138,6 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         .get(agent.witness_model_name())
         .expect("validated: witness model reference resolves");
     let witness_client = model::ModelClient::new(witness_config)?;
-    let witness = witness::Witness::load(&agent.workspace, witness_client)?;
 
     // The memory body, when an embedding model is configured.
     let (mem, reindex_tx, reindex_rx) = match &agent.embedding_model {
@@ -162,6 +161,13 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
             (None, None, None)
         }
     };
+
+    let witness = witness::Witness::load(
+        &agent.workspace,
+        witness_client,
+        mem.clone(),
+        agent.glean_probability,
+    )?;
 
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;

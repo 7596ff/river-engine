@@ -64,6 +64,9 @@ pub struct AgentConfig {
     /// Think/act iteration ceiling per turn (wall ch. 01).
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    /// Flat per-turn gleaning probability (wall ch. 04).
+    #[serde(default = "default_glean_probability")]
+    pub glean_probability: f64,
     /// IANA timezone name for the agent's sense of "now". Defaults to
     /// the system timezone.
     pub timezone: Option<String>,
@@ -84,6 +87,10 @@ fn default_request_timeout() -> u64 {
 
 fn default_max_iterations() -> u32 {
     50
+}
+
+fn default_glean_probability() -> f64 {
+    0.25
 }
 
 /// Context knobs (wall ch. 03). Everything optional; defaults bind here.

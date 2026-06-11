@@ -23,12 +23,18 @@ use tokio::sync::watch;
 use crate::model::{Chat, ChatMessage};
 use crate::record::{self, MovesFile, RecordLine, RecordRole};
 
+pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
+const GLEAN_WINDOW_TURNS: u64 = 6;
+
 pub struct Witness<C: Chat> {
     workspace: PathBuf,
     client: C,
     identity: String,
     on_turn: Option<String>,
+    on_glean: Option<String>,
     moves: MovesFile,
+    memory: Option<crate::memory::Memory>,
+    glean_probability: f64,
 }
 
 impl<C: Chat> Witness<C> {
@@ -36,7 +42,12 @@ impl<C: Chat> Witness<C> {
     /// `witness/identity.md` fails startup — the gateway does not run
     /// without its witness (wall ch. 04). Missing duty prompts
     /// disable their duty, logged once.
-    pub fn load(workspace: &Path, client: C) -> anyhow::Result<Self> {
+    pub fn load(
+        workspace: &Path,
+        client: C,
+        memory: Option<crate::memory::Memory>,
+        glean_probability: f64,
+    ) -> anyhow::Result<Self> {
         let identity_path = workspace.join("witness").join("identity.md");
         let identity = match std::fs::read_to_string(&identity_path) {
             Ok(text) => text,
@@ -66,13 +77,31 @@ impl<C: Chat> Witness<C> {
             }
         };
 
+        let on_glean_path = workspace.join("witness").join("on-glean.md");
+        let on_glean = match std::fs::read_to_string(&on_glean_path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!(
+                    path = %on_glean_path.display(),
+                    "witness on-glean prompt missing; gleaning duty disabled"
+                );
+                None
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading {}", on_glean_path.display()));
+            }
+        };
+
         let moves = MovesFile::open(workspace)?;
         Ok(Self {
             workspace: workspace.to_path_buf(),
             client,
             identity,
             on_turn,
+            on_glean,
             moves,
+            memory,
+            glean_probability,
         })
     }
 
@@ -89,18 +118,76 @@ impl<C: Chat> Witness<C> {
                 let cursor = record::witness_cursor(self.moves.path())?;
                 for turn in (cursor + 1)..=target {
                     self.move_for(turn).await?;
-                }
-            }
-            tokio::select! {
-                biased;
-                _ = shutdown.wait_for(|&stop| stop) => return Ok(()),
-                changed = latest_turn.changed() => {
-                    if changed.is_err() {
-                        return Ok(());
+                    // Flat-probability gleaning (wall ch. 04): the
+                    // agent cannot predict which turns get gleaned.
+                    if rand::random::<f64>() < self.glean_probability {
+                        self.glean(turn).await?;
                     }
                 }
             }
+            let stopping = tokio::select! {
+                biased;
+                _ = shutdown.wait_for(|&stop| stop) => true,
+                changed = latest_turn.changed() => changed.is_err(),
+            };
+            if stopping {
+                // The guaranteed end-of-session pass.
+                let turn = *latest_turn.borrow();
+                if turn > 0 {
+                    self.glean(turn).await?;
+                }
+                return Ok(());
+            }
         }
+    }
+
+    /// Duty two (wall ch. 04): review the recent stretch and write
+    /// extraction candidates into the queue. Identifies knowledge;
+    /// never writes it.
+    async fn glean(&mut self, up_to_turn: u64) -> anyhow::Result<()> {
+        let (Some(template), Some(memory)) = (&self.on_glean, &self.memory) else {
+            return Ok(());
+        };
+
+        let from_turn = up_to_turn.saturating_sub(GLEAN_WINDOW_TURNS) + 1;
+        let lines: Vec<RecordLine> =
+            record::scan(&self.workspace.join("record").join("turns.jsonl"))?
+                .into_iter()
+                .filter(|l| l.turn >= from_turn && l.turn <= up_to_turn)
+                .collect();
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        let mut recent = format_transcript(&lines);
+        let moves = record::read_moves(self.moves.path())?;
+        if !moves.is_empty() {
+            recent.push_str("\n[your moves]\n");
+            for m in moves.iter().rev().take(GLEAN_WINDOW_TURNS as usize).rev() {
+                recent.push_str(&format!("turn {}: {}\n", m.turn, m.summary));
+            }
+        }
+
+        let prompt = template.replace("{recent_record}", &recent);
+        let messages = [ChatMessage::user(prompt)];
+        match self.client.chat(&self.identity, &messages, &[]).await {
+            Ok(response) => {
+                let candidate = response.content.trim();
+                if candidate.is_empty()
+                    || candidate.eq_ignore_ascii_case(NOTHING_TO_GLEAN)
+                {
+                    tracing::debug!(turn = up_to_turn, "glean: nothing");
+                } else {
+                    memory.enqueue_candidate(candidate)?;
+                    tracing::info!(turn = up_to_turn, "glean: candidate queued");
+                }
+            }
+            Err(e) => {
+                // Gleaning is best-effort; the dice roll again.
+                tracing::warn!(turn = up_to_turn, error = %e, "glean failed");
+            }
+        }
+        Ok(())
     }
 
     /// Duty one for a single turn: read the record, compress, append.
@@ -273,7 +360,7 @@ mod tests {
     fn missing_identity_fails_naming_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let model = FakeModel::replying(vec![]);
-        let err = match Witness::load(dir.path(), model) {
+        let err = match Witness::load(dir.path(), model, None, 0.0) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("load should fail without witness identity"),
         };
@@ -288,7 +375,7 @@ mod tests {
         std::fs::write(witness_dir.join("identity.md"), "You are the witness.").unwrap();
 
         let model = FakeModel::replying(vec![]);
-        let witness = Witness::load(dir.path(), model).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
         assert!(witness.on_turn.is_none());
     }
 
@@ -301,7 +388,7 @@ mod tests {
         let model = FakeModel::replying(vec![ok(
             "  Cass asked what teal is; you defined it as blue-green.  \n",
         )]);
-        let mut witness = Witness::load(dir.path(), model.clone()).unwrap();
+        let mut witness = Witness::load(dir.path(), model.clone(), None, 0.0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -328,7 +415,7 @@ mod tests {
         record_turn(dir.path(), 1, "hello?", None);
 
         let model = FakeModel::replying(vec![Err(anyhow::anyhow!("witness model down"))]);
-        let mut witness = Witness::load(dir.path(), model).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -345,11 +432,60 @@ mod tests {
         record_turn(dir.path(), 1, "hi", Some("hello"));
 
         let model = FakeModel::replying(vec![ok("   \n ")]);
-        let mut witness = Witness::load(dir.path(), model).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
         assert!(moves[0].summary.contains("you replied"));
+    }
+
+    #[tokio::test]
+    async fn gleaning_queues_candidates_and_respects_the_sentinel() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_witness(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nGlean.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        record_turn(dir.path(), 1, "teal is my favorite", Some("noted"));
+
+        let memory = crate::memory::Memory::open(
+            &dir.path().join("data"),
+            dir.path(),
+            &[],
+            std::sync::Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap();
+
+        // Replies: the move, the per-turn glean (a real candidate),
+        // then the shutdown-pass glean (the sentinel).
+        let model = FakeModel::replying(vec![
+            ok("a move"),
+            ok("Cass's favorite color is teal — worth a note. suggested link: extends color-notes"),
+            ok("nothing to glean"),
+        ]);
+        let witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0).unwrap();
+
+        let (latest_tx, latest_rx) = watch::channel(1u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        for _ in 0..100 {
+            if memory.queue_depth().unwrap() >= 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        shutdown_tx.send(true).unwrap();
+        drop(latest_tx);
+        handle.await.unwrap().unwrap();
+
+        // One real candidate; the sentinel enqueued nothing.
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+        let candidate = memory.pop_candidate().unwrap().unwrap();
+        assert!(candidate.contains("teal"), "{candidate}");
     }
 
     #[tokio::test]
@@ -361,7 +497,7 @@ mod tests {
         }
 
         let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
-        let witness = Witness::load(dir.path(), model).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
         let moves_path = witness.moves.path().to_path_buf();
 
         let (latest_tx, latest_rx) = watch::channel(3u64);

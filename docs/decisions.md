@@ -147,6 +147,22 @@ flash becomes the edge of attention, never the center. Ch. 02 prose +
 contracts amended before any flash code exists (step 5 builds to the
 amended spec).
 
+## 2026-06-11 — digestion details the wall delegates
+
+- **Gleans are verbatim, one candidate per glean** (same philosophy
+  as moves); the sentinel `nothing to glean` (or empty) enqueues
+  nothing. Glean window: the last 6 turns of record + the last 6
+  moves. Reading the agent's loom during gleaning waits for the
+  loom-seed card.
+- **The digestion turn** is a normal turn whose user-role message
+  frames the candidate and names the rejection right; the agent uses
+  its ordinary write tool for the fresh note. One candidate per quiet
+  wake; the biased select makes conversation preempt between turns,
+  and mid-turn folding covers arrivals during one.
+- **Flash delivery**: pending flashes render into the memory slot for
+  exactly one turn; the slot clears at the next turn start.
+- **End-of-session glean pass** runs on graceful shutdown.
+
 ## 2026-06-11 — dependency policy
 
 Workspace-level dependency table. tokio with `full` features (this is a

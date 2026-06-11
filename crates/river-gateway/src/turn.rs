@@ -45,8 +45,13 @@ pub struct Health {
 enum Wake {
     Notifications(Vec<Notification>),
     Heartbeat,
+    /// A quiet-trigger digestion turn carrying one extraction
+    /// candidate (wall ch. 02).
+    Digestion(String),
     Shutdown,
 }
+
+const QUIET_TRIGGER: Duration = Duration::from_secs(300);
 
 pub struct TurnLoop<C: Chat> {
     workspace: PathBuf,
@@ -71,6 +76,9 @@ pub struct TurnLoop<C: Chat> {
     max_iterations: u32,
     memory: Option<crate::memory::Memory>,
     reindex: Option<mpsc::Sender<()>>,
+    /// When the last inbound message arrived; the quiet trigger
+    /// measures from here and any inbound resets it.
+    last_inbound: std::time::Instant,
     /// In-memory read positions (channel → last consumed entry id).
     /// Authoritative within the process; the log cursor recovers the
     /// position across restarts. Without this, an agent entry written
@@ -125,6 +133,7 @@ impl<C: Chat> TurnLoop<C> {
             max_iterations,
             memory,
             reindex,
+            last_inbound: std::time::Instant::now(),
             positions: HashMap::new(),
         })
     }
@@ -159,6 +168,15 @@ impl<C: Chat> TurnLoop<C> {
     /// always runs to settle.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         loop {
+            // The quiet trigger arms only when candidates wait and
+            // the silence has not yet reached the threshold's edge.
+            let quiet_in: Option<Duration> = match &self.memory {
+                Some(memory) if memory.queue_depth().unwrap_or(0) > 0 => {
+                    Some(QUIET_TRIGGER.saturating_sub(self.last_inbound.elapsed()))
+                }
+                _ => None,
+            };
+
             let wake = tokio::select! {
                 biased;
                 _ = shutdown.wait_for(|&stop| stop) => Wake::Shutdown,
@@ -172,6 +190,17 @@ impl<C: Chat> TurnLoop<C> {
                     }
                     None => Wake::Shutdown,
                 },
+                _ = async {
+                    match quiet_in {
+                        Some(wait) => tokio::time::sleep(wait).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match self.memory.as_ref().and_then(|m| m.pop_candidate().ok().flatten()) {
+                        Some(candidate) => Wake::Digestion(candidate),
+                        None => Wake::Heartbeat,
+                    }
+                }
                 _ = tokio::time::sleep(self.heartbeat) => Wake::Heartbeat,
             };
 
@@ -192,6 +221,25 @@ impl<C: Chat> TurnLoop<C> {
         // the settle cursor points at it (never past it).
         let mut read_channels: Vec<(String, String)> = Vec::new();
 
+        // Flash delivery (wall ch. 02, amended): pending flashes ride
+        // in the memory slot for exactly this turn.
+        if let Some(memory) = &self.memory {
+            let flashes = memory.take_flashes();
+            let slot = if flashes.is_empty() {
+                String::new()
+            } else {
+                let mut text = String::new();
+                for flash in &flashes {
+                    text.push_str(&format!("[flash] {}: {}\n", flash.note_id, flash.text));
+                    for (link_type, neighbor) in &flash.neighbors {
+                        text.push_str(&format!("  {link_type} → {neighbor}\n"));
+                    }
+                }
+                text
+            };
+            self.context.set_memory_slot(slot);
+        }
+
         match wake {
             Wake::Notifications(batch) => {
                 // Dedup channels, preserving arrival order.
@@ -202,6 +250,7 @@ impl<C: Chat> TurnLoop<C> {
                     }
                 }
 
+                self.last_inbound = std::time::Instant::now();
                 // Channel switch, deferred to turn start (wall ch. 03):
                 // the first notified channel is where attention goes.
                 if notified[0] != self.context.channel() {
@@ -230,6 +279,18 @@ impl<C: Chat> TurnLoop<C> {
             }
             Wake::Heartbeat => {
                 self.append(n, RecordRole::User, HEARTBEAT_MARKER)?;
+            }
+            Wake::Digestion(candidate) => {
+                let framing = format!(
+                    "[digestion] Your witness gleaned this from your recent activity:\n\n\
+                     {candidate}\n\n\
+                     Re-engage it: re-read what it cites if you need to, then either \
+                     write a fresh atomic note in knowledge/ with the write tool — one \
+                     claim, at most ~100 words, your own words, typed links in the \
+                     frontmatter (id, links) — or reject the candidate, saying briefly \
+                     why. Never copy the witness's phrasing."
+                );
+                self.append(n, RecordRole::User, &framing)?;
             }
             Wake::Shutdown => unreachable!("handled by run"),
         }
@@ -290,6 +351,8 @@ impl<C: Chat> TurnLoop<C> {
                 }
             }
             if !arrived.is_empty() {
+                // Inbound resets the quiet timer from zero (wall ch. 01).
+                self.last_inbound = std::time::Instant::now();
                 let mut notice = String::from("[arrived mid-turn]");
                 let mut anything_new = false;
                 for channel in &arrived {
@@ -666,6 +729,59 @@ mod tests {
         let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
         assert_eq!(lines[0].content.as_deref(), Some("Read HEARTBEAT.md."));
         assert_eq!(lines[0].role, RecordRole::User);
+    }
+
+    #[tokio::test]
+    async fn digestion_turn_frames_the_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![done("rejected: too thin to keep")]);
+        let mut h = harness(dir.path(), model);
+
+        h.turn_loop
+            .turn(Wake::Digestion("the agent kept circling teal".into()))
+            .await
+            .unwrap();
+
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
+        let framing = lines[0].content.as_ref().unwrap();
+        assert!(framing.contains("[digestion]"), "{framing}");
+        assert!(framing.contains("circling teal"));
+        assert!(framing.contains("or reject"), "rejection right named");
+        assert_eq!(h.health.borrow().turn_number, 1, "a real turn, settled");
+    }
+
+    #[tokio::test]
+    async fn pending_flash_rides_the_memory_slot_for_one_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(
+            dir.path().join("knowledge/owl.md"),
+            "---\nid: NOWL\n---\n\nthe owl is silent",
+        )
+        .unwrap();
+        let memory = crate::memory::Memory::open(
+            &dir.path().join("data"),
+            dir.path(),
+            &[],
+            std::sync::Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap();
+        memory.bump("NOWL", 1.2, crate::memory::Carrier::Ambient).unwrap();
+
+        let model = FakeModel::replying(vec![done("noticed"), done("quiet")]);
+        let mut h = harness(dir.path(), model.clone());
+        h.turn_loop.memory = Some(memory);
+
+        h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
+        let seen = model.seen.lock().unwrap();
+        assert!(seen[0].0.contains("[flash] NOWL"), "flash in the slot");
+        assert!(seen[0].0.contains("owl is silent"));
+        drop(seen);
+
+        // The flash rides exactly one turn.
+        h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
+        let seen = model.seen.lock().unwrap();
+        assert!(!seen[1].0.contains("[flash]"), "slot cleared next turn");
     }
 
     #[tokio::test]
