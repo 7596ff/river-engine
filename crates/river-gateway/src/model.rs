@@ -305,7 +305,9 @@ pub fn build_openai_body(
             Role::User => out.push(json!({ "role": "user", "content": msg.content })),
             Role::Assistant => {
                 let mut m = json!({ "role": "assistant" });
-                m["content"] = if msg.content.is_empty() {
+                // content may be null only when tool_calls carry the
+                // message; an empty assistant line must still send "".
+                m["content"] = if msg.content.is_empty() && !msg.tool_calls.is_empty() {
                     Value::Null
                 } else {
                     Value::String(msg.content.clone())
