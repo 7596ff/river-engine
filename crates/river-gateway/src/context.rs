@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use river_core::config::ContextConfig;
-use crate::model::{ChatMessage, Role, ToolCall};
+use crate::model::{ChatMessage, ToolCall};
 use crate::record::{self, MoveLine, RecordRole};
 
 /// Heuristic, self-correcting token estimator (wall ch. 03).
@@ -355,6 +355,7 @@ impl PersistentContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Role;
     use crate::record::{RecordRole, TurnRecord};
 
     fn small_knobs() -> ContextConfig {
