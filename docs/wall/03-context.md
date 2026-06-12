@@ -44,7 +44,7 @@ model call:
 3. Drop all messages belonging to turns **at or below the cursor** —
    whole turns only, never a partial turn. These turns are represented
    in the arc; dropping them loses nothing.
-4. If fewer than **min_messages** (default 20) remain, backfill whole
+4. If fewer than **min_messages** (default 50) remain, backfill whole
    turns from below the cursor, newest first, stopping if the next turn
    would push past the threshold. The floor is best-effort.
 5. Reload the arc: moves newest-first from the record until the
@@ -98,7 +98,7 @@ Four knobs, nothing per-layer:
 | `limit` | 128,000 tokens |
 | `compaction_threshold` | 0.80 |
 | `fill_target` | 0.40 |
-| `min_messages` | 20 |
+| `min_messages` | 50 |
 
 Derived, not configured: lag warning at the midpoint of fill target and
 threshold; turn-lag threshold of 10.

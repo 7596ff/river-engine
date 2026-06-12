@@ -265,3 +265,18 @@ visible restarts the countdown; duplicates dedupe by note id. The
 countdown lives in the turn loop (the slot is its assembly), not in
 the memory store. Wall ch. 02 flash section amended. The constant
 belongs in the activation config block when that card lands.
+
+## 2026-06-12 — wall amendment: min_messages default 50 (Cass's ruling)
+
+The post-compaction floor of live messages was 20; Cass raised the
+default to 50. Same knob, same best-effort semantics (backfill whole
+turns newest-first, stop at the threshold) — just a deeper floor of
+verbatim recency after each compaction. Ch. 03 prose + table amended;
+config default + pin test updated.
+
+Also ruled today: gleaning does NOT read the loom (the ch. 04 clause
+"any notes the agent wrote since the last pass" stays an open
+question, neither built nor amended out); seed/AGENTS.md now exists —
+the loom practice ships with the engine as prose (taught, indexed,
+never enforced), with the glean claim removed pending the open
+question.

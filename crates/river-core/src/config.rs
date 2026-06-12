@@ -112,7 +112,7 @@ impl Default for ContextConfig {
             limit: 128_000,
             compaction_threshold: 0.80,
             fill_target: 0.40,
-            min_messages: 20,
+            min_messages: 50,
         }
     }
 }
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(ada.witness_model_name(), "sonnet");
         assert_eq!(ada.tool_profile(), DEFAULT_TOOLS.to_vec());
         assert_eq!(ada.context.limit, 128_000);
-        assert_eq!(ada.context.min_messages, 20);
+        assert_eq!(ada.context.min_messages, 50);
     }
 
     #[test]

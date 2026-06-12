@@ -43,8 +43,15 @@ kanban-plugin: board
 
 ## in progress
 
+- [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
 - [ ] link resolution heuristic — targets resolve by frontmatter id, then filename stem (last component, .md stripped); path-shaped targets land on the right note
 - [ ] wikilinks join the graph — [[...]] in any indexed body parsed as type "wiki" links; frontmatter-less files get a graph identity keyed by path; the loom conducts warmth
+- [ ] activation knobs in config — optional per-agent `activation` block (bumps, factors, hops, top-ks, thresholds, decay, search_top_k); defaults = today's constants; validated; tuning = edit + restart, no rebuild
+- [ ] GET /graph — read-only JSON on the local surface: all indexed notes (cold included, score 0) + activation scores + typed edges + semantic edges above threshold; flash_threshold in the payload
+- [ ] GET /graph/view — single self-contained HTML page (vendored d3-force, no build step): color = warmth, size = score, halo near flash threshold, typed solid / semantic dashed, 5s poll with animated transitions (waves ripple, flashes pop-then-dim), click for node detail; strictly a window, never a hand
+- [ ] flash directory filter — optional config list of dir prefixes (e.g. just the atomic dir); only notes under them may flash; everything else still warms, conducts, and propagates — it just can't surface into context
+- [ ] GET /context — read-only JSON of the live context assembly: per-layer token estimates (system/arc/memory/hot), hot turn range, arc move count, memory slot contents, estimate vs limit, calibration ratio, compaction threshold
+- [ ] GET /context/view — self-contained HTML page drawing the window as a stacked bar (layers colored, 80% compaction line, fill animates, snaps back on compaction); a window, never a hand
 
 
 ## barebones harness
@@ -53,13 +60,7 @@ kanban-plugin: board
 
 ## river-engine unique features
 
-- [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
-- [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
-- [ ] activation knobs in config — optional per-agent `activation` block (bumps, factors, hops, top-ks, thresholds, decay, search_top_k); defaults = today's constants; validated; tuning = edit + restart, no rebuild
-- [ ] GET /graph — read-only JSON on the local surface: all indexed notes (cold included, score 0) + activation scores + typed edges + semantic edges above threshold; flash_threshold in the payload
-- [ ] GET /graph/view — single self-contained HTML page (vendored d3-force, no build step): color = warmth, size = score, halo near flash threshold, typed solid / semantic dashed, 5s poll with animated transitions (waves ripple, flashes pop-then-dim), click for node detail; strictly a window, never a hand
 - [ ] adapter trait with feature declaration folded into the system prompt
-- [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
 - [ ] /listen + /unlisten slash commands — runtime listen-set management, persisted in the data dir
 
 
@@ -97,6 +98,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,true,true,false,false]}
+{"kanban-plugin":"board","list-collapse":[false,false,true,false,false]}
 ```
 %%
