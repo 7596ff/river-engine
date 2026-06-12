@@ -256,3 +256,12 @@ mid-turn — listening requires settling. Three-layer fix:
   system messages are proven safe with deepseek (mid-turn folding
   already produces them). The heartbeat marker stays user-role per ch.
   01's explicit contract; its content is non-conversational.
+
+## 2026-06-12 — flashes linger three turns (Cass's ruling)
+
+A flash now rides the memory slot for three turns instead of one
+(FLASH_VISIBLE_TURNS in turn.rs), fading after. A re-flash while
+visible restarts the countdown; duplicates dedupe by note id. The
+countdown lives in the turn loop (the slot is its assembly), not in
+the memory store. Wall ch. 02 flash section amended. The constant
+belongs in the activation config block when that card lands.

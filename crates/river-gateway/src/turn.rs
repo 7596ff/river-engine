@@ -58,6 +58,8 @@ enum Wake {
 }
 
 const QUIET_TRIGGER: Duration = Duration::from_secs(300);
+/// How many turns a flash stays visible in the memory slot.
+const FLASH_VISIBLE_TURNS: u8 = 3;
 
 pub struct TurnLoop<C: Chat> {
     workspace: PathBuf,
@@ -94,6 +96,9 @@ pub struct TurnLoop<C: Chat> {
     /// position across restarts. Without this, an agent entry written
     /// mid-turn (speak) would swallow arrivals that landed before it.
     positions: HashMap<String, String>,
+    /// Flashes currently riding the memory slot, each with its
+    /// remaining visible turns.
+    active_flashes: Vec<(crate::memory::Flash, u8)>,
 }
 
 impl<C: Chat> TurnLoop<C> {
@@ -149,6 +154,7 @@ impl<C: Chat> TurnLoop<C> {
             working,
             last_inbound: std::time::Instant::now(),
             positions: HashMap::new(),
+            active_flashes: Vec::new(),
         })
     }
 
@@ -250,23 +256,35 @@ impl<C: Chat> TurnLoop<C> {
         // the settle cursor points at it (never past it).
         let mut read_channels: Vec<(String, String)> = Vec::new();
 
-        // Flash delivery (wall ch. 02, amended): pending flashes ride
-        // in the memory slot for exactly this turn.
+        // Flash delivery (wall ch. 02, amended): a flash rides the
+        // memory slot for FLASH_VISIBLE_TURNS turns, then fades. A
+        // re-flash while visible refreshes the countdown.
         if let Some(memory) = &self.memory {
-            let flashes = memory.take_flashes();
-            let slot = if flashes.is_empty() {
-                String::new()
-            } else {
-                let mut text = String::new();
-                for flash in &flashes {
-                    text.push_str(&format!("[flash] {}: {}\n", flash.note_id, flash.text));
-                    for (link_type, neighbor) in &flash.neighbors {
-                        text.push_str(&format!("  {link_type} → {neighbor}\n"));
+            for flash in memory.take_flashes() {
+                match self
+                    .active_flashes
+                    .iter_mut()
+                    .find(|(f, _)| f.note_id == flash.note_id)
+                {
+                    Some((existing, remaining)) => {
+                        *existing = flash;
+                        *remaining = FLASH_VISIBLE_TURNS;
                     }
+                    None => self.active_flashes.push((flash, FLASH_VISIBLE_TURNS)),
                 }
-                text
-            };
+            }
+            let mut slot = String::new();
+            for (flash, _) in &self.active_flashes {
+                slot.push_str(&format!("[flash] {}: {}\n", flash.note_id, flash.text));
+                for (link_type, neighbor) in &flash.neighbors {
+                    slot.push_str(&format!("  {link_type} → {neighbor}\n"));
+                }
+            }
             self.context.set_memory_slot(slot);
+            for (_, remaining) in &mut self.active_flashes {
+                *remaining -= 1;
+            }
+            self.active_flashes.retain(|(_, remaining)| *remaining > 0);
         }
 
         match wake {
@@ -838,7 +856,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_flash_rides_the_memory_slot_for_one_turn() {
+    async fn pending_flash_rides_the_memory_slot_for_three_turns() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
         std::fs::write(
@@ -855,20 +873,28 @@ mod tests {
         .unwrap();
         memory.bump("NOWL", 1.2, crate::memory::Carrier::Ambient).unwrap();
 
-        let model = FakeModel::replying(vec![done("noticed"), done("quiet")]);
+        let model = FakeModel::replying(vec![
+            done("noticed"),
+            done("still here"),
+            done("fading"),
+            done("quiet"),
+        ]);
         let mut h = harness(dir.path(), model.clone());
         h.turn_loop.memory = Some(memory);
 
-        h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
+        // Visible for exactly FLASH_VISIBLE_TURNS turns, then gone.
+        for _ in 0..4 {
+            h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
+        }
         let seen = model.seen.lock().unwrap();
-        assert!(seen[0].0.contains("[flash] NOWL"), "flash in the slot");
-        assert!(seen[0].0.contains("owl is silent"));
-        drop(seen);
-
-        // The flash rides exactly one turn.
-        h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
-        let seen = model.seen.lock().unwrap();
-        assert!(!seen[1].0.contains("[flash]"), "slot cleared next turn");
+        for turn in 0..3 {
+            assert!(
+                seen[turn].0.contains("[flash] NOWL"),
+                "flash visible on turn {turn}"
+            );
+            assert!(seen[turn].0.contains("owl is silent"));
+        }
+        assert!(!seen[3].0.contains("[flash]"), "slot cleared on turn 4");
     }
 
     #[tokio::test]

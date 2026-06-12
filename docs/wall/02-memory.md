@@ -179,9 +179,12 @@ day. Warmth persists within a working session and fades overnight;
 anything used often enough simply outruns the decay.
 
 **Flash.** When a note's score crosses **1.0** from below, it becomes
-a flash: it is surfaced into the agent's next context via the memory
-slot (ch. 03), together with its 1-hop typed-link neighbors, and its
-score is halved. The flash costs energy — a note must keep earning
+a flash: it is surfaced into the agent's context via the memory slot
+(ch. 03), together with its 1-hop typed-link neighbors, and its score
+is halved. A flash stays visible for **three turns**, then fades from
+the slot — long enough to register across a thought, short enough that
+the periphery never becomes furniture. A re-flash while visible
+restarts the three turns. The flash costs energy — a note must keep earning
 attention to flash again — but a genuinely persistent signal will
 recross the threshold. Threshold-crossing is an event, not a poll: the
 stability of scores between decay ticks makes "crossed 1.0"
