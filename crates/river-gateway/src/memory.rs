@@ -25,6 +25,8 @@ use river_core::config::ModelConfig;
 pub const COGNITIVE_BUMP: f64 = 1.0;
 pub const AMBIENT_BUMP: f64 = 0.5;
 const SEGMENT_TARGET_BYTES: usize = 1200;
+const SEGMENT_HARD_CAP: usize = 4 * SEGMENT_TARGET_BYTES;
+const SEGMENT_MIN_CAP: usize = 600;
 const SEARCH_TOP_K: usize = 8;
 const FLASH_THRESHOLD: f64 = 1.0;
 const PROPAGATION_FACTOR: f64 = 0.5;
@@ -253,11 +255,25 @@ impl Memory {
     }
 
     async fn index_file(&self, path: &str, hash: &str, text: &str) -> anyhow::Result<()> {
-        let segments = segment(text);
-        let vectors = if segments.is_empty() {
-            Vec::new() // empty file: record the hash, embed nothing
-        } else {
-            self.embedder.embed(&segments).await?
+        // Byte caps are guesses about tokenization; the embedder is
+        // the oracle. Token-dense content (file paths, CJK, base64)
+        // can overflow the model's context inside any fixed cap, so
+        // on failure re-segment at half the cap and retry, down to a
+        // floor.
+        let mut cap = SEGMENT_HARD_CAP;
+        let (segments, vectors) = loop {
+            let segments = segment_with_cap(text, cap);
+            if segments.is_empty() {
+                break (segments, Vec::new()); // empty file: record the hash only
+            }
+            match self.embedder.embed(&segments).await {
+                Ok(vectors) => break (segments, vectors),
+                Err(e) if cap / 2 >= SEGMENT_MIN_CAP => {
+                    cap /= 2;
+                    tracing::debug!(path, error = %e, cap, "embed failed; re-segmenting smaller");
+                }
+                Err(e) => return Err(e),
+            }
         };
         let db = self.db.lock().expect("db lock");
         db.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
@@ -487,18 +503,28 @@ impl Memory {
         if text.trim().is_empty() {
             return Ok(());
         }
-        // Cap well under the embedder's context.
+        // Cap well under the embedder's context; tool results are
+        // often token-dense (path listings), so shrink and retry on
+        // failure rather than trusting the byte cap.
         let mut cut = text.len().min(4000);
-        while !text.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let query = self
-            .embedder
-            .embed(&[text[..cut].to_string()])
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let query = loop {
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            match self.embedder.embed(&[text[..cut].to_string()]).await {
+                Ok(vectors) => {
+                    break vectors
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+                }
+                Err(e) if cut / 2 >= SEGMENT_MIN_CAP => {
+                    cut /= 2;
+                    tracing::debug!(error = %e, cut, "resonance embed failed; shrinking");
+                }
+                Err(e) => return Err(e),
+            }
+        };
         let vectors = self.file_vectors()?;
         let notes = self.notes();
         let mut scored: Vec<(&String, f32)> = vectors
@@ -690,19 +716,23 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// a single giant paragraph (voice transcripts) must never exceed the
 /// embedder's context.
 fn segment(text: &str) -> Vec<String> {
-    const HARD_CAP: usize = 4 * SEGMENT_TARGET_BYTES;
+    segment_with_cap(text, SEGMENT_HARD_CAP)
+}
+
+fn segment_with_cap(text: &str, hard_cap: usize) -> Vec<String> {
+    let target = SEGMENT_TARGET_BYTES.min(hard_cap);
     let mut segments = Vec::new();
     let mut current = String::new();
     for para in text.split("\n\n") {
-        if !current.is_empty() && current.len() + para.len() > SEGMENT_TARGET_BYTES {
+        if !current.is_empty() && current.len() + para.len() > target {
             segments.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {
             current.push_str("\n\n");
         }
         current.push_str(para);
-        while current.len() > HARD_CAP {
-            let mut cut = HARD_CAP;
+        while current.len() > hard_cap {
+            let mut cut = hard_cap;
             while !current.is_char_boundary(cut) {
                 cut -= 1;
             }
@@ -831,6 +861,21 @@ pub mod tests {
         let workspace = dir.join("ws");
         std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
         Memory::open(&dir.join("data"), &workspace, &[], Arc::new(FakeEmbedder)).unwrap()
+    }
+
+    /// Rejects any input over a byte budget — the shape of ollama's
+    /// "input length exceeds the context length" 400.
+    struct StrictEmbedder(usize);
+    impl Embed for StrictEmbedder {
+        fn embed<'a>(&'a self, texts: &'a [String]) -> EmbedFuture<'a> {
+            let budget = self.0;
+            Box::pin(async move {
+                if texts.iter().any(|t| t.len() > budget) {
+                    anyhow::bail!("400: the input length exceeds the context length");
+                }
+                FakeEmbedder.embed(texts).await
+            })
+        }
     }
 
     #[tokio::test]
@@ -1180,6 +1225,46 @@ pub mod tests {
 
         assert!(segment("").is_empty());
         assert!(segment("\n\n  \n\n").is_empty());
+    }
+
+    #[tokio::test]
+    async fn token_dense_files_index_by_shrinking_segments() {
+        // An embedder whose real window is smaller than the byte cap
+        // assumes — the dense-path-transcript failure shape.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        let mem = Memory::open(
+            &dir.path().join("data"),
+            &workspace,
+            &[],
+            Arc::new(StrictEmbedder(2000)),
+        )
+        .unwrap();
+
+        // One giant paragraph: segments at the 4800 cap all exceed
+        // the embedder's 2000-byte window; shrinking to 2400 → 1200
+        // gets under it.
+        let dense = "/home/cassie/river/engine/core/src/main.rs ".repeat(400);
+        std::fs::write(workspace.join("knowledge/paths.md"), &dense).unwrap();
+        let (indexed, _) = mem.sweep().await.unwrap();
+        assert_eq!(indexed, 1, "indexed despite the tight window");
+        assert!(!mem.search("river engine main").await.unwrap().is_empty());
+
+        // Resonance shrinks the same way instead of failing.
+        mem.resonate_tool(&dense).await.unwrap();
+
+        // A window below the shrink floor still fails per-file — and
+        // the sweep survives it (warn + skip).
+        let mem_floor = Memory::open(
+            &dir.path().join("data2"),
+            &workspace,
+            &[],
+            Arc::new(StrictEmbedder(100)),
+        )
+        .unwrap();
+        let (indexed, _) = mem_floor.sweep().await.unwrap();
+        assert_eq!(indexed, 0, "skipped, not fatal");
     }
 
     #[tokio::test]
