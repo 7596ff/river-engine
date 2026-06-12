@@ -144,7 +144,7 @@ does not care what kind of wire it is on (types matter for *queries*,
 not for flow).
 
 **Implicit warmth.** Typed links are the authored structure, but
-meaning-adjacency moves warmth too — two paths reach notes nobody has
+meaning-adjacency moves warmth too — three paths reach notes nobody has
 linked yet:
 
 - **Semantic propagation.** When a note is bumped, its embedding-space
@@ -160,6 +160,13 @@ linked yet:
   cosine 0.5), as ambient access. Sustained topical drift alone can
   eventually flash an untouched note — the web trembles with what is
   being discussed before anyone searches.
+- **Tool resonance.** Every tool result is embedded and the nearest
+  notes warm at 0.8 × similarity (top 5 above cosine 0.5), as ambient
+  access. What passes through the agent's hands warms what it
+  resembles: a file read, a grep hit, a bash output that lands near a
+  note heats that note hard — the strongest implicit path, because a
+  tool result is evidence the agent is *handling* the topic, not
+  merely near it.
 
 Implicit-warmth bumps are direct: they propagate no further waves of
 their own. Neither path writes links or notes — warmth is runtime
@@ -237,8 +244,9 @@ from the workspace. It is never the source of anything.
 - **Implicit warmth constants:** semantic propagation ×0.25, top 3,
   cosine ≥ 0.65, one hop, carrier propagated; conversation resonance
   0.2 × similarity, top 5, cosine ≥ 0.5, once per turn, carrier
-  ambient. Implicit bumps wave no further. Neither path authors
-  anything.
+  ambient; tool resonance 0.8 × similarity, top 5, cosine ≥ 0.5, once
+  per tool result, carrier ambient. Implicit bumps wave no further. No
+  path authors anything.
 - **Flash carrier rule.** Only an ambient or propagated bump can carry
   a note across the threshold into a flash; a cognitive bump crossing
   fires nothing and halves nothing. On flash, halve the score and

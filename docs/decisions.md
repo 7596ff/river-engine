@@ -215,3 +215,17 @@ Workspace-level dependency table. tokio with `full` features (this is a
 binary harness, not a library; compile-time over feature-pruning).
 `anyhow` for binary error paths, `thiserror` for typed errors in pure
 modules. clap derive. Edition 2024.
+
+## 2026-06-12 — tool resonance (Cass's ruling)
+
+A third implicit-warmth path: every tool result is embedded and
+searched against the index, and the nearest notes warm at **0.8 ×
+similarity** (Cass: "embed tool results and search them against the db
+and bump the graph, say 0.8 times the distance" — implemented as 0.8 ×
+cosine similarity, the system's measure). Details delegated and chosen
+to match conversation resonance: top 5, cosine ≥ 0.5, carrier ambient
+(so a crossing flashes), text capped at 4000 chars, fire-and-forget
+spawn per tool result inside the act loop — never blocks the turn. No
+exclusions: search results re-warm what the search already bumped,
+which is the point — handling is hotter than mentioning. Wall ch. 02
+amended (implicit warmth section + constants contract).

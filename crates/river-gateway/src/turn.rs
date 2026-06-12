@@ -373,6 +373,17 @@ impl<C: Chat> TurnLoop<C> {
                     .execute(call, &self.profile, &tool_ctx)
                     .await;
                 self.append_tool_result(n, &call.id, &result)?;
+                // Tool resonance (wall ch. 02): what passes through
+                // the agent's hands warms what it resembles;
+                // fire-and-forget, never blocks the act loop.
+                if let Some(memory) = &self.memory {
+                    let m = memory.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = m.resonate_tool(&result).await {
+                            tracing::debug!(error = %e, "tool resonance failed");
+                        }
+                    });
+                }
             }
 
             // Mid-turn arrivals fold into the current turn as one

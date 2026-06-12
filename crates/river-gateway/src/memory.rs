@@ -37,6 +37,7 @@ const SEMANTIC_THRESHOLD: f32 = 0.65;
 const RESONANCE_FACTOR: f64 = 0.2;
 const RESONANCE_TOP_K: usize = 5;
 const RESONANCE_THRESHOLD: f32 = 0.5;
+const TOOL_RESONANCE_FACTOR: f64 = 0.8;
 
 /// What carried a bump (wall ch. 02): only ambient or propagated
 /// warmth can flash a note — the flash carrier rule.
@@ -472,17 +473,28 @@ impl Memory {
     /// Conversation resonance (wall ch. 02, implicit warmth): the
     /// turn's own text warms the nearest notes ambiently, no waves.
     pub async fn resonate(&self, turn_text: &str) -> anyhow::Result<()> {
-        if turn_text.trim().is_empty() {
+        self.resonate_with(turn_text, RESONANCE_FACTOR).await
+    }
+
+    /// Tool resonance (wall ch. 02, implicit warmth): each tool
+    /// result's text warms the nearest notes at 0.8 × similarity —
+    /// what passes through the agent's hands warms what it resembles.
+    pub async fn resonate_tool(&self, result_text: &str) -> anyhow::Result<()> {
+        self.resonate_with(result_text, TOOL_RESONANCE_FACTOR).await
+    }
+
+    async fn resonate_with(&self, text: &str, factor: f64) -> anyhow::Result<()> {
+        if text.trim().is_empty() {
             return Ok(());
         }
         // Cap well under the embedder's context.
-        let mut cut = turn_text.len().min(4000);
-        while !turn_text.is_char_boundary(cut) {
+        let mut cut = text.len().min(4000);
+        while !text.is_char_boundary(cut) {
             cut -= 1;
         }
         let query = self
             .embedder
-            .embed(&[turn_text[..cut].to_string()])
+            .embed(&[text[..cut].to_string()])
             .await?
             .into_iter()
             .next()
@@ -497,12 +509,7 @@ impl Memory {
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         for (path, similarity) in scored.into_iter().take(RESONANCE_TOP_K) {
             let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
-            self.apply_bump(
-                &id,
-                RESONANCE_FACTOR * similarity as f64,
-                Carrier::Ambient,
-                &notes,
-            )?;
+            self.apply_bump(&id, factor * similarity as f64, Carrier::Ambient, &notes)?;
         }
         Ok(())
     }
@@ -1044,6 +1051,43 @@ pub mod tests {
             .unwrap();
         let flashes = mem.take_flashes();
         assert_eq!(flashes.len(), 1, "topical drift alone flashed it");
+        assert_eq!(flashes[0].note_id, "NH");
+    }
+
+    #[tokio::test]
+    async fn tool_resonance_warms_at_higher_factor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        write_note(&k, "z.md", "NZ", &[], &"zzzz qqqq xxxx jjjj ".repeat(30));
+        mem.sweep().await.unwrap();
+
+        let text = "a tool result mentioning the heron in the water and what it waits for";
+        mem.resonate_tool(text).await.unwrap();
+        let tool_warmth = mem.activation("NH").unwrap().expect("tool resonance bumped");
+        assert_eq!(mem.activation("NZ").unwrap(), None, "dissimilar: cold");
+
+        // Same text through conversation resonance lands at 1/4 the
+        // warmth: the factors are 0.8 vs 0.2 on the same similarity.
+        let dir2 = tempfile::tempdir().unwrap();
+        let mem2 = memory(dir2.path());
+        let k2 = dir2.path().join("ws/knowledge");
+        write_note(&k2, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        mem2.sweep().await.unwrap();
+        mem2.resonate(text).await.unwrap();
+        let conv_warmth = mem2.activation("NH").unwrap().expect("resonance bumped");
+        assert!(
+            (tool_warmth - conv_warmth * 4.0).abs() < 1e-9,
+            "{tool_warmth} vs {conv_warmth}"
+        );
+
+        // Ambient carrier: a tool-result crossing flashes.
+        mem.bump("NH", 0.95 - tool_warmth, Carrier::Ambient).unwrap();
+        let _ = mem.take_flashes();
+        mem.resonate_tool(text).await.unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1, "tool resonance alone flashed it");
         assert_eq!(flashes[0].note_id, "NH");
     }
 
