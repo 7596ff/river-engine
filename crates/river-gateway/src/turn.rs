@@ -310,8 +310,16 @@ impl<C: Chat> TurnLoop<C> {
                 self.append(n, RecordRole::User, HEARTBEAT_MARKER)?;
             }
             Wake::Digestion(candidate) => {
+                // System role, not user: the framing is the harness
+                // speaking. A candidate is the agent's own past — as a
+                // user message, conversational candidates read as
+                // someone talking *now*, and the agent answers people
+                // who are not there.
                 let framing = format!(
-                    "[digestion] Your witness gleaned this from your recent activity:\n\n\
+                    "[digestion] A quiet moment. Your witness gleaned this from your \
+                     recent activity — it is your own memory passing through \
+                     digestion, not a message from anyone. No one has spoken; no one \
+                     is waiting on a reply.\n\n\
                      {candidate}\n\n\
                      Re-engage it: re-read what it cites if you need to, then either \
                      write a fresh atomic note in knowledge/ with the write tool — one \
@@ -319,7 +327,7 @@ impl<C: Chat> TurnLoop<C> {
                      frontmatter (id, links) — or reject the candidate, saying briefly \
                      why. Never copy the witness's phrasing."
                 );
-                self.append(n, RecordRole::User, &framing)?;
+                self.append(n, RecordRole::System, &framing)?;
             }
             Wake::Shutdown | Wake::Recheck => unreachable!("handled by run"),
         }
@@ -817,6 +825,15 @@ mod tests {
         assert!(framing.contains("[digestion]"), "{framing}");
         assert!(framing.contains("circling teal"));
         assert!(framing.contains("or reject"), "rejection right named");
+        assert!(
+            framing.contains("not a message from anyone"),
+            "candidates must not read as live conversation"
+        );
+        assert_eq!(
+            lines[0].role,
+            RecordRole::System,
+            "the framing is the harness speaking, not a person"
+        );
         assert_eq!(h.health.borrow().turn_number, 1, "a real turn, settled");
     }
 

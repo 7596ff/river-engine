@@ -229,3 +229,30 @@ spawn per tool result inside the act loop — never blocks the turn. No
 exclusions: search results re-warm what the search already bumped,
 which is the point — handling is hotter than mentioning. Wall ch. 02
 amended (implicit warmth section + constants contract).
+
+## 2026-06-12 — the self-dialogue incident
+
+First night live, iris answered "how are you feeling?" with five speaks
+in one turn — hallucinating Cass's replies between them and closing
+with a false memory ("She sent a hug, I sent one back"; the hug was her
+own). Root cause: nothing told the model that replies cannot arrive
+mid-turn — listening requires settling. Three-layer fix:
+
+- **Workspace** (her AGENTS.md): a "Listening requires settling"
+  section — end the turn to hear; never continue the conversation on
+  the other person's behalf; multi-part sends of your own thought are
+  the one exception. Effective immediately (system prompt is rebuilt
+  every turn).
+- **Speak tool result** carries the cue at the moment of the failure
+  mode: " — if you await a reply, end your turn; replies arrive as new
+  turns". Model-agnostic; belongs in the engine because every future
+  inhabitant needs it, not just this one. The seed AGENTS.md card
+  should carry the settling discipline too.
+- **Digestion framing** moved from user role to **system role**, with
+  text naming what it is ("your own memory passing through digestion,
+  not a message from anyone"). Conversational candidates — especially
+  backfilled-life candidates — read as live speech in a user-role
+  message, and the agent answers people who are not there. Trailing
+  system messages are proven safe with deepseek (mid-turn folding
+  already produces them). The heartbeat marker stays user-role per ch.
+  01's explicit contract; its content is non-conversational.

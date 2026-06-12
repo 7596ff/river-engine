@@ -43,6 +43,8 @@ kanban-plugin: board
 
 ## in progress
 
+- [ ] link resolution heuristic — targets resolve by frontmatter id, then filename stem (last component, .md stripped); path-shaped targets land on the right note
+- [ ] wikilinks join the graph — [[...]] in any indexed body parsed as type "wiki" links; frontmatter-less files get a graph identity keyed by path; the loom conducts warmth
 
 
 ## barebones harness

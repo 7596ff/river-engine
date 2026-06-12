@@ -388,6 +388,12 @@ impl Tool for BashTool {
     }
 }
 
+/// Appended to every speak result: the cue lands at the exact moment
+/// of the failure mode it prevents — a model continuing a conversation
+/// whose other half has not arrived (and cannot, mid-turn).
+const SPOKEN_CUE: &str =
+    " — if you await a reply, end your turn; replies arrive as new turns";
+
 struct SpeakTool;
 impl Tool for SpeakTool {
     fn schema(&self) -> ToolSchema {
@@ -431,7 +437,7 @@ impl Tool for SpeakTool {
                     .await
                     .map_err(|_| anyhow::anyhow!("discord delivery timed out"))?
                     .map_err(|_| anyhow::anyhow!("discord adapter dropped the request"))??;
-                return Ok(format!("spoken on {channel} (msg {msg_id})"));
+                return Ok(format!("spoken on {channel} (msg {msg_id}){SPOKEN_CUE}"));
             }
 
             // Local: the broadcast is the delivery; the agent entry
@@ -442,7 +448,7 @@ impl Tool for SpeakTool {
             });
             ctx.channels
                 .agent_spoke(&channel, content, LOCAL_ADAPTER, None)?;
-            Ok(format!("spoken on {channel}"))
+            Ok(format!("spoken on {channel}{SPOKEN_CUE}"))
         })
     }
 }
@@ -579,7 +585,11 @@ mod tests {
         let (ctx, _dir, mut outbound) = ctx();
         let registry = Registry::core();
         let out = run(&registry, &ctx, "speak", json!({"content":"good morning"})).await;
-        assert_eq!(out, "spoken on local_main");
+        assert!(out.starts_with("spoken on local_main"), "{out}");
+        assert!(
+            out.contains("end your turn"),
+            "the settle cue rides every speak result: {out}"
+        );
         assert_eq!(outbound.try_recv().unwrap().content, "good morning");
         let entries = ctx.channels.scan("local_main").unwrap();
         assert_eq!(entries[0].content.as_deref(), Some("good morning"));
