@@ -55,6 +55,9 @@ kanban-plugin: board
 
 - [ ] turn record — append-only full-history one-stream jsonl, channel-tagged, turn-coordinated, persist-once
 - [ ] birth ritual — record/birth.json, gateway refuses to start unbirthed
+- [ ] activation knobs in config — optional per-agent `activation` block (bumps, factors, hops, top-ks, thresholds, decay, search_top_k); defaults = today's constants; validated; tuning = edit + restart, no rebuild
+- [ ] GET /graph — read-only JSON on the local surface: all indexed notes (cold included, score 0) + activation scores + typed edges + semantic edges above threshold; flash_threshold in the payload
+- [ ] GET /graph/view — single self-contained HTML page (vendored d3-force, no build step): color = warmth, size = score, halo near flash threshold, typed solid / semantic dashed, 5s poll with animated transitions (waves ripple, flashes pop-then-dim), click for node detail; strictly a window, never a hand
 - [ ] adapter trait with feature declaration folded into the system prompt
 - [ ] loom as seeded practice — agent narrative chain in loom/, indexed, gleanable, never enforced
 - [ ] /listen + /unlisten slash commands — runtime listen-set management, persisted in the data dir
