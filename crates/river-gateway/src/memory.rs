@@ -228,8 +228,12 @@ impl Memory {
             if unchanged {
                 continue;
             }
-            self.index_file(path, hash, text).await?;
-            indexed += 1;
+            // One bad file must not pin the sweep: warn and move on;
+            // it retries next sweep.
+            match self.index_file(path, hash, text).await {
+                Ok(()) => indexed += 1,
+                Err(e) => tracing::warn!(path, error = %e, "indexing failed; skipping"),
+            }
         }
 
         let mut removed = 0;
@@ -249,7 +253,11 @@ impl Memory {
 
     async fn index_file(&self, path: &str, hash: &str, text: &str) -> anyhow::Result<()> {
         let segments = segment(text);
-        let vectors = self.embedder.embed(&segments).await?;
+        let vectors = if segments.is_empty() {
+            Vec::new() // empty file: record the hash, embed nothing
+        } else {
+            self.embedder.embed(&segments).await?
+        };
         let db = self.db.lock().expect("db lock");
         db.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
         for (seq, (seg_text, vector)) in segments.iter().zip(vectors.iter()).enumerate() {
@@ -467,9 +475,14 @@ impl Memory {
         if turn_text.trim().is_empty() {
             return Ok(());
         }
+        // Cap well under the embedder's context.
+        let mut cut = turn_text.len().min(4000);
+        while !turn_text.is_char_boundary(cut) {
+            cut -= 1;
+        }
         let query = self
             .embedder
-            .embed(&[turn_text.to_string()])
+            .embed(&[turn_text[..cut].to_string()])
             .await?
             .into_iter()
             .next()
@@ -666,7 +679,11 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Paragraph-accumulating segmentation, ~1200 bytes per segment.
+/// Paragraphs longer than the hard cap are split at char boundaries —
+/// a single giant paragraph (voice transcripts) must never exceed the
+/// embedder's context.
 fn segment(text: &str) -> Vec<String> {
+    const HARD_CAP: usize = 4 * SEGMENT_TARGET_BYTES;
     let mut segments = Vec::new();
     let mut current = String::new();
     for para in text.split("\n\n") {
@@ -677,10 +694,20 @@ fn segment(text: &str) -> Vec<String> {
             current.push_str("\n\n");
         }
         current.push_str(para);
+        while current.len() > HARD_CAP {
+            let mut cut = HARD_CAP;
+            while !current.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let rest = current.split_off(cut);
+            segments.push(std::mem::take(&mut current));
+            current = rest;
+        }
     }
     if !current.trim().is_empty() {
         segments.push(current);
     }
+    segments.retain(|s| !s.trim().is_empty());
     segments
 }
 
@@ -1098,5 +1125,26 @@ pub mod tests {
         let segments = segment(&text);
         assert_eq!(segments.len(), 2);
         assert!(segments[1].contains('c'));
+    }
+
+    #[test]
+    fn segmentation_splits_giant_paragraphs_and_skips_empty() {
+        // One 20KB paragraph — a voice transcript's shape.
+        let segments = segment(&"x".repeat(20_000));
+        assert!(segments.len() >= 4, "split despite no paragraph breaks");
+        assert!(segments.iter().all(|s| s.len() <= 4 * SEGMENT_TARGET_BYTES));
+
+        assert!(segment("").is_empty());
+        assert!(segment("\n\n  \n\n").is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_files_index_without_embedding() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        std::fs::write(dir.path().join("ws/knowledge/empty.md"), "").unwrap();
+        let (indexed, _) = mem.sweep().await.unwrap();
+        assert_eq!(indexed, 1, "hash recorded");
+        assert_eq!(mem.sweep().await.unwrap(), (0, 0), "not retried");
     }
 }
