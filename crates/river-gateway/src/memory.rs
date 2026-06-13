@@ -402,11 +402,15 @@ impl Memory {
     /// no further waves. Energy ignores link direction and type.
     pub fn bump(&self, origin: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
         let notes = self.notes();
-        let mut adjacency: std::collections::HashMap<&str, Vec<&str>> = Default::default();
+        let resolver = Resolver::build(&notes);
+        let mut adjacency: std::collections::HashMap<String, Vec<String>> = Default::default();
         for note in &notes {
             for (_, target) in &note.links {
-                adjacency.entry(note.id.as_str()).or_default().push(target);
-                adjacency.entry(target.as_str()).or_default().push(&note.id);
+                let Some(target) = resolver.resolve(target) else {
+                    continue; // dangling: no edge, no energy lost
+                };
+                adjacency.entry(note.id.clone()).or_default().push(target.clone());
+                adjacency.entry(target).or_default().push(note.id.clone());
             }
         }
 
@@ -582,6 +586,7 @@ impl Memory {
 
         if crossed && carrier != Carrier::Cognitive {
             new /= 2.0;
+            let resolver = Resolver::build(notes);
             let flash = match notes.iter().find(|n| n.id == note_id) {
                 Some(note) => Flash {
                     note_id: note_id.to_string(),
@@ -590,9 +595,10 @@ impl Memory {
                         .links
                         .iter()
                         .filter_map(|(link_type, target)| {
+                            let target = resolver.resolve(target)?;
                             notes
                                 .iter()
-                                .find(|n| &n.id == target)
+                                .find(|n| n.id == target)
                                 .map(|n| (link_type.clone(), n.body.clone()))
                         })
                         .collect(),
@@ -796,6 +802,16 @@ fn collect_files(dir: &Path, out: &mut Vec<(String, String, String)>) -> anyhow:
     Ok(())
 }
 
+/// YAML scalars arrive bare or quoted; link targets and ids must
+/// compare equal either way.
+fn unquote(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(s)
+}
+
 /// Parse an atomic note (wall ch. 02): frontmatter id + typed links
 /// (`- type: target`), body after the closing `---`.
 fn parse_note(path: &Path, text: &str) -> Option<NoteInfo> {
@@ -810,13 +826,13 @@ fn parse_note(path: &Path, text: &str) -> Option<NoteInfo> {
     for line in frontmatter.lines() {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("id:") {
-            id = Some(value.trim().to_string());
+            id = Some(unquote(value).to_string());
             in_links = false;
         } else if trimmed == "links:" {
             in_links = true;
         } else if in_links && let Some(item) = trimmed.strip_prefix("- ") {
             if let Some((link_type, target)) = item.split_once(':') {
-                links.push((link_type.trim().to_string(), target.trim().to_string()));
+                links.push((link_type.trim().to_string(), unquote(target).to_string()));
             }
         } else if !trimmed.starts_with('-') && trimmed.contains(':') {
             in_links = false;
@@ -828,6 +844,54 @@ fn parse_note(path: &Path, text: &str) -> Option<NoteInfo> {
         body,
         links,
     })
+}
+
+/// The last path component with any `.md` stripped — the tolerant
+/// half of link resolution: `../loom/20260612.md`, `loom/20260612.md`
+/// and `20260612` all share the stem `20260612`.
+fn link_stem(target: &str) -> &str {
+    let last = target.rsplit('/').next().unwrap_or(target);
+    last.strip_suffix(".md").unwrap_or(last)
+}
+
+/// Tolerant link resolution (board card): a target resolves by exact
+/// frontmatter id first, then by filename stem — and only when the
+/// stem names exactly one note. Ambiguity resolves to nothing rather
+/// than to the wrong note.
+struct Resolver {
+    ids: std::collections::HashSet<String>,
+    by_stem: std::collections::HashMap<String, Option<String>>, // None = ambiguous
+}
+
+impl Resolver {
+    fn build(notes: &[NoteInfo]) -> Self {
+        let mut ids = std::collections::HashSet::new();
+        let mut by_stem: std::collections::HashMap<String, Option<String>> = Default::default();
+        for note in notes {
+            ids.insert(note.id.clone());
+            let stem = note
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            by_stem
+                .entry(stem)
+                .and_modify(|existing| {
+                    if existing.as_deref() != Some(note.id.as_str()) {
+                        *existing = None;
+                    }
+                })
+                .or_insert_with(|| Some(note.id.clone()));
+        }
+        Self { ids, by_stem }
+    }
+
+    fn resolve(&self, target: &str) -> Option<String> {
+        if self.ids.contains(target) {
+            return Some(target.to_string());
+        }
+        self.by_stem.get(link_stem(target)).cloned().flatten()
+    }
 }
 
 /// The `id:` from a leading `---` frontmatter block, if any.
@@ -843,7 +907,7 @@ fn frontmatter_id(path: &Path) -> Option<String> {
             return None;
         }
         if let Some(id) = line.strip_prefix("id:") {
-            return Some(id.trim().to_string());
+            return Some(unquote(id).to_string());
         }
     }
     None
@@ -1283,6 +1347,90 @@ pub mod tests {
         .unwrap();
         let (indexed, _) = mem_floor.sweep().await.unwrap();
         assert_eq!(indexed, 0, "skipped, not fatal");
+    }
+
+    #[tokio::test]
+    async fn link_targets_resolve_by_id_then_filename_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        std::fs::create_dir_all(dir.path().join("ws/loom")).unwrap();
+
+        // Three target shapes for the same loom note: bare stem,
+        // workspace-relative path, ../-relative path.
+        write_note(
+            &dir.path().join("ws/loom"),
+            "20260612012002756.md",
+            "LOOMID",
+            &[],
+            "the loom note",
+        );
+        write_note(&k, "a.md", "NA", &[("extends", "20260612012002756")], "a");
+        write_note(&k, "b.md", "NB", &[("extends", "loom/20260612012002756.md")], "b");
+        write_note(&k, "c.md", "NC", &[("extends", "../loom/20260612012002756.md")], "c");
+
+        // Small bumps so nothing crosses the flash threshold: each
+        // origin sends 0.25 to the loom note via its resolved link.
+        for origin in ["NA", "NB", "NC"] {
+            mem.bump(origin, 0.5, Carrier::Cognitive).unwrap();
+        }
+        assert_eq!(
+            mem.activation("LOOMID").unwrap(),
+            Some(0.75),
+            "all three target shapes propagated (3 × 0.25)"
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_id_resolution_still_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[], "a");
+        write_note(&k, "d.md", "ND", &[("extends", "NA")], "d");
+        mem.bump("ND", 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(0.5));
+    }
+
+    #[tokio::test]
+    async fn quoted_frontmatter_ids_resolve_against_bare_targets() {
+        // The shape of iris's real atomics: id: "2026..." (quoted)
+        // linked as `- extends: 2026...` (bare).
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        std::fs::write(
+            k.join("old.md"),
+            "---\nid: \"20260612231237474\"\ntags: [t]\n---\n\nthe older claim\n",
+        )
+        .unwrap();
+        write_note(&k, "new.md", "NEWID", &[("extends", "20260612231237474")], "the newer claim");
+
+        mem.bump("NEWID", 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(
+            mem.activation("20260612231237474").unwrap(),
+            Some(0.5),
+            "quotes stripped; the link conducts"
+        );
+        // The capture seam keys quoted ids bare, too.
+        mem.on_read(&k.join("old.md")).unwrap();
+        assert_eq!(mem.activation("20260612231237474").unwrap(), Some(1.5));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_stems_resolve_to_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        std::fs::create_dir_all(k.join("x")).unwrap();
+        std::fs::create_dir_all(k.join("y")).unwrap();
+        write_note(&k.join("x"), "dup.md", "X1", &[], "first dup");
+        write_note(&k.join("y"), "dup.md", "X2", &[], "second dup");
+        write_note(&k, "src.md", "SRC", &[("extends", "dup")], "the linker");
+
+        mem.bump("SRC", 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation("X1").unwrap(), None, "ambiguity conducts nothing");
+        assert_eq!(mem.activation("X2").unwrap(), None);
     }
 
     #[tokio::test]
