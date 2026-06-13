@@ -393,3 +393,22 @@ own body in 36 hours, after the format_transcript fix. Same shape
 both times: a layer of the engine compressing something whose
 ground-truth only the agent in that layer can access. Wall amended:
 ch. 04 (no gleaning over digestion, quiet gate resets on digestion).
+
+## 2026-06-13 — visible tool-call budget
+
+The think/act loop is bounded by max_iterations; previously the only
+signal was a `tracing::warn!` when the ceiling was hit, which the
+agent never saw. The model would emit tool calls right up to the
+ceiling and get cut off without a chance to speak about the results.
+
+Fix: a System frame `[R/M tool calls remaining]` is appended before
+each model call when `R <= ceil(M * 0.20)` — so an agent with
+max_iterations=10 sees `[2/10]` then `[1/10]` in the last two rounds;
+max=20 sees the last four; max=4 sees `[1/4]` once. Format is short
+and machine-readable (Cass's choice), no marker prefix needed. The
+frame is appended via the same `append` path as digestion framing —
+durable in `record/turns.jsonl` and immediately present in hot for
+the next prompt. Wall ch. 01 amended.
+
+Picked threshold = 20% so most turns (1-2 rounds) never see budget
+frames; the counter only appears when the budget actually matters.

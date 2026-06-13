@@ -398,7 +398,22 @@ impl<C: Chat> TurnLoop<C> {
             discord: self.discord.clone(),
         };
 
+        // Budget warning fires in the last 20% of the turn's tool
+        // rounds (integer ceil), so the agent can choose to wind down
+        // — speak, summarize, or end — instead of piling on tools
+        // whose results it will not see. The notice goes through
+        // `append`: durable in the record and immediately visible to
+        // the next model call via hot.
+        let warn_window = (self.max_iterations + 4) / 5;
         for iteration in 0..self.max_iterations {
+            let remaining = self.max_iterations - iteration;
+            if remaining <= warn_window {
+                let notice = format!(
+                    "[{remaining}/{} tool calls remaining]",
+                    self.max_iterations
+                );
+                self.append(n, RecordRole::System, &notice)?;
+            }
             let (system, messages) = self.context.messages();
             let response = match self.client.chat(&system, &messages, &schemas).await {
                 Ok(response) => response,
@@ -890,6 +905,71 @@ mod tests {
             "the framing is the harness speaking, not a person"
         );
         assert_eq!(h.health.borrow().turn_number, 1, "a real turn, settled");
+    }
+
+    #[tokio::test]
+    async fn budget_warning_fires_in_last_twenty_percent() {
+        // max_iterations defaults to 10 in the harness; warn_window =
+        // ceil(10 * 0.20) = 2. The agent should see `[2/10]` then
+        // `[1/10]` as System frames in the last two rounds, so it
+        // can choose to wind down instead of piling on tools whose
+        // results it will not see.
+        let dir = tempfile::tempdir().unwrap();
+        // 10 speaks chained — enough to drive the loop to its ceiling.
+        let mut replies = Vec::with_capacity(10);
+        for i in 0..10 {
+            replies.push(speak(&format!("round {i}")));
+        }
+        let model = FakeModel::replying(replies);
+        let mut h = harness(dir.path(), model);
+        let _outbound_keeper = h.outbound.resubscribe();
+
+        let note = say(&mut h, DEFAULT_CHANNEL, "go").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
+        let budget: Vec<String> = lines
+            .iter()
+            .filter(|l| l.role == RecordRole::System)
+            .filter_map(|l| l.content.as_deref())
+            .filter(|c| c.contains("tool calls remaining"))
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(
+            budget,
+            vec![
+                "[2/10 tool calls remaining]".to_string(),
+                "[1/10 tool calls remaining]".to_string(),
+            ],
+            "budget warning fires at the last 20% — twice for max=10",
+        );
+    }
+
+    #[tokio::test]
+    async fn budget_warning_silent_when_turn_ends_early() {
+        // A normal turn — one speak, then done — never crosses the
+        // threshold; no budget frames should appear.
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![speak("brief reply"), done("")]);
+        let mut h = harness(dir.path(), model);
+        let _outbound_keeper = h.outbound.resubscribe();
+
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
+        let any_budget = lines.iter().any(|l| {
+            l.content
+                .as_deref()
+                .is_some_and(|c| c.contains("tool calls remaining"))
+        });
+        assert!(!any_budget, "no budget frames on a short turn");
     }
 
     #[tokio::test]

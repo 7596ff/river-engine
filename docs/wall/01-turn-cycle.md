@@ -45,6 +45,8 @@ WAKE
   if context needs compaction: compact (ch. 03)
 
 THINK / ACT  (repeat, bounded by max_iterations, default 50)
+  if remaining iterations are in the last 20% (integer ceil):
+      append a system notice "[R/M tool calls remaining]" (tagged turn N)
   call the model with the assembled context and the tool schemas
   append the assistant message (tagged turn N)
   if the response has no tool calls: turn is over → SETTLE
@@ -120,6 +122,12 @@ append-time, even that loses nothing already said.
   digestive cycle immediately; the quiet timer restarts from zero.
 - **Bounded turns.** The think/act loop has a configurable iteration
   ceiling. Hitting it ends the turn through the normal settle path.
+- **Visible budget.** In the last 20% of the turn's iterations (integer
+  ceil, minimum one round), a system frame `[R/M tool calls remaining]`
+  is appended before the model call — durable in the record, visible
+  in the next prompt. The agent should not be cut off in the dark;
+  with the count in hand it can choose to wind down (speak, summarize,
+  end) instead of piling on tools whose results it will never see.
 - **Every turn settles.** A failed model call, a hit iteration ceiling,
   and a shutdown signal all end the turn through the same settle path;
   what was persisted before the failure is never lost.
