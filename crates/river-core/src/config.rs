@@ -76,6 +76,10 @@ pub struct AgentConfig {
     /// `record/` and `channels/` never are.
     #[serde(default)]
     pub index_dirs: Vec<String>,
+    /// Activation knobs (wall ch. 02). Optional; defaults are the
+    /// wall's constants. Tuning is edit + restart, never a rebuild.
+    #[serde(default)]
+    pub activation: ActivationConfig,
     #[serde(default)]
     pub adapters: Vec<AdapterConfig>,
 }
@@ -113,6 +117,53 @@ impl Default for ContextConfig {
             compaction_threshold: 0.80,
             fill_target: 0.40,
             min_messages: 50,
+        }
+    }
+}
+
+/// Activation knobs (wall ch. 02 contracts). Every field optional in
+/// config; the defaults here ARE the wall's constants.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ActivationConfig {
+    pub cognitive_bump: f64,
+    pub ambient_bump: f64,
+    pub flash_threshold: f64,
+    pub propagation_factor: f64,
+    pub propagation_hops: usize,
+    pub decay_factor: f64,
+    pub semantic_factor: f64,
+    pub semantic_top_k: usize,
+    pub semantic_threshold: f32,
+    pub resonance_factor: f64,
+    pub resonance_top_k: usize,
+    pub resonance_threshold: f32,
+    pub tool_resonance_factor: f64,
+    pub search_top_k: usize,
+    /// Workspace-relative dir prefixes whose notes may flash. Empty =
+    /// everything may. Notes elsewhere still warm, conduct, and
+    /// propagate — they just never surface into context.
+    pub flash_dirs: Vec<String>,
+}
+
+impl Default for ActivationConfig {
+    fn default() -> Self {
+        Self {
+            cognitive_bump: 1.0,
+            ambient_bump: 0.5,
+            flash_threshold: 1.0,
+            propagation_factor: 0.5,
+            propagation_hops: 3,
+            decay_factor: 0.8,
+            semantic_factor: 0.25,
+            semantic_top_k: 3,
+            semantic_threshold: 0.65,
+            resonance_factor: 0.2,
+            resonance_top_k: 5,
+            resonance_threshold: 0.5,
+            tool_resonance_factor: 0.8,
+            search_top_k: 8,
+            flash_dirs: Vec::new(),
         }
     }
 }
@@ -271,6 +322,44 @@ pub fn validate(config: &Config) -> Result<(), Vec<String>> {
                 }
             }
         }
+
+        let a = &agent.activation;
+        if a.decay_factor <= 0.0 || a.decay_factor >= 1.0 {
+            errors.push(format!(
+                "agent {agent_name}: activation.decay_factor must be in (0, 1), got {}",
+                a.decay_factor
+            ));
+        }
+        if a.flash_threshold <= 0.0 {
+            errors.push(format!(
+                "agent {agent_name}: activation.flash_threshold must be positive, got {}",
+                a.flash_threshold
+            ));
+        }
+        for (name, value) in [
+            ("cognitive_bump", a.cognitive_bump),
+            ("ambient_bump", a.ambient_bump),
+            ("propagation_factor", a.propagation_factor),
+            ("semantic_factor", a.semantic_factor),
+            ("resonance_factor", a.resonance_factor),
+            ("tool_resonance_factor", a.tool_resonance_factor),
+        ] {
+            if value < 0.0 {
+                errors.push(format!(
+                    "agent {agent_name}: activation.{name} must not be negative, got {value}"
+                ));
+            }
+        }
+        for (name, value) in [
+            ("semantic_threshold", a.semantic_threshold),
+            ("resonance_threshold", a.resonance_threshold),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                errors.push(format!(
+                    "agent {agent_name}: activation.{name} must be in [0, 1], got {value}"
+                ));
+            }
+        }
     }
 
     if errors.is_empty() { Ok(()) } else { Err(errors) }
@@ -378,6 +467,35 @@ mod tests {
         // ada: bad model ref + embed without dimensions; bee: bad model
         // ref; shared workspace; shared port.
         assert_eq!(errors.len(), 5, "{errors:?}");
+    }
+
+    #[test]
+    fn activation_block_parses_partially_and_validates() {
+        let text = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m",
+              "activation": {
+                "tool_resonance_factor": 0.6,
+                "flash_dirs": ["knowledge", "embeddings/atomic"]
+              }
+            }
+          }
+        }"#;
+        let config = parse(text).unwrap();
+        validate(&config).unwrap();
+        let a = &config.agents["ada"].activation;
+        assert_eq!(a.tool_resonance_factor, 0.6, "overridden");
+        assert_eq!(a.cognitive_bump, 1.0, "default preserved");
+        assert_eq!(a.flash_dirs.len(), 2);
+
+        let bad = text.replace("\"tool_resonance_factor\": 0.6", "\"decay_factor\": 1.5");
+        let config = parse(&bad).unwrap();
+        let errors = validate(&config).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("decay_factor")), "{errors:?}");
     }
 
     #[test]

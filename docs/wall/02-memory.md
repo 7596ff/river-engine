@@ -249,15 +249,23 @@ from the workspace. It is never the source of anything.
   at 5 minutes; inbound messages preempt instantly; the agent writes
   every atomic note itself and may reject any candidate; the witness
   never writes to `knowledge/`.
-- **Activation constants:** cognitive bump 1.0; ambient bump 0.5;
-  propagation ×0.5/hop, 3 hops, single-pass; decay ×0.8 per hourly
-  tick; flash threshold ≥ 1.0, crossed from below.
-- **Implicit warmth constants:** semantic propagation ×0.25, top 3,
-  cosine ≥ 0.65, one hop, carrier propagated; conversation resonance
-  0.2 × similarity, top 5, cosine ≥ 0.5, once per turn, carrier
-  ambient; tool resonance 0.8 × similarity, top 5, cosine ≥ 0.5, once
-  per tool result, carrier ambient. Implicit bumps wave no further. No
-  path authors anything.
+- **Activation defaults** (every value below is a knob in the
+  per-agent `activation` config block; these defaults are the
+  contract, tuning is edit + restart): cognitive bump 1.0; ambient
+  bump 0.5; propagation ×0.5/hop, 3 hops, single-pass; decay ×0.8 per
+  hourly tick; flash threshold ≥ 1.0, crossed from below; search top-k
+  8.
+- **Implicit warmth defaults** (same block): semantic propagation
+  ×0.25, top 3, cosine ≥ 0.65, one hop, carrier propagated;
+  conversation resonance 0.2 × similarity, top 5, cosine ≥ 0.5, once
+  per turn, carrier ambient; tool resonance 0.8 × similarity, top 5,
+  cosine ≥ 0.5, once per tool result, carrier ambient. Implicit bumps
+  wave no further. No path authors anything.
+- **Flash directory filter.** Optional `flash_dirs` list (same block):
+  when set, only notes under those workspace-relative prefixes may
+  surface; a filtered crossing stands silently — no flash, no halving
+  — exactly like a cognitive crossing. Warmth and propagation are
+  unaffected.
 - **Flash carrier rule.** Only an ambient or propagated bump can carry
   a note across the threshold into a flash; a cognitive bump crossing
   fires nothing and halves nothing. On flash, halve the score and

@@ -147,11 +147,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
                 .get(embed_ref)
                 .expect("validated: embedding model reference resolves");
             let embedder = memory::EmbeddingClient::new(embed_config)?;
-            let mem = memory::Memory::open(
+            let mem = memory::Memory::open_with(
                 &agent.data_dir,
                 &agent.workspace,
                 &agent.index_dirs,
                 std::sync::Arc::new(embedder),
+                agent.activation.clone(),
             )?;
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             (Some(mem), Some(tx), Some(rx))

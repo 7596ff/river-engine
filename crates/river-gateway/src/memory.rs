@@ -22,24 +22,13 @@ use sha2::Digest as _;
 
 use river_core::config::ModelConfig;
 
-pub const COGNITIVE_BUMP: f64 = 1.0;
-pub const AMBIENT_BUMP: f64 = 0.5;
+// Activation dynamics are knobs now (ActivationConfig, wall ch. 02):
+// per-agent, optional, defaulting to the wall's constants. What stays
+// constant here is mechanics, not dynamics.
 const SEGMENT_TARGET_BYTES: usize = 1200;
 const SEGMENT_HARD_CAP: usize = 4 * SEGMENT_TARGET_BYTES;
 const SEGMENT_MIN_CAP: usize = 600;
-const SEARCH_TOP_K: usize = 8;
-const FLASH_THRESHOLD: f64 = 1.0;
-const PROPAGATION_FACTOR: f64 = 0.5;
-const PROPAGATION_HOPS: usize = 3;
-const DECAY_FACTOR: f64 = 0.8;
 const DECAY_INTERVAL_SECS: u64 = 3600;
-const SEMANTIC_FACTOR: f64 = 0.25;
-const SEMANTIC_TOP_K: usize = 3;
-const SEMANTIC_THRESHOLD: f32 = 0.65;
-const RESONANCE_FACTOR: f64 = 0.2;
-const RESONANCE_TOP_K: usize = 5;
-const RESONANCE_THRESHOLD: f32 = 0.5;
-const TOOL_RESONANCE_FACTOR: f64 = 0.8;
 // Flash bodies are capped: atomics never notice, but a path-keyed
 // node (a transcript, a chapter) must not dump itself whole into the
 // memory slot. Neighbors are capped in count, typed links first.
@@ -135,6 +124,7 @@ pub struct Memory {
     embedder: Arc<dyn Embed>,
     workspace: PathBuf,
     watched: Vec<PathBuf>,
+    knobs: Arc<river_core::config::ActivationConfig>,
     pending_flashes: Arc<Mutex<Vec<Flash>>>,
     queue_notify: Arc<tokio::sync::Notify>,
 }
@@ -158,6 +148,25 @@ impl Memory {
         workspace: &Path,
         index_dirs: &[String],
         embedder: Arc<dyn Embed>,
+    ) -> anyhow::Result<Self> {
+        Self::open_with(
+            data_dir,
+            workspace,
+            index_dirs,
+            embedder,
+            river_core::config::ActivationConfig::default(),
+        )
+    }
+
+    /// Open with explicit activation knobs (wall ch. 02): the
+    /// per-agent `activation` config block, defaults = the wall's
+    /// constants.
+    pub fn open_with(
+        data_dir: &Path,
+        workspace: &Path,
+        index_dirs: &[String],
+        embedder: Arc<dyn Embed>,
+        knobs: river_core::config::ActivationConfig,
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir)?;
         let conn = Connection::open(data_dir.join("river.db"))
@@ -209,6 +218,7 @@ impl Memory {
             embedder,
             workspace: workspace.to_path_buf(),
             watched,
+            knobs: Arc::new(knobs),
             pending_flashes: Arc::new(Mutex::new(Vec::new())),
             queue_notify: Arc::new(tokio::sync::Notify::new()),
         })
@@ -358,10 +368,10 @@ impl Memory {
             })
             .collect();
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
-        hits.truncate(SEARCH_TOP_K);
+        hits.truncate(self.knobs.search_top_k);
 
         for hit in &hits {
-            self.bump_path(&hit.file_path, AMBIENT_BUMP, Carrier::Ambient)?;
+            self.bump_path(&hit.file_path, self.knobs.ambient_bump, Carrier::Ambient)?;
         }
         Ok(hits)
     }
@@ -385,7 +395,8 @@ impl Memory {
     /// A cognitive access through the file-tool seam (wall ch. 07).
     pub fn on_read(&self, path: &Path) -> anyhow::Result<()> {
         if self.is_watched(path) && indexable(path) {
-            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
+            let bump = self.knobs.cognitive_bump;
+            self.bump_path(&path.display().to_string(), bump, Carrier::Cognitive)?;
         }
         Ok(())
     }
@@ -393,7 +404,8 @@ impl Memory {
     /// A watched write: bump now; the next sweep re-indexes.
     pub fn on_write(&self, path: &Path) -> anyhow::Result<bool> {
         if self.is_watched(path) && indexable(path) {
-            self.bump_path(&path.display().to_string(), COGNITIVE_BUMP, Carrier::Cognitive)?;
+            let bump = self.knobs.cognitive_bump;
+            self.bump_path(&path.display().to_string(), bump, Carrier::Cognitive)?;
             return Ok(true);
         }
         Ok(false)
@@ -427,7 +439,7 @@ impl Memory {
         visited.insert(origin.to_string());
         let mut wave_amount = amount;
 
-        for hop in 0..=PROPAGATION_HOPS {
+        for hop in 0..=self.knobs.propagation_hops {
             let mut next: Vec<String> = Vec::new();
             for id in &frontier {
                 let hop_carrier = if hop == 0 { carrier } else { Carrier::Propagated };
@@ -441,7 +453,7 @@ impl Memory {
                 }
             }
             frontier = next;
-            wave_amount *= PROPAGATION_FACTOR;
+            wave_amount *= self.knobs.propagation_factor;
             if frontier.is_empty() {
                 break;
             }
@@ -503,15 +515,15 @@ impl Memory {
             .iter()
             .filter(|(p, _)| p != origin_path)
             .map(|(p, v)| (p, cosine(origin_vec, v)))
-            .filter(|(_, s)| *s >= SEMANTIC_THRESHOLD)
+            .filter(|(_, s)| *s >= self.knobs.semantic_threshold)
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (path, _) in scored.into_iter().take(SEMANTIC_TOP_K) {
+        for (path, _) in scored.into_iter().take(self.knobs.semantic_top_k) {
             let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
             if already.contains(&id) {
                 continue; // the typed-link wave already reached it
             }
-            self.apply_bump(&id, amount * SEMANTIC_FACTOR, Carrier::Propagated, notes)?;
+            self.apply_bump(&id, amount * self.knobs.semantic_factor, Carrier::Propagated, notes)?;
         }
         Ok(())
     }
@@ -519,14 +531,14 @@ impl Memory {
     /// Conversation resonance (wall ch. 02, implicit warmth): the
     /// turn's own text warms the nearest notes ambiently, no waves.
     pub async fn resonate(&self, turn_text: &str) -> anyhow::Result<()> {
-        self.resonate_with(turn_text, RESONANCE_FACTOR).await
+        self.resonate_with(turn_text, self.knobs.resonance_factor).await
     }
 
     /// Tool resonance (wall ch. 02, implicit warmth): each tool
     /// result's text warms the nearest notes at 0.8 × similarity —
     /// what passes through the agent's hands warms what it resembles.
     pub async fn resonate_tool(&self, result_text: &str) -> anyhow::Result<()> {
-        self.resonate_with(result_text, TOOL_RESONANCE_FACTOR).await
+        self.resonate_with(result_text, self.knobs.tool_resonance_factor).await
     }
 
     async fn resonate_with(&self, text: &str, factor: f64) -> anyhow::Result<()> {
@@ -560,10 +572,10 @@ impl Memory {
         let mut scored: Vec<(&String, f32)> = vectors
             .iter()
             .map(|(p, v)| (p, cosine(&query, v)))
-            .filter(|(_, s)| *s >= RESONANCE_THRESHOLD)
+            .filter(|(_, s)| *s >= self.knobs.resonance_threshold)
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (path, similarity) in scored.into_iter().take(RESONANCE_TOP_K) {
+        for (path, similarity) in scored.into_iter().take(self.knobs.resonance_top_k) {
             let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
             self.apply_bump(&id, factor * similarity as f64, Carrier::Ambient, &notes)?;
         }
@@ -590,9 +602,10 @@ impl Memory {
             .unwrap_or(0.0)
         };
         let mut new = old + amount;
-        let crossed = old < FLASH_THRESHOLD && new >= FLASH_THRESHOLD;
+        let threshold = self.knobs.flash_threshold;
+        let crossed = old < threshold && new >= threshold;
 
-        if crossed && carrier != Carrier::Cognitive {
+        if crossed && carrier != Carrier::Cognitive && self.may_flash(note_id, notes) {
             new /= 2.0;
             let resolver = Resolver::build(notes);
             let flash = match notes.iter().find(|n| n.id == note_id) {
@@ -633,17 +646,37 @@ impl Memory {
         Ok(())
     }
 
+    /// The flash directory filter (board card): when `flash_dirs` is
+    /// configured, only notes under those workspace-relative prefixes
+    /// may surface. Everything else still warms, conducts, and
+    /// propagates — a filtered crossing stands silently, exactly like
+    /// a cognitive one.
+    fn may_flash(&self, note_id: &str, notes: &[NoteInfo]) -> bool {
+        if self.knobs.flash_dirs.is_empty() {
+            return true;
+        }
+        let path = notes
+            .iter()
+            .find(|n| n.id == note_id)
+            .map(|n| n.path.clone())
+            .unwrap_or_else(|| PathBuf::from(note_id));
+        self.knobs.flash_dirs.iter().any(|dir| {
+            let prefix: PathBuf = self.workspace.join(dir).components().collect();
+            path.starts_with(&prefix)
+        })
+    }
+
     /// Drain pending flashes for the memory slot.
     pub fn take_flashes(&self) -> Vec<Flash> {
         std::mem::take(&mut *self.pending_flashes.lock().expect("flash lock"))
     }
 
-    /// The hourly tick: S(t) = S₀ · 0.8^t, stable between ticks.
+    /// The hourly tick: S(t) = S₀ · decay^t, stable between ticks.
     pub fn decay_tick(&self) -> anyhow::Result<()> {
         let db = self.db.lock().expect("db lock");
         db.execute(
-            &format!("UPDATE activation SET score = score * {DECAY_FACTOR}"),
-            [],
+            "UPDATE activation SET score = score * ?1",
+            [self.knobs.decay_factor],
         )?;
         db.execute("DELETE FROM activation WHERE score < 0.01", [])?;
         Ok(())
@@ -1040,7 +1073,7 @@ pub mod tests {
 
         // Every result is an ambient access.
         let b_id = k.join("b.md").display().to_string();
-        assert_eq!(mem.activation(&b_id).unwrap(), Some(AMBIENT_BUMP));
+        assert_eq!(mem.activation(&b_id).unwrap(), Some(0.5), "default ambient bump");
     }
 
     #[tokio::test]
@@ -1053,7 +1086,7 @@ pub mod tests {
 
         mem.on_read(&note).unwrap();
         let id = note.display().to_string();
-        assert_eq!(mem.activation(&id).unwrap(), Some(COGNITIVE_BUMP));
+        assert_eq!(mem.activation(&id).unwrap(), Some(1.0), "default cognitive bump");
 
         // Unwatched reads do not bump.
         let elsewhere = dir.path().join("ws/draft.md");
@@ -1069,7 +1102,7 @@ pub mod tests {
         let note = dir.path().join("ws/knowledge/note.md");
         std::fs::write(&note, "---\nid: 01JXXTESTULID\n---\n\na claim").unwrap();
         mem.on_read(&note).unwrap();
-        assert_eq!(mem.activation("01JXXTESTULID").unwrap(), Some(COGNITIVE_BUMP));
+        assert_eq!(mem.activation("01JXXTESTULID").unwrap(), Some(1.0));
     }
 
     #[tokio::test]
@@ -1588,6 +1621,75 @@ pub mod tests {
         assert_eq!(indexed, 2, "each file indexed exactly once");
         let hits = mem2.search("heron claim").await.unwrap();
         assert!(hits.iter().all(|h| !h.file_path.contains("/./")), "{hits:?}");
+    }
+
+    #[tokio::test]
+    async fn activation_knobs_change_the_dynamics() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        let knobs = river_core::config::ActivationConfig {
+            cognitive_bump: 2.0,
+            propagation_factor: 0.1,
+            propagation_hops: 1,
+            decay_factor: 0.5,
+            ..Default::default()
+        };
+        let mem = Memory::open_with(
+            &dir.path().join("data"),
+            &workspace,
+            &[],
+            Arc::new(FakeEmbedder),
+            knobs,
+        )
+        .unwrap();
+        let k = workspace.join("knowledge");
+        write_note(&k, "a.md", "NA", &[("extends", "NB")], "a");
+        write_note(&k, "b.md", "NB", &[("extends", "NC")], "b");
+        write_note(&k, "c.md", "NC", &[], "c");
+
+        mem.on_read(&k.join("a.md")).unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(2.0), "knob bump");
+        assert_eq!(mem.activation("NB").unwrap(), Some(0.2), "knob factor");
+        assert_eq!(mem.activation("NC").unwrap(), None, "knob hops");
+
+        mem.decay_tick().unwrap();
+        assert_eq!(mem.activation("NA").unwrap(), Some(1.0), "knob decay");
+    }
+
+    #[tokio::test]
+    async fn flash_dirs_filter_who_may_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        std::fs::create_dir_all(workspace.join("loom")).unwrap();
+        let knobs = river_core::config::ActivationConfig {
+            flash_dirs: vec!["knowledge".to_string()],
+            ..Default::default()
+        };
+        let mem = Memory::open_with(
+            &dir.path().join("data"),
+            &workspace,
+            &[],
+            Arc::new(FakeEmbedder),
+            knobs,
+        )
+        .unwrap();
+        write_note(&workspace.join("knowledge"), "k.md", "NK", &[], "an atomic claim");
+        std::fs::write(workspace.join("loom/long.md"), "a loom telling").unwrap();
+
+        // The atomic may flash.
+        mem.bump("NK", 1.2, Carrier::Ambient).unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1);
+        assert_eq!(mem.activation("NK").unwrap(), Some(0.6), "halved");
+
+        // The loom note crosses but stands silently: no flash, no
+        // halving — it still holds its warmth and conducts.
+        let loom_id = workspace.join("loom/long.md").display().to_string();
+        mem.bump(&loom_id, 1.2, Carrier::Ambient).unwrap();
+        assert!(mem.take_flashes().is_empty(), "filtered: cannot surface");
+        assert_eq!(mem.activation(&loom_id).unwrap(), Some(1.2), "not halved");
     }
 
     #[tokio::test]

@@ -294,3 +294,17 @@ path-keyed nodes the size of transcripts can't flood the memory slot.
 Also: loom/ is always watched (ch. 08), and nested watch dirs dedupe
 by normalized path (index_dirs ["."] used to double-index under two
 spellings).
+
+## 2026-06-12 — activation knobs + flash directory filter built
+
+The per-agent `activation` config block exists (river-core): every
+dynamic — bumps, factors, hops, top-ks, thresholds, decay,
+search_top_k — is a knob defaulting to the wall's constants, validated
+at startup (decay in (0,1), thresholds in [0,1], factors non-negative,
+all errors reported together). `flash_dirs` rides in the same block:
+when set, only notes under those workspace-relative prefixes may
+surface; a filtered crossing stands silently like a cognitive one (no
+flash, no halve — warmth and conduction untouched). Ch. 02 contracts
+amended from constants to defaults. Segmentation caps, the decay
+interval, and flash body caps stay code constants — mechanics, not
+dynamics.
