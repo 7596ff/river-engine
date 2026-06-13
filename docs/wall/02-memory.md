@@ -127,7 +127,15 @@ architectural.
 
 Every atomic note carries an **activation score** — runtime state, not
 knowledge. The graph is the atomic web itself: notes are nodes, typed
-links are edges.
+links are edges. **Every indexed file joins the graph**: files with
+frontmatter are keyed by id, files without are keyed by path, and
+`[[wikilinks]]` in any indexed body are edges of type `wiki` — a loom,
+if the agent keeps one, conducts warmth. Link targets resolve
+tolerantly: exact frontmatter id first, then filename stem (last
+component, `.md` stripped) when the stem names exactly one note;
+ambiguity conducts nothing. Flash bodies are capped (~1200 chars,
+neighbors capped at 6, typed links first) so a path-keyed node the
+size of a transcript cannot dump itself whole into the memory slot.
 
 **Bumps.** Two tiers of access:
 

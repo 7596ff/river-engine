@@ -280,3 +280,17 @@ question, neither built nor amended out); seed/AGENTS.md now exists —
 the loom practice ships with the engine as prose (taught, indexed,
 never enforced), with the glean claim removed pending the open
 question.
+
+## 2026-06-12 — the loom conducts: wikilinks + tolerant resolution built
+
+Both approved cards landed (wall ch. 02 amended in the same commit):
+every indexed file is now a graph node (frontmatter id, else path);
+[[wikilinks]] in any body are type-"wiki" edges; targets resolve by
+exact id, then unique filename stem — ambiguity conducts nothing.
+Found and fixed in passing: YAML-quoted ids (iris's atomics) never
+matched their bare link targets — quotes now stripped on both sides.
+Flash bodies capped at ~1200 chars / 6 neighbors (typed first), so
+path-keyed nodes the size of transcripts can't flood the memory slot.
+Also: loom/ is always watched (ch. 08), and nested watch dirs dedupe
+by normalized path (index_dirs ["."] used to double-index under two
+spellings).

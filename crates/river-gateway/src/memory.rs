@@ -40,6 +40,11 @@ const RESONANCE_FACTOR: f64 = 0.2;
 const RESONANCE_TOP_K: usize = 5;
 const RESONANCE_THRESHOLD: f32 = 0.5;
 const TOOL_RESONANCE_FACTOR: f64 = 0.8;
+// Flash bodies are capped: atomics never notice, but a path-keyed
+// node (a transcript, a chapter) must not dump itself whole into the
+// memory slot. Neighbors are capped in count, typed links first.
+const FLASH_TEXT_CAP: usize = 1200;
+const FLASH_NEIGHBOR_CAP: usize = 6;
 
 /// What carried a bump (wall ch. 02): only ambient or propagated
 /// warmth can flash a note — the flash carrier rule.
@@ -134,14 +139,17 @@ pub struct Memory {
     queue_notify: Arc<tokio::sync::Notify>,
 }
 
-/// One atomic note's identity and typed links, parsed live from the
-/// workspace — links are ground truth, never cached.
+/// One indexed file's graph identity and links, parsed live from the
+/// workspace — links are ground truth, never cached. Files with
+/// frontmatter are keyed by id; files without are keyed by path
+/// (board card: wikilinks join the graph). Links carry frontmatter
+/// typed links plus body wikilinks as type "wiki".
 #[derive(Debug)]
 struct NoteInfo {
     id: String,
     path: PathBuf,
     body: String,
-    links: Vec<(String, String)>, // (type, target id)
+    links: Vec<(String, String)>, // (type, target)
 }
 
 impl Memory {
@@ -223,11 +231,11 @@ impl Memory {
         out
     }
 
-    /// Every atomic note under the watched dirs, parsed live.
+    /// Every indexed file as a graph node, parsed live.
     fn notes(&self) -> Vec<NoteInfo> {
         self.watched_files()
             .into_iter()
-            .filter_map(|(path, _, text)| parse_note(Path::new(&path), &text))
+            .map(|(path, _, text)| parse_note(Path::new(&path), &text))
             .collect()
     }
 
@@ -590,7 +598,7 @@ impl Memory {
             let flash = match notes.iter().find(|n| n.id == note_id) {
                 Some(note) => Flash {
                     note_id: note_id.to_string(),
-                    text: note.body.clone(),
+                    text: cap_chars(&note.body, FLASH_TEXT_CAP),
                     neighbors: note
                         .links
                         .iter()
@@ -599,14 +607,15 @@ impl Memory {
                             notes
                                 .iter()
                                 .find(|n| n.id == target)
-                                .map(|n| (link_type.clone(), n.body.clone()))
+                                .map(|n| (link_type.clone(), cap_chars(&n.body, FLASH_TEXT_CAP)))
                         })
+                        .take(FLASH_NEIGHBOR_CAP)
                         .collect(),
                 },
                 None => Flash {
                     note_id: note_id.to_string(),
                     text: std::fs::read_to_string(note_id)
-                        .map(|t| t.chars().take(400).collect())
+                        .map(|t| cap_chars(&t, FLASH_TEXT_CAP))
                         .unwrap_or_default(),
                     neighbors: Vec::new(),
                 },
@@ -725,6 +734,16 @@ fn now() -> i64 {
     jiff::Timestamp::now().as_second()
 }
 
+fn cap_chars(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(cap).collect();
+        t.push('…');
+        t
+    }
+}
+
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -812,38 +831,66 @@ fn unquote(s: &str) -> &str {
         .unwrap_or(s)
 }
 
-/// Parse an atomic note (wall ch. 02): frontmatter id + typed links
-/// (`- type: target`), body after the closing `---`.
-fn parse_note(path: &Path, text: &str) -> Option<NoteInfo> {
-    let rest = text.strip_prefix("---")?;
-    let end = rest.find("\n---")?;
-    let (frontmatter, body) = rest.split_at(end);
-    let body = body.trim_start_matches("\n---").trim().to_string();
+/// Body wikilinks: `[[target]]`, with Obsidian-style `|alias` and
+/// `#heading` suffixes stripped.
+fn wiki_links(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("[[") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find("]]") else { break };
+        let target = rest[..end].split(['|', '#']).next().unwrap_or("").trim();
+        if !target.is_empty() && !out.iter().any(|t| t == target) {
+            out.push(target.to_string());
+        }
+        rest = &rest[end + 2..];
+    }
+    out
+}
 
+/// Parse any indexed file as a graph node (wall ch. 02 + the
+/// wikilinks card): frontmatter id + typed links (`- type: target`)
+/// when frontmatter exists, identity keyed by path when it does not;
+/// body `[[wikilinks]]` join the link set as type "wiki" either way.
+fn parse_note(path: &Path, text: &str) -> NoteInfo {
     let mut id = None;
     let mut links = Vec::new();
-    let mut in_links = false;
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("id:") {
-            id = Some(unquote(value).to_string());
-            in_links = false;
-        } else if trimmed == "links:" {
-            in_links = true;
-        } else if in_links && let Some(item) = trimmed.strip_prefix("- ") {
-            if let Some((link_type, target)) = item.split_once(':') {
-                links.push((link_type.trim().to_string(), unquote(target).to_string()));
+    let mut body = text.trim().to_string();
+
+    if let Some(rest) = text.strip_prefix("---")
+        && let Some(end) = rest.find("\n---")
+    {
+        let (frontmatter, fm_body) = rest.split_at(end);
+        body = fm_body.trim_start_matches("\n---").trim().to_string();
+        let mut in_links = false;
+        for line in frontmatter.lines() {
+            let trimmed = line.trim();
+            if let Some(value) = trimmed.strip_prefix("id:") {
+                id = Some(unquote(value).to_string());
+                in_links = false;
+            } else if trimmed == "links:" {
+                in_links = true;
+            } else if in_links && let Some(item) = trimmed.strip_prefix("- ") {
+                if let Some((link_type, target)) = item.split_once(':') {
+                    links.push((link_type.trim().to_string(), unquote(target).to_string()));
+                }
+            } else if !trimmed.starts_with('-') && trimmed.contains(':') {
+                in_links = false;
             }
-        } else if !trimmed.starts_with('-') && trimmed.contains(':') {
-            in_links = false;
         }
     }
-    Some(NoteInfo {
-        id: id?,
+
+    for target in wiki_links(&body) {
+        if !links.iter().any(|(_, t)| *t == target) {
+            links.push(("wiki".to_string(), target));
+        }
+    }
+    NoteInfo {
+        id: id.unwrap_or_else(|| path.display().to_string()),
         path: path.to_path_buf(),
         body,
         links,
-    })
+    }
 }
 
 /// The last path component with any `.md` stripped — the tolerant
@@ -1431,6 +1478,80 @@ pub mod tests {
         mem.bump("SRC", 1.0, Carrier::Cognitive).unwrap();
         assert_eq!(mem.activation("X1").unwrap(), None, "ambiguity conducts nothing");
         assert_eq!(mem.activation("X2").unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn wikilinks_conduct_warmth_between_frontmatterless_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let loom = dir.path().join("ws/loom");
+        std::fs::create_dir_all(&loom).unwrap();
+        // A loom chain: b links back to a, iris-style first line.
+        std::fs::write(loom.join("20260601000000000.md"), "first note, no links").unwrap();
+        std::fs::write(
+            loom.join("20260602000000000.md"),
+            "[[20260601000000000]]\n\nsecond note in the chain",
+        )
+        .unwrap();
+
+        let second = loom.join("20260602000000000.md").display().to_string();
+        let first = loom.join("20260601000000000.md").display().to_string();
+        mem.bump(&second, 1.0, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation(&second).unwrap(), Some(1.0));
+        assert_eq!(
+            mem.activation(&first).unwrap(),
+            Some(0.5),
+            "the loom conducts warmth"
+        );
+    }
+
+    #[tokio::test]
+    async fn wikilinks_in_atomic_bodies_join_the_typed_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[("extends", "NB")], "claim citing [[NC]] inline");
+        write_note(&k, "b.md", "NB", &[], "b");
+        write_note(&k, "c.md", "NC", &[], "c");
+
+        mem.bump("NA", 0.5, Carrier::Cognitive).unwrap();
+        assert_eq!(mem.activation("NB").unwrap(), Some(0.25), "typed link");
+        assert_eq!(mem.activation("NC").unwrap(), Some(0.25), "wiki link");
+    }
+
+    #[tokio::test]
+    async fn path_keyed_flashes_carry_capped_body_and_neighbors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let loom = dir.path().join("ws/loom");
+        std::fs::create_dir_all(&loom).unwrap();
+        std::fs::write(loom.join("prev.md"), "the previous note's telling").unwrap();
+        let huge_tail = "x".repeat(5_000);
+        std::fs::write(
+            loom.join("cur.md"),
+            format!("[[prev]]\n\nthe current note's telling\n{huge_tail}"),
+        )
+        .unwrap();
+
+        let cur = loom.join("cur.md").display().to_string();
+        mem.bump(&cur, 1.2, Carrier::Ambient).unwrap();
+        let flashes = mem.take_flashes();
+        assert_eq!(flashes.len(), 1);
+        assert!(flashes[0].text.contains("the current note's telling"), "whole-body flash");
+        assert!(
+            flashes[0].text.chars().count() <= FLASH_TEXT_CAP + 1,
+            "capped: {}",
+            flashes[0].text.len()
+        );
+        assert_eq!(flashes[0].neighbors.len(), 1, "wiki neighbor rides along");
+        assert_eq!(flashes[0].neighbors[0].0, "wiki");
+        assert!(flashes[0].neighbors[0].1.contains("previous note"));
+    }
+
+    #[test]
+    fn wiki_link_parsing_handles_aliases_headings_and_dupes() {
+        let body = "see [[a|alias]] and [[b#section]] and [[a]] and [[ ]]";
+        assert_eq!(wiki_links(body), vec!["a".to_string(), "b".to_string()]);
     }
 
     #[tokio::test]
