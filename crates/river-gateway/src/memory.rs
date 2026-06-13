@@ -181,9 +181,20 @@ impl Memory {
              );",
         )?;
 
-        let mut watched = vec![workspace.join("knowledge")];
-        for dir in index_dirs {
-            watched.push(workspace.join(dir));
+        // knowledge/ and loom/ are always watched (wall chs. 02, 08);
+        // config adds more. Paths are normalized (`.` components
+        // dropped) and deduplicated so `index_dirs: ["."]` cannot
+        // index the same file twice under two spellings.
+        let mut watched: Vec<PathBuf> = Vec::new();
+        for dir in ["knowledge", "loom"]
+            .iter()
+            .map(|d| workspace.join(d))
+            .chain(index_dirs.iter().map(|d| workspace.join(d)))
+        {
+            let dir: PathBuf = dir.components().collect();
+            if !watched.contains(&dir) {
+                watched.push(dir);
+            }
         }
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -195,28 +206,35 @@ impl Memory {
         })
     }
 
-    /// Every atomic note under the watched dirs, parsed live.
-    fn notes(&self) -> Vec<NoteInfo> {
-        let mut out = Vec::new();
+    /// Every watched file, read once, deduplicated by path (watched
+    /// dirs may nest, e.g. `index_dirs: ["."]` plus `knowledge/`).
+    fn watched_files(&self) -> Vec<(String, String, String)> {
+        let mut out: Vec<(String, String, String)> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = Default::default();
         for dir in &self.watched {
             let mut files: Vec<(String, String, String)> = Vec::new();
             let _ = collect_files(dir, &mut files);
-            for (path, _, text) in files {
-                if let Some(info) = parse_note(Path::new(&path), &text) {
-                    out.push(info);
+            for file in files {
+                if seen.insert(file.0.clone()) {
+                    out.push(file);
                 }
             }
         }
         out
     }
 
+    /// Every atomic note under the watched dirs, parsed live.
+    fn notes(&self) -> Vec<NoteInfo> {
+        self.watched_files()
+            .into_iter()
+            .filter_map(|(path, _, text)| parse_note(Path::new(&path), &text))
+            .collect()
+    }
+
     /// One sweep: hash every watched file, (re)index changes, remove
     /// vectors for deleted files. Returns (indexed, removed).
     pub async fn sweep(&self) -> anyhow::Result<(usize, usize)> {
-        let mut on_disk: Vec<(String, String, String)> = Vec::new(); // path, hash, text
-        for dir in &self.watched {
-            collect_files(dir, &mut on_disk)?;
-        }
+        let on_disk = self.watched_files(); // path, hash, text
 
         let known: Vec<(String, String)> = {
             let db = self.db.lock().expect("db lock");
@@ -1265,6 +1283,42 @@ pub mod tests {
         .unwrap();
         let (indexed, _) = mem_floor.sweep().await.unwrap();
         assert_eq!(indexed, 0, "skipped, not fatal");
+    }
+
+    #[tokio::test]
+    async fn loom_is_always_watched_and_nested_dirs_do_not_double_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        std::fs::create_dir_all(ws.join("knowledge")).unwrap();
+        std::fs::create_dir_all(ws.join("loom")).unwrap();
+        std::fs::write(ws.join("loom/telling.md"), "the loom holds the telling").unwrap();
+        std::fs::write(ws.join("knowledge/k.md"), "a claim about herons").unwrap();
+
+        // No index_dirs at all: loom/ is watched by default.
+        let mem = Memory::open(&dir.path().join("data"), &ws, &[], Arc::new(FakeEmbedder)).unwrap();
+        let (indexed, _) = mem.sweep().await.unwrap();
+        assert_eq!(indexed, 2, "loom note indexed without config");
+        mem.on_read(&ws.join("loom/telling.md")).unwrap();
+        assert!(
+            mem.activation(&ws.join("loom/telling.md").display().to_string())
+                .unwrap()
+                .is_some(),
+            "loom reads bump"
+        );
+
+        // index_dirs ["."]: nested watch never indexes a file twice,
+        // and no path carries a `.` component.
+        let mem2 = Memory::open(
+            &dir.path().join("data2"),
+            &ws,
+            &[".".to_string()],
+            Arc::new(FakeEmbedder),
+        )
+        .unwrap();
+        let (indexed, _) = mem2.sweep().await.unwrap();
+        assert_eq!(indexed, 2, "each file indexed exactly once");
+        let hits = mem2.search("heron claim").await.unwrap();
+        assert!(hits.iter().all(|h| !h.file_path.contains("/./")), "{hits:?}");
     }
 
     #[tokio::test]
