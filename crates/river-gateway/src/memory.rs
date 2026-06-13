@@ -52,6 +52,33 @@ pub struct Flash {
     pub neighbors: Vec<(String, String)>, // (link type, neighbor text)
 }
 
+/// GET /graph payload (board card): the activation graph as JSON.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphPayload {
+    pub flash_threshold: f64,
+    pub flash_dirs: Vec<String>,
+    pub nodes: Vec<GraphNode>,
+    pub links: Vec<GraphLink>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphNode {
+    pub id: String,
+    /// Workspace-relative where possible.
+    pub path: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphLink {
+    pub source: String,
+    pub target: String,
+    #[serde(rename = "type")]
+    pub link_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
+}
+
 type EmbedFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<Vec<Vec<f32>>>> + Send + 'a>>;
 
 /// The embedding seam: real client or test fake.
@@ -644,6 +671,97 @@ impl Memory {
             rusqlite::params![note_id, new, now()],
         )?;
         Ok(())
+    }
+
+    /// The whole graph, made visible (board card: GET /graph): every
+    /// indexed note (cold included, score 0), typed + wiki edges with
+    /// dangling targets dropped, semantic edges above the configured
+    /// threshold. Read-only — a window, never a hand.
+    pub fn graph(&self) -> anyhow::Result<GraphPayload> {
+        let notes = self.notes();
+        let resolver = Resolver::build(&notes);
+        let scores: std::collections::HashMap<String, f64> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare("SELECT note_id, score FROM activation")?;
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+
+        let relative = |path: &Path| {
+            path.strip_prefix(&self.workspace)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        };
+        let nodes: Vec<GraphNode> = notes
+            .iter()
+            .map(|n| GraphNode {
+                id: n.id.clone(),
+                path: relative(&n.path),
+                score: scores.get(&n.id).copied().unwrap_or(0.0),
+            })
+            .collect();
+
+        let mut links: Vec<GraphLink> = Vec::new();
+        for note in &notes {
+            for (link_type, target) in &note.links {
+                let Some(target) = resolver.resolve(target) else {
+                    continue;
+                };
+                if target == note.id {
+                    continue;
+                }
+                let link = GraphLink {
+                    source: note.id.clone(),
+                    target,
+                    link_type: link_type.clone(),
+                    similarity: None,
+                };
+                if !links.iter().any(|l| {
+                    l.source == link.source && l.target == link.target && l.link_type == link.link_type
+                }) {
+                    links.push(link);
+                }
+            }
+        }
+
+        // Semantic edges: per node, its top-k embedding neighbors
+        // above the threshold, deduped by unordered pair.
+        let vectors = self.file_vectors()?;
+        let id_of_path: std::collections::HashMap<String, &str> = notes
+            .iter()
+            .map(|n| (n.path.display().to_string(), n.id.as_str()))
+            .collect();
+        for (path, vec) in &vectors {
+            let Some(&source) = id_of_path.get(path) else { continue };
+            let mut scored: Vec<(&str, f32)> = vectors
+                .iter()
+                .filter(|(p, _)| p != path)
+                .filter_map(|(p, v)| id_of_path.get(p).map(|id| (*id, cosine(vec, v))))
+                .filter(|(_, s)| *s >= self.knobs.semantic_threshold)
+                .collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+            for (target, similarity) in scored.into_iter().take(self.knobs.semantic_top_k) {
+                let (a, b) = if source <= target { (source, target) } else { (target, source) };
+                if !links.iter().any(|l| {
+                    l.link_type == "semantic" && l.source == a && l.target == b
+                }) {
+                    links.push(GraphLink {
+                        source: a.to_string(),
+                        target: b.to_string(),
+                        link_type: "semantic".to_string(),
+                        similarity: Some(similarity),
+                    });
+                }
+            }
+        }
+
+        Ok(GraphPayload {
+            flash_threshold: self.knobs.flash_threshold,
+            flash_dirs: self.knobs.flash_dirs.clone(),
+            nodes,
+            links,
+        })
     }
 
     /// The flash directory filter (board card): when `flash_dirs` is
@@ -1690,6 +1808,57 @@ pub mod tests {
         mem.bump(&loom_id, 1.2, Carrier::Ambient).unwrap();
         assert!(mem.take_flashes().is_empty(), "filtered: cannot surface");
         assert_eq!(mem.activation(&loom_id).unwrap(), Some(1.2), "not halved");
+    }
+
+    #[tokio::test]
+    async fn graph_payload_has_cold_nodes_typed_wiki_and_semantic_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[("extends", "NB")], "the heron waits in shallow water");
+        write_note(&k, "b.md", "NB", &[], "claim citing [[NC]] in passing");
+        write_note(&k, "c.md", "NC", &[], "the heron waited by shallow water");
+        mem.sweep().await.unwrap();
+        mem.bump("NA", 0.5, Carrier::Cognitive).unwrap();
+
+        let graph = mem.graph().unwrap();
+        assert_eq!(graph.flash_threshold, 1.0);
+        assert_eq!(graph.nodes.len(), 3, "cold nodes included");
+        let nc = graph.nodes.iter().find(|n| n.id == "NC").unwrap();
+        assert_eq!(nc.path, "knowledge/c.md", "workspace-relative");
+        let na = graph.nodes.iter().find(|n| n.id == "NA").unwrap();
+        assert!(na.score > 0.0);
+
+        assert!(graph.links.iter().any(|l| l.link_type == "extends"
+            && l.source == "NA"
+            && l.target == "NB"));
+        assert!(graph.links.iter().any(|l| l.link_type == "wiki"
+            && l.source == "NB"
+            && l.target == "NC"));
+        let semantic: Vec<_> = graph
+            .links
+            .iter()
+            .filter(|l| l.link_type == "semantic")
+            .collect();
+        assert!(
+            semantic.iter().any(|l| {
+                let pair = (l.source.as_str(), l.target.as_str());
+                pair == ("NA", "NC") || pair == ("NC", "NA")
+            }),
+            "near-identical bodies share a semantic edge: {semantic:?}"
+        );
+        for l in &semantic {
+            assert!(l.similarity.unwrap() >= 0.65);
+        }
+        // Deduped by unordered pair.
+        let mut pairs: Vec<(String, String)> = semantic
+            .iter()
+            .map(|l| (l.source.clone(), l.target.clone()))
+            .collect();
+        pairs.sort();
+        let before = pairs.len();
+        pairs.dedup();
+        assert_eq!(pairs.len(), before, "no duplicate semantic edges");
     }
 
     #[tokio::test]

@@ -308,3 +308,22 @@ flash, no halve — warmth and conduction untouched). Ch. 02 contracts
 amended from constants to defaults. Segmentation caps, the decay
 interval, and flash body caps stay code constants — mechanics, not
 dynamics.
+
+## 2026-06-12 — the instrument panel: /graph, /graph/view, /context, /context/view
+
+All four read-only routes built on the local surface (wall ch. 06
+amended). GET /graph walks the live workspace (cold nodes at score 0,
+typed + wiki edges with dangling targets dropped, semantic edges =
+per-node top-k cosine above the configured threshold, deduped by
+unordered pair) and runs on a blocking thread. GET /context serves a
+ContextSnapshot the turn loop publishes at every settle — per-layer
+token estimates, hot turn range, slot contents, calibration ratio; a
+turn that never settles never updates the window, which is honest.
+The view pages are single self-contained HTML files served from
+strings compiled into the binary (d3-force v3 + deps vendored inline,
+~18KB, MIT). Flash detection in the graph view is inferred
+client-side from a steep score drop near the threshold — cosmetic
+only, the engine exposes no flash event on this surface. Verified:
+endpoints integration-tested over real HTTP; the vendored d3 bundle
+evaluates and ticks headless; both app scripts parse. Not yet
+verified: the pages rendered in a real browser against a live agent.

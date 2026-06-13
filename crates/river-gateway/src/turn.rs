@@ -73,6 +73,9 @@ pub struct TurnLoop<C: Chat> {
     notifications: mpsc::Receiver<Notification>,
     outbound: broadcast::Sender<OutboundMessage>,
     health: watch::Sender<Health>,
+    /// The live window for GET /context: published at settle, read by
+    /// the local surface. A window, never a hand.
+    snapshot: watch::Sender<crate::context::ContextSnapshot>,
     /// The latest settled turn — the witness's wake signal. Sent only
     /// after the turn's lines are durably in the record
     /// (persist-before-announce, wall ch. 01).
@@ -112,6 +115,7 @@ impl<C: Chat> TurnLoop<C> {
         notifications: mpsc::Receiver<Notification>,
         outbound: broadcast::Sender<OutboundMessage>,
         health: watch::Sender<Health>,
+        snapshot: watch::Sender<crate::context::ContextSnapshot>,
         settled: watch::Sender<u64>,
         heartbeat: Duration,
         registry: Registry,
@@ -142,6 +146,7 @@ impl<C: Chat> TurnLoop<C> {
             notifications,
             outbound,
             health,
+            snapshot,
             settled,
             heartbeat,
             registry,
@@ -488,6 +493,7 @@ impl<C: Chat> TurnLoop<C> {
                 .and_then(|m| m.queue_depth().ok())
                 .unwrap_or(0),
         });
+        let _ = self.snapshot.send(self.context.snapshot(n));
         let _ = self.working.send(None);
         // Persist-before-announce: every append above fsynced inline,
         // so the record already holds the whole turn.
@@ -639,6 +645,7 @@ mod tests {
         notify_rx_drained: mpsc::Receiver<Notification>,
         outbound: broadcast::Receiver<OutboundMessage>,
         health: watch::Receiver<Health>,
+        snapshot: watch::Receiver<crate::context::ContextSnapshot>,
     }
 
     fn harness(dir: &Path, model: Arc<FakeModel>) -> Harness {
@@ -647,6 +654,8 @@ mod tests {
         let channels = Channels::open(dir, notify_tx).unwrap();
         let (outbound_tx, outbound_rx) = broadcast::channel(64);
         let (health_tx, health_rx) = watch::channel(Health::default());
+        let (snapshot_tx, snapshot_rx) =
+            watch::channel(crate::context::ContextSnapshot::default());
         let (settled_tx, _settled_rx) = watch::channel(0u64);
         let turn_loop = TurnLoop::new(
             dir.to_path_buf(),
@@ -657,6 +666,7 @@ mod tests {
             notify_rx,
             outbound_tx,
             health_tx,
+            snapshot_tx,
             settled_tx,
             Duration::from_secs(3600),
             Registry::core(),
@@ -675,6 +685,7 @@ mod tests {
             notify_rx_drained: mpsc::channel(1).1,
             outbound: outbound_rx,
             health: health_rx,
+            snapshot: snapshot_rx,
         }
     }
 
@@ -732,6 +743,15 @@ mod tests {
         assert!(seen[0].0.contains("i am a test agent"));
         assert_eq!(seen.len(), 2, "tool iteration then final");
         assert_eq!(h.health.borrow().turn_number, 1);
+
+        // The context snapshot published at settle (GET /context).
+        let snap = h.snapshot.borrow().clone();
+        assert_eq!(snap.turn_number, 1);
+        assert_eq!(snap.channel, DEFAULT_CHANNEL);
+        assert!(snap.hot_messages >= 4);
+        assert_eq!(snap.hot_first_turn, Some(1));
+        assert!(snap.system_tokens > 0.0);
+        assert!(snap.estimate_total > 0.0);
     }
 
     #[tokio::test]

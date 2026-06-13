@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>river — context window</title>
+<style>
+  html, body { margin: 0; background: #10141a; color: #cdd6e0;
+               font: 13px/1.5 ui-monospace, "JetBrains Mono", monospace; }
+  main { max-width: 880px; margin: 28px auto; padding: 0 16px; }
+  h1 { font-size: 15px; color: #f0b35e; font-weight: 600; }
+  #bar { position: relative; height: 46px; background: #161c25; border: 1px solid #2a3442;
+         border-radius: 6px; overflow: hidden; margin: 14px 0 6px; }
+  #bar .layer { position: absolute; top: 0; bottom: 0; transition: left .6s ease, width .6s ease; }
+  #seg-system { background: #4a5d78; }
+  #seg-arc    { background: #3f7d6c; }
+  #seg-memory { background: #8a6db0; }
+  #seg-hot    { background: #c77b3f; }
+  #threshold  { position: absolute; top: -4px; bottom: -4px; width: 2px; background: #e05c5c; }
+  #threshold::after { content: "compaction"; position: absolute; top: -16px; left: -32px;
+                      font-size: 10px; color: #e05c5c; }
+  #scale { display: flex; justify-content: space-between; opacity: .6; font-size: 11px; }
+  #stats { margin-top: 18px; display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; }
+  #stats dt { color: #8b98a8; } #stats dd { margin: 0; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+  #slot { margin-top: 18px; }
+  #slot pre { background: #161c25; border: 1px solid #2a3442; border-radius: 6px;
+              padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+              max-height: 50vh; overflow: auto; }
+  #slot .empty { opacity: .5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>context window <span id="who" style="color:#8b98a8;font-weight:400"></span></h1>
+  <div id="bar">
+    <div class="layer" id="seg-system"></div>
+    <div class="layer" id="seg-arc"></div>
+    <div class="layer" id="seg-memory"></div>
+    <div class="layer" id="seg-hot"></div>
+    <div id="threshold"></div>
+  </div>
+  <div id="scale"><span>0</span><span id="limit"></span></div>
+  <dl id="stats">
+    <dt><span class="sw" style="background:#4a5d78"></span>system</dt><dd id="s-system"></dd>
+    <dt><span class="sw" style="background:#3f7d6c"></span>arc</dt><dd id="s-arc"></dd>
+    <dt><span class="sw" style="background:#8a6db0"></span>memory slot</dt><dd id="s-memory"></dd>
+    <dt><span class="sw" style="background:#c77b3f"></span>hot</dt><dd id="s-hot"></dd>
+    <dt>total estimate</dt><dd id="s-total"></dd>
+    <dt>calibration ratio</dt><dd id="s-ratio"></dd>
+    <dt>floor (min_messages)</dt><dd id="s-floor"></dd>
+  </dl>
+  <div id="slot"><h1>memory slot</h1><pre id="slot-text" class="empty">empty</pre></div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString();
+
+async function poll() {
+  try {
+    const c = await (await fetch("/context")).json();
+    if (!c.limit) { $("who").textContent = "— no turn settled yet"; return; }
+    $("who").textContent = `— turn ${c.turn_number}, ${c.channel}`;
+    $("limit").textContent = fmt(c.limit) + " tokens";
+    $("threshold").style.left = (c.compaction_threshold * 100) + "%";
+
+    const pct = t => Math.max(t / c.limit * 100, 0);
+    let left = 0;
+    for (const [seg, tokens] of [["system", c.system_tokens], ["arc", c.arc_tokens],
+                                 ["memory", c.memory_tokens], ["hot", c.hot_tokens]]) {
+      const el = $("seg-" + seg);
+      el.style.left = left + "%";
+      el.style.width = pct(tokens) + "%";
+      left += pct(tokens);
+    }
+
+    $("s-system").textContent = `${fmt(c.system_tokens)} tokens`;
+    $("s-arc").textContent = `${fmt(c.arc_tokens)} tokens · ${c.arc_moves} moves`;
+    $("s-memory").textContent = `${fmt(c.memory_tokens)} tokens`;
+    const range = c.hot_first_turn != null
+      ? ` · turns ${c.hot_first_turn}–${c.hot_last_turn}` : "";
+    $("s-hot").textContent = `${fmt(c.hot_tokens)} tokens · ${c.hot_messages} messages${range}`;
+    const totalPct = (c.estimate_total / c.limit * 100).toFixed(1);
+    $("s-total").textContent =
+      `${fmt(c.estimate_total)} / ${fmt(c.limit)} (${totalPct}%, compaction at ${c.compaction_threshold * 100}%)`;
+    $("s-ratio").textContent = c.calibration_ratio.toFixed(3);
+    $("s-floor").textContent = `${c.min_messages} messages after compaction`;
+
+    const slot = $("slot-text");
+    if (c.memory_slot && c.memory_slot.trim()) {
+      slot.textContent = c.memory_slot; slot.classList.remove("empty");
+    } else {
+      slot.textContent = "empty"; slot.classList.add("empty");
+    }
+  } catch (e) {
+    $("who").textContent = "— unavailable: " + e.message;
+  }
+}
+poll(); setInterval(poll, 5000);
+</script>
+</body>
+</html>

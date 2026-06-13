@@ -48,6 +48,30 @@ impl Estimator {
     }
 }
 
+/// One look at the assembled window (wall ch. 03 + the /context
+/// card): per-layer token estimates and slot contents, published by
+/// the turn loop at settle, served read-only by the local surface.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ContextSnapshot {
+    pub turn_number: u64,
+    pub channel: String,
+    pub limit: u64,
+    pub compaction_threshold: f64,
+    pub fill_target: f64,
+    pub min_messages: u64,
+    pub calibration_ratio: f64,
+    pub estimate_total: f64,
+    pub system_tokens: f64,
+    pub arc_tokens: f64,
+    pub arc_moves: usize,
+    pub memory_tokens: f64,
+    pub memory_slot: String,
+    pub hot_tokens: f64,
+    pub hot_messages: usize,
+    pub hot_first_turn: Option<u64>,
+    pub hot_last_turn: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct HotEntry {
     pub turn: u64,
@@ -298,19 +322,62 @@ impl PersistentContext {
         (system, list)
     }
 
+    fn arc_string(&self) -> String {
+        if self.arc.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("\n\n[Conversation arc]\n");
+        for move_line in &self.arc {
+            out.push_str(&format!("turn {}: {}\n", move_line.turn, move_line.summary));
+        }
+        out
+    }
+
+    fn memory_string(&self) -> String {
+        if self.memory_slot.is_empty() {
+            return String::new();
+        }
+        format!("\n\n[Memory]\n{}", self.memory_slot)
+    }
+
     fn system_string(&self) -> String {
-        let mut system = self.system_prompt.clone();
-        if !self.arc.is_empty() {
-            system.push_str("\n\n[Conversation arc]\n");
-            for move_line in &self.arc {
-                system.push_str(&format!("turn {}: {}\n", move_line.turn, move_line.summary));
-            }
+        format!("{}{}{}", self.system_prompt, self.arc_string(), self.memory_string())
+    }
+
+    /// The live window, made visible (board card: GET /context).
+    /// Read-only — a snapshot of the assembly as it stands, never a
+    /// hand on it.
+    pub fn snapshot(&self, turn_number: u64) -> ContextSnapshot {
+        let hot_tokens: f64 = self
+            .hot
+            .iter()
+            .map(|e| {
+                self.estimator.estimate(&e.content)
+                    + e.tool_calls
+                        .iter()
+                        .map(|c| self.estimator.estimate(&c.arguments))
+                        .sum::<f64>()
+            })
+            .sum();
+        ContextSnapshot {
+            turn_number,
+            channel: self.channel.clone(),
+            limit: self.knobs.limit,
+            compaction_threshold: self.knobs.compaction_threshold,
+            fill_target: self.knobs.fill_target,
+            min_messages: self.knobs.min_messages,
+            calibration_ratio: self.estimator.ratio(),
+            estimate_total: self.estimate_total(),
+            system_tokens: self.estimator.estimate(&self.system_prompt),
+            arc_tokens: self.estimator.estimate(&self.arc_string()),
+            arc_moves: self.arc.len(),
+            memory_tokens: self.estimator.estimate(&self.memory_string()),
+            memory_slot: self.memory_slot.clone(),
+            hot_tokens,
+            hot_messages: self.hot.len(),
+            hot_first_turn: self.hot.first().map(|e| e.turn),
+            hot_last_turn: self.hot.last().map(|e| e.turn),
         }
-        if !self.memory_slot.is_empty() {
-            system.push_str("\n\n[Memory]\n");
-            system.push_str(&self.memory_slot);
-        }
-        system
     }
 
     /// Content plus tool-call payloads (wall ch. 03).

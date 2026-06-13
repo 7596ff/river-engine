@@ -174,6 +174,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
     let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
     let (health_tx, health_rx) = tokio::sync::watch::channel(turn::Health::default());
+    let (snapshot_tx, snapshot_rx) =
+        tokio::sync::watch::channel(context::ContextSnapshot::default());
     let last_settled = record::last_turn(&agent.workspace.join("record").join("turns.jsonl"))?;
     let (settled_tx, settled_rx) = tokio::sync::watch::channel(last_settled);
 
@@ -218,6 +220,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         notify_rx,
         outbound_tx.clone(),
         health_tx,
+        snapshot_tx,
         settled_tx,
         std::time::Duration::from_secs(agent.heartbeat_minutes * 60),
         tools::Registry::core(),
@@ -272,6 +275,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
                 channels.clone(),
                 outbound_tx,
                 health_rx,
+                mem.clone(),
+                snapshot_rx,
                 shutdown_rx.clone(),
             ));
         }

@@ -76,6 +76,19 @@ HTTP + WebSocket server bound to localhost.
 - `GET /health`: liveness and basic state — written by the live turn
   loop (current turn number, last settle time, context usage). Health
   data that is not produced by the live path must not exist.
+- `GET /graph` + `GET /graph/view`: the activation graph as read-only
+  JSON (all indexed notes, cold included; activation scores; typed,
+  wiki, and semantic edges; the flash threshold) and a single
+  self-contained HTML page rendering it (vendored d3-force, no build
+  step; color = warmth, size = score, halo near the flash threshold,
+  typed solid / semantic dashed, 5s poll, click for detail).
+- `GET /context` + `GET /context/view`: the live context window as
+  read-only JSON (per-layer token estimates — system, arc, memory
+  slot, hot — turn range, slot contents, estimate vs limit,
+  calibration ratio), published by the turn loop at settle, and a
+  page drawing the window as a stacked bar against the compaction
+  line. **Strictly windows, never hands**: nothing on these routes
+  mutates state.
 
 The **TUI client** is a separate small binary: a terminal chat window
 (message log, status bar, input line) speaking the WebSocket protocol.
