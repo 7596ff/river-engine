@@ -85,6 +85,20 @@ Gleaning is the anti-enclosure right made operational (ch. 02). The
 witness's retrospective distance is the point: it sees what the agent
 walked past *because* it was not the one walking.
 
+The witness does not glean over its own gleanings. Digestion turns
+(ch. 02) — the system frames carrying a candidate plus the agent's
+response to it — are excluded from the glean window, and the dice are
+not rolled when the wake turn is itself a digestion. Without this
+filter the witness extracts knowledge claims about the machinery of
+digestion, which the next quiet trigger fires as a digestion, which
+the witness extracts a more-abstract claim about, and so on; the
+abstraction climbs without bound. A digestion turn carries no
+world-information — its only inbound is a prior gleaning — so it is
+not material for compression. The quiet gate on the agent side resets
+on every digestion for the same reason: the queue must not collapse
+into a sequence of back-to-back digestions the moment the silence
+threshold is first crossed.
+
 ## Contracts
 
 - **Two duties only.** Moves and gleaning. The witness writes to the
@@ -113,5 +127,10 @@ walked past *because* it was not the one walking.
   line) regenerates on the next settled turn.
 - **Glean cadence.** Flat per-turn probability (default 0.25,
   configurable) + guaranteed end-of-session pass.
+- **No gleaning over digestion.** Digestion turns are skipped by the
+  dice and stripped from the glean window. The witness never compresses
+  the machinery of its own past compressions. The quiet gate on the
+  agent side resets on every digestion, so candidates wait a full quiet
+  interval between firings regardless of queue depth.
 - **Second person.** The shipped identity seed writes the witness as
   "you"; the voice is part of the design, not a style preference.

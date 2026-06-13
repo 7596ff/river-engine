@@ -24,6 +24,7 @@ use tokio::sync::watch;
 
 use crate::model::{Chat, ChatMessage};
 use crate::record::{self, MovesFile, RecordLine, RecordRole};
+use crate::turn::DIGESTION_MARKER;
 
 pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
 const GLEAN_WINDOW_TURNS: u64 = 6;
@@ -171,11 +172,33 @@ impl<C: Chat> Witness<C> {
         };
 
         let from_turn = up_to_turn.saturating_sub(GLEAN_WINDOW_TURNS) + 1;
-        let lines: Vec<RecordLine> =
+        let all_lines: Vec<RecordLine> =
             record::scan(&self.workspace.join("record").join("turns.jsonl"))?
                 .into_iter()
                 .filter(|l| l.turn >= from_turn && l.turn <= up_to_turn)
                 .collect();
+        if all_lines.is_empty() {
+            return Ok(());
+        }
+
+        // A digestion turn carries no world-information — its only
+        // inbound is the witness's own prior gleaning, framed by the
+        // engine. Gleaning over it produces candidates about the
+        // machinery of digestion, which the next quiet trigger then
+        // re-digests; the abstraction climbs without bound. Skip the
+        // dice roll entirely when the wake turn is a digestion, and
+        // strip digestion turns from the window otherwise.
+        if is_digestion_turn(&all_lines, up_to_turn) {
+            tracing::debug!(turn = up_to_turn, "glean: skipped (digestion turn)");
+            return Ok(());
+        }
+        let digestion_turns: std::collections::HashSet<u64> = (from_turn..=up_to_turn)
+            .filter(|t| is_digestion_turn(&all_lines, *t))
+            .collect();
+        let lines: Vec<RecordLine> = all_lines
+            .into_iter()
+            .filter(|l| !digestion_turns.contains(&l.turn))
+            .collect();
         if lines.is_empty() {
             return Ok(());
         }
@@ -248,6 +271,32 @@ impl<C: Chat> Witness<C> {
         tracing::debug!(turn, "move written");
         Ok(())
     }
+}
+
+/// A turn is digestion-driven iff its inbound (non-Assistant,
+/// non-Tool) lines are all System frames marked with
+/// [`DIGESTION_MARKER`]. Conservative: any non-marked inbound line
+/// disqualifies the turn, so a hybrid turn (digestion candidate plus
+/// a mid-turn arrival or compaction warning) is not skipped.
+fn is_digestion_turn(lines: &[RecordLine], turn: u64) -> bool {
+    let mut saw_marker = false;
+    for line in lines.iter().filter(|l| l.turn == turn) {
+        match line.role {
+            RecordRole::User => return false,
+            RecordRole::System => {
+                let Some(content) = &line.content else { continue };
+                if content.starts_with(DIGESTION_MARKER) {
+                    saw_marker = true;
+                } else {
+                    // Other system frames (compaction warnings,
+                    // mid-turn arrival notices) mean real activity.
+                    return false;
+                }
+            }
+            RecordRole::Assistant | RecordRole::Tool => {}
+        }
+    }
+    saw_marker
 }
 
 /// The agent's own words are marked "you:" — the transcript carries
@@ -412,6 +461,22 @@ mod tests {
         }
     }
 
+    /// Shape of a digestion turn as written by `TurnLoop`: a System
+    /// frame with the [DIGESTION_MARKER] prefix carrying the
+    /// candidate, plus the agent's response.
+    fn record_digestion_turn(workspace: &Path, turn: u64, candidate: &str, reply: &str) {
+        let mut rec = TurnRecord::open(workspace).unwrap();
+        rec.append(
+            turn,
+            "local_main",
+            RecordRole::System,
+            Some(&format!("{DIGESTION_MARKER} ...framing...\n\n{candidate}")),
+        )
+        .unwrap();
+        rec.append(turn, "local_main", RecordRole::Assistant, Some(reply))
+            .unwrap();
+    }
+
     #[test]
     fn missing_identity_fails_naming_the_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -542,6 +607,100 @@ mod tests {
         assert_eq!(memory.queue_depth().unwrap(), 1);
         let candidate = memory.pop_candidate().unwrap().unwrap();
         assert!(candidate.contains("teal"), "{candidate}");
+    }
+
+    #[tokio::test]
+    async fn glean_skips_digestion_turn_without_calling_the_model() {
+        // The bug river reported: the witness gleans turn N, the
+        // candidate fires as digestion turn N+1, the witness then
+        // gleans turn N+1 — extracting knowledge about its own
+        // gleanings, with each pass climbing a rung of abstraction.
+        // Fix: digestion turns never see the dice. Verified by giving
+        // FakeModel zero replies — any call would panic.
+        let dir = tempfile::tempdir().unwrap();
+        seed_witness(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nGlean.",
+        )
+        .unwrap();
+
+        let memory = crate::memory::Memory::open(
+            &dir.path().join("data"),
+            dir.path(),
+            &[],
+            std::sync::Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap();
+
+        record_digestion_turn(
+            dir.path(),
+            1,
+            "candidate text",
+            "I reject this; it is machinery, not knowledge.",
+        );
+
+        let model = FakeModel::replying(vec![]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0).unwrap();
+        witness.glean(1).await.unwrap();
+
+        assert_eq!(memory.queue_depth().unwrap(), 0);
+        assert!(
+            model.prompts.lock().unwrap().is_empty(),
+            "model must not be called on a digestion turn",
+        );
+    }
+
+    #[tokio::test]
+    async fn glean_filters_digestion_turns_from_the_window() {
+        // A real turn surrounded by a digestion turn in the same
+        // window: the model's prompt must show the real turn and
+        // must not contain the digestion frame's content.
+        let dir = tempfile::tempdir().unwrap();
+        seed_witness(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nGlean.",
+        )
+        .unwrap();
+
+        let memory = crate::memory::Memory::open(
+            &dir.path().join("data"),
+            dir.path(),
+            &[],
+            std::sync::Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap();
+
+        record_turn(dir.path(), 1, "teal is my favorite", Some("noted"));
+        record_digestion_turn(
+            dir.path(),
+            2,
+            "POISONED_CANDIDATE_should_not_appear",
+            "rejecting; this is the digestion machinery",
+        );
+        record_turn(dir.path(), 3, "also: rosemary", Some("rosemary noted"));
+
+        let model = FakeModel::replying(vec![ok("rosemary and teal — cass's signals")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0).unwrap();
+        witness.glean(3).await.unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "model should be called once");
+        let user = &prompts[0].1;
+        assert!(user.contains("teal is my favorite"), "{user}");
+        assert!(user.contains("rosemary"), "{user}");
+        assert!(
+            !user.contains("POISONED_CANDIDATE_should_not_appear"),
+            "digestion content leaked into the glean window:\n{user}"
+        );
+        assert!(
+            !user.contains(DIGESTION_MARKER),
+            "digestion marker leaked into the glean window:\n{user}"
+        );
+        assert_eq!(memory.queue_depth().unwrap(), 1);
     }
 
     #[test]

@@ -60,6 +60,12 @@ enum Wake {
 const QUIET_TRIGGER: Duration = Duration::from_secs(300);
 /// How many turns a flash stays visible in the memory slot.
 const FLASH_VISIBLE_TURNS: u8 = 3;
+/// Marker prefix for the system framing of a digestion turn. Stable
+/// because the witness uses it to exclude digestion turns from its
+/// glean window (wall ch. 04) — without that filter, the witness
+/// gleans over its own gleanings and the abstraction climbs without
+/// bound.
+pub const DIGESTION_MARKER: &str = "[digestion]";
 
 pub struct TurnLoop<C: Chat> {
     workspace: PathBuf,
@@ -91,9 +97,12 @@ pub struct TurnLoop<C: Chat> {
     /// The channel a turn is currently working, for presence
     /// signals (discord typing); None between turns.
     working: watch::Sender<Option<String>>,
-    /// When the last inbound message arrived; the quiet trigger
-    /// measures from here and any inbound resets it.
-    last_inbound: std::time::Instant,
+    /// When the loop last did something meaningful — an inbound
+    /// notification *or* a completed digestion turn. The quiet gate
+    /// measures from here so digestions cannot fire back-to-back over
+    /// a queue the witness is itself filling. Heartbeats do not reset
+    /// it; they are internal scaffolding.
+    last_significant_at: std::time::Instant,
     /// In-memory read positions (channel → last consumed entry id).
     /// Authoritative within the process; the log cursor recovers the
     /// position across restarts. Without this, an agent entry written
@@ -157,7 +166,7 @@ impl<C: Chat> TurnLoop<C> {
             reindex,
             discord,
             working,
-            last_inbound: std::time::Instant::now(),
+            last_significant_at: std::time::Instant::now(),
             positions: HashMap::new(),
             active_flashes: Vec::new(),
         })
@@ -198,7 +207,7 @@ impl<C: Chat> TurnLoop<C> {
             // gain one (then recompute). Never polls.
             let quiet_in: Option<Duration> = match &self.memory {
                 Some(memory) if memory.queue_depth().unwrap_or(0) > 0 => {
-                    Some(QUIET_TRIGGER.saturating_sub(self.last_inbound.elapsed()))
+                    Some(QUIET_TRIGGER.saturating_sub(self.last_significant_at.elapsed()))
                 }
                 Some(_) => None, // armed on queue_wait below
                 None => None,
@@ -302,7 +311,7 @@ impl<C: Chat> TurnLoop<C> {
                     }
                 }
 
-                self.last_inbound = std::time::Instant::now();
+                self.last_significant_at = std::time::Instant::now();
                 // Channel switch, deferred to turn start (wall ch. 03):
                 // the first notified channel is where attention goes.
                 if notified[0] != self.context.channel() {
@@ -333,13 +342,21 @@ impl<C: Chat> TurnLoop<C> {
                 self.append(n, RecordRole::User, HEARTBEAT_MARKER)?;
             }
             Wake::Digestion(candidate) => {
+                // A digestion turn is itself activity. Reset the
+                // quiet gate so the next candidate waits a full
+                // QUIET_TRIGGER before firing, regardless of queue
+                // depth — the witness may be queueing in real time,
+                // and without this reset every queued candidate would
+                // fire back-to-back the moment `last_significant_at`
+                // first crossed the threshold (river's bug report).
+                self.last_significant_at = std::time::Instant::now();
                 // System role, not user: the framing is the harness
                 // speaking. A candidate is the agent's own past — as a
                 // user message, conversational candidates read as
                 // someone talking *now*, and the agent answers people
                 // who are not there.
                 let framing = format!(
-                    "[digestion] A quiet moment. Your witness gleaned this from your \
+                    "{DIGESTION_MARKER} A quiet moment. Your witness gleaned this from your \
                      recent activity — it is your own memory passing through \
                      digestion, not a message from anyone. No one has spoken; no one \
                      is waiting on a reply.\n\n\
@@ -427,7 +444,7 @@ impl<C: Chat> TurnLoop<C> {
             }
             if !arrived.is_empty() {
                 // Inbound resets the quiet timer from zero (wall ch. 01).
-                self.last_inbound = std::time::Instant::now();
+                self.last_significant_at = std::time::Instant::now();
                 let mut notice = String::from("[arrived mid-turn]");
                 let mut anything_new = false;
                 for channel in &arrived {
@@ -873,6 +890,31 @@ mod tests {
             "the framing is the harness speaking, not a person"
         );
         assert_eq!(h.health.borrow().turn_number, 1, "a real turn, settled");
+    }
+
+    #[tokio::test]
+    async fn digestion_resets_the_quiet_gate() {
+        // River's bug: once `last_significant_at` first crossed
+        // QUIET_TRIGGER, every queued candidate fired back-to-back —
+        // because the gate only reset on inbound, not on digestion.
+        // After a digestion turn, the gate must read fresh.
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![done("rejected")]);
+        let mut h = harness(dir.path(), model);
+
+        // Pretend a long silence has elapsed: the gate is fully open.
+        h.turn_loop.last_significant_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(1000);
+        h.turn_loop
+            .turn(Wake::Digestion("the agent kept circling teal".into()))
+            .await
+            .unwrap();
+
+        assert!(
+            h.turn_loop.last_significant_at.elapsed() < std::time::Duration::from_secs(5),
+            "digestion must reset the quiet gate so the next candidate \
+             waits a full QUIET_TRIGGER",
+        );
     }
 
     #[tokio::test]

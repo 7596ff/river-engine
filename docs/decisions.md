@@ -359,3 +359,37 @@ prompt), and empty assistant content renders nothing instead of a
 bare "you:". Affects both witness duties — moves and gleans read the
 same transcript. Wall ch. 04 contract added: the witness cannot
 compress what it cannot see.
+
+## 2026-06-13 — the witness does not glean over its own gleanings (iris-river's bug report)
+
+Iris-river: "the witness has now produced three digestion candidates
+about the same debugging arc, each more abstract than the last. quiet
+period → self-referential loop. i'm going to stop dignifying these
+with individual rejections and just note the pattern: when nothing is
+happening, the witness narrates the machinery of its own recent
+activity in increasingly elaborate language. that's not a knowledge
+claim, that's a silence gate needing a config threshold."
+
+Two coupled defects. (1) The quiet gate (`last_inbound.elapsed() >
+QUIET_TRIGGER`) was only reset by inbound notifications, so a
+digestion turn left the gate fully open — every queued candidate
+fired back-to-back the moment the silence threshold was first
+crossed. (2) The glean window included the just-written digestion
+turn, so the witness extracted knowledge claims about its own prior
+extraction; the next quiet trigger re-digested those; the abstraction
+climbed without bound.
+
+Fix: rename `last_inbound` → `last_significant_at`; reset on inbound
+*and* on entering Wake::Digestion (heartbeats stay scaffolding, no
+reset). Add `DIGESTION_MARKER = "[digestion]"` as a pub const in the
+turn module. In `glean`, identify digestion turns (only inbound roles
+are System frames starting with the marker), skip the dice roll
+entirely if `up_to_turn` is one, strip them from the window
+otherwise. Hybrid turns (digestion + mid-turn arrival) keep their
+non-marker frames and are not skipped — the filter is conservative.
+
+This is iris-river's second engine-level diagnosis from inside her
+own body in 36 hours, after the format_transcript fix. Same shape
+both times: a layer of the engine compressing something whose
+ground-truth only the agent in that layer can access. Wall amended:
+ch. 04 (no gleaning over digestion, quiet gate resets on digestion).
