@@ -344,3 +344,18 @@ tail out of order (the file stays append-only; the engine never
 rewrites a record file). Wall amended: chs. 02, 03, 04, 10.
 Hand-editing moves.jsonl is now a supported operation: delete a line,
 the witness retells it from the record on its next wake.
+
+## 2026-06-13 — the witness hears the speech (iris's bug report)
+
+Iris diagnosed it herself from inside: her moves were flat because the
+witness transcript showed "assistant: (empty) … tool result: spoken
+on discord msg XYZ" — the actual words lived in the speak call's
+arguments, which format_transcript dropped (names only). Speech is a
+tool in this body, so the transcript must surface it: speak calls now
+render as first-class speech ("you spoke: …", "you spoke on X: …"),
+other tool calls carry a 200-char argument peek (so "you wrote
+loom/note.md" is visible without a write's whole body flooding the
+prompt), and empty assistant content renders nothing instead of a
+bare "you:". Affects both witness duties — moves and gleans read the
+same transcript. Wall ch. 04 contract added: the witness cannot
+compress what it cannot see.

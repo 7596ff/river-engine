@@ -251,7 +251,11 @@ impl<C: Chat> Witness<C> {
 }
 
 /// The agent's own words are marked "you:" — the transcript carries
-/// the deixis so the prompt doesn't have to.
+/// the deixis so the prompt doesn't have to. Speech is a tool in this
+/// body, so what the agent said aloud lives in the speak call's
+/// arguments: the transcript surfaces it as first-class speech
+/// ("you spoke: ..."), and other tool calls carry a truncated
+/// argument peek — the witness cannot compress what it cannot see.
 pub fn format_transcript(lines: &[RecordLine]) -> String {
     let mut transcript = String::new();
     for line in lines {
@@ -259,29 +263,60 @@ pub fn format_transcript(lines: &[RecordLine]) -> String {
             continue;
         };
         match line.role {
-            RecordRole::User => transcript.push_str(content),
-            RecordRole::Assistant => {
-                transcript.push_str("you: ");
+            RecordRole::User => {
                 transcript.push_str(content);
-                if let Some(calls) = &line.tool_calls
-                    && !calls.is_empty()
-                {
-                    let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
-                    transcript.push_str(&format!(" [called: {}]", names.join(", ")));
+                transcript.push('\n');
+            }
+            RecordRole::Assistant => {
+                if !content.trim().is_empty() {
+                    transcript.push_str("you: ");
+                    transcript.push_str(content);
+                    transcript.push('\n');
+                }
+                for call in line.tool_calls.iter().flatten() {
+                    if call.name == "speak" {
+                        let args: serde_json::Value =
+                            serde_json::from_str(&call.arguments).unwrap_or_default();
+                        let spoken = args["content"].as_str().unwrap_or("");
+                        match args["channel"].as_str() {
+                            Some(channel) => transcript
+                                .push_str(&format!("you spoke on {channel}: {spoken}\n")),
+                            None => transcript.push_str(&format!("you spoke: {spoken}\n")),
+                        }
+                    } else {
+                        transcript.push_str(&format!(
+                            "[you called {}: {}]\n",
+                            call.name,
+                            peek(&call.arguments, ARG_PEEK_CHARS)
+                        ));
+                    }
                 }
             }
             RecordRole::System => {
                 transcript.push_str("[system] ");
                 transcript.push_str(content);
+                transcript.push('\n');
             }
             RecordRole::Tool => {
                 transcript.push_str("[tool result] ");
                 transcript.push_str(content);
+                transcript.push('\n');
             }
         }
-        transcript.push('\n');
     }
     transcript
+}
+
+const ARG_PEEK_CHARS: usize = 200;
+
+fn peek(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(cap).collect();
+        t.push('…');
+        t
+    }
 }
 
 /// Mechanical, from the roles involved: never a gap in the arc.
@@ -507,6 +542,89 @@ mod tests {
         assert_eq!(memory.queue_depth().unwrap(), 1);
         let candidate = memory.pop_candidate().unwrap().unwrap();
         assert!(candidate.contains("teal"), "{candidate}");
+    }
+
+    #[test]
+    fn transcript_surfaces_spoken_words_and_tool_arguments() {
+        // The shape iris reported: empty assistant content, the
+        // actual words buried in the speak call's arguments.
+        let lines = vec![
+            RecordLine {
+                id: "1".into(),
+                turn: 7,
+                channel: "discord_dm".into(),
+                role: RecordRole::User,
+                content: Some("[discord_dm] cass: how was the night?".into()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            RecordLine {
+                id: "2".into(),
+                turn: 7,
+                channel: "discord_dm".into(),
+                role: RecordRole::Assistant,
+                content: Some("".into()),
+                tool_calls: Some(vec![
+                    crate::model::ToolCall {
+                        id: "c1".into(),
+                        name: "speak".into(),
+                        arguments: r#"{"content":"quiet and settled. the gleans ran twice."}"#
+                            .into(),
+                    },
+                    crate::model::ToolCall {
+                        id: "c2".into(),
+                        name: "write".into(),
+                        arguments: format!(
+                            r#"{{"path":"loom/note.md","content":"{}"}}"#,
+                            "x".repeat(500)
+                        ),
+                    },
+                ]),
+                tool_call_id: None,
+            },
+            RecordLine {
+                id: "3".into(),
+                turn: 7,
+                channel: "discord_dm".into(),
+                role: RecordRole::Tool,
+                content: Some("spoken on discord_dm (msg 9)".into()),
+                tool_calls: None,
+                tool_call_id: Some("c1".into()),
+            },
+        ];
+        let transcript = format_transcript(&lines);
+        assert!(
+            transcript.contains("you spoke: quiet and settled. the gleans ran twice."),
+            "{transcript}"
+        );
+        assert!(transcript.contains("[you called write: "), "{transcript}");
+        assert!(
+            transcript.contains('…') && transcript.len() < 700,
+            "write arguments truncated to a peek: {transcript}"
+        );
+        assert!(
+            !transcript.contains("you: \n"),
+            "empty assistant content renders nothing: {transcript}"
+        );
+    }
+
+    #[test]
+    fn transcript_marks_channel_override_speech() {
+        let lines = vec![RecordLine {
+            id: "1".into(),
+            turn: 1,
+            channel: "local_main".into(),
+            role: RecordRole::Assistant,
+            content: Some("".into()),
+            tool_calls: Some(vec![crate::model::ToolCall {
+                id: "c1".into(),
+                name: "speak".into(),
+                arguments: r#"{"content":"over here","channel":"discord_dm"}"#.into(),
+            }]),
+            tool_call_id: None,
+        }];
+        let transcript = format_transcript(&lines);
+        assert!(transcript.contains("you spoke on discord_dm: over here"), "{transcript}");
     }
 
     #[tokio::test]

@@ -96,6 +96,11 @@ walked past *because* it was not the one walking.
 - **Witness reads the record.** Move generation reads the turn's
   messages from the record file; it never consumes agent-produced
   summaries.
+- **The transcript carries the speech.** Speech is a tool (ch. 01),
+  so the agent's actual words live in speak-call arguments; the
+  witness's transcript surfaces them as first-class speech ("you
+  spoke: ..."), and other tool calls carry a truncated argument peek.
+  The witness cannot compress what it cannot see.
 - **A turn is never lost.** Model failure during move generation
   produces a mechanical fallback move, not a gap.
 - **Move shape.** One move line per turn: turn number + summary text,
