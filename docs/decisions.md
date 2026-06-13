@@ -327,3 +327,20 @@ only, the engine exposes no flash event on this surface. Verified:
 endpoints integration-tested over real HTTP; the vendored d3 bundle
 evaluates and ticks headless; both app scripts parse. Not yet
 verified: the pages rendered in a real browser against a live agent.
+
+## 2026-06-13 — moves regenerate: gap scan + frontier cursor (Cass's request)
+
+Cass hand-deleted badly-worded move lines expecting regeneration; the
+witness only ever looked forward from the tail. Fixed three ways, and
+the hand-edit exposed a real lossless-guarantee hole: with the cursor
+as the raw tail, the deleted (uncompressed) turns were still
+droppable by compaction. Now: (1) the witness scans the record for
+ANY turn ≤ latest-settled with no move line and regenerates in order
+— the record is the truth, moves are derived; (2) witness_cursor is
+the contiguous frontier (sort turns, walk to the first gap) — a
+deleted line instantly makes those turns undroppable until retold;
+(3) moves readers sort by turn, since backfilled moves append at the
+tail out of order (the file stays append-only; the engine never
+rewrites a record file). Wall amended: chs. 02, 03, 04, 10.
+Hand-editing moves.jsonl is now a supported operation: delete a line,
+the witness retells it from the record on its next wake.

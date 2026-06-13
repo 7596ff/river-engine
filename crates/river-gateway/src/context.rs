@@ -278,9 +278,12 @@ impl PersistentContext {
 
     /// Arc budget: moves newest-first until the fill target, then
     /// presented oldest-first. Old moves fall off here; they remain
-    /// in the record.
+    /// in the record. Sorted by turn, not file order — a backfilled
+    /// move (witness regenerating a hand-deleted line) appends at the
+    /// tail but belongs in its place in the arc.
     fn reload_arc(&mut self, workspace: &Path) -> anyhow::Result<()> {
-        let all = record::read_moves(&record::moves_path(workspace))?;
+        let mut all = record::read_moves(&record::moves_path(workspace))?;
+        all.sort_by_key(|m| m.turn);
         let budget = self.knobs.fill_target * self.knobs.limit as f64;
         let mut chosen: Vec<MoveLine> = Vec::new();
         let mut used = 0.0;
@@ -457,6 +460,27 @@ mod tests {
         assert!((est.ratio() - 1.3).abs() < 1e-9);
         est.calibrate(12, 0.0); // zero-skip
         assert!((est.ratio() - 1.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn arc_orders_by_turn_not_file_order() {
+        // A backfilled move (witness regenerating a hand-deleted
+        // line) appends at the tail; the arc reads oldest-to-newest
+        // regardless.
+        let dir = tempfile::tempdir().unwrap();
+        write_moves(dir.path(), &[(1, "first"), (3, "third"), (2, "second, retold")]);
+        let mut ctx = PersistentContext::build(
+            dir.path(),
+            "local_main",
+            "IDENTITY".into(),
+            small_knobs(),
+        )
+        .unwrap();
+        let (system, _) = ctx.messages();
+        let p1 = system.find("turn 1: first").unwrap();
+        let p2 = system.find("turn 2: second, retold").unwrap();
+        let p3 = system.find("turn 3: third").unwrap();
+        assert!(p1 < p2 && p2 < p3, "{system}");
     }
 
     #[test]

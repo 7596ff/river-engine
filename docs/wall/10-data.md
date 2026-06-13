@@ -69,10 +69,17 @@ stream, one line per turn:
 {"id":"01JXX...","turn":41,"summary":"Cassie asked about X; you answered from the notes and flagged an open question."}
 ```
 
-**The cursor is the tail.** The witness cursor — the highest turn
-compressed into a move — is the `turn` field of the last line of the
-moves file. Read the tail; no index, no query, no stored state.
-Compaction (ch. 03) and session start read it the same way.
+**The cursor is the contiguous frontier.** The witness cursor — the
+highest turn through which *every* turn has a move — is computed from
+the moves file's turn numbers: sort, walk from the first move until
+the first gap. A gapless file (the normal state) makes this the tail;
+no index, no query, no stored state. Compaction (ch. 03) and session
+start read it the same way. The frontier, not the raw tail, is what
+keeps the lossless guarantee honest against hand edits: deleting a
+move line makes those turns undroppable again until the witness
+regenerates them from the record, and a backfilled move appends at
+the tail out of turn order — readers of the moves file sort by turn,
+never trust file order.
 
 **Reading by turn** is a scan: session start and compaction backfill
 read `record/turns.jsonl` from the end, collecting whole turns that
@@ -144,8 +151,9 @@ These bind every component that touches the record or the database:
   engine. Corrections are new lines, history is history.
 - **Turn-atomicity:** all lines of a turn share its turn number; any
   consumer that drops or loads by turn does so for whole turns.
-- **The cursor is the tail.** Derived from the last line of the moves
-  file at need, never cached elsewhere.
+- **The cursor is the contiguous frontier.** Derived from the moves
+  file's turn numbers at need (the tail when gapless), never cached
+  elsewhere. Moves readers sort by turn, never trust file order.
 - **Single writer per file.** The agent task writes the turn record;
   the witness writes moves; adapter inbound writes channel logs (one
   writer task per file). The memory system alone writes the database.

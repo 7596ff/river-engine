@@ -100,8 +100,12 @@ walked past *because* it was not the one walking.
   produces a mechanical fallback move, not a gap.
 - **Move shape.** One move line per turn: turn number + summary text,
   appended to `record/moves.jsonl`. The cursor used by compaction is
-  the turn number on the file's last line — the tail, never stored
-  elsewhere.
+  the contiguous frontier of the file's turn numbers (ch. 10), never
+  stored elsewhere.
+- **The record is the truth; moves are derived.** On every wake the
+  witness scans for turns in the record with no move line — not just
+  forward from the tail — so a hand-edited moves file (a deleted
+  line) regenerates on the next settled turn.
 - **Glean cadence.** Flat per-turn probability (default 0.25,
   configurable) + guaranteed end-of-session pass.
 - **Second person.** The shipped identity seed writes the witness as

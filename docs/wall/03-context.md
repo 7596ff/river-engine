@@ -38,9 +38,10 @@ model call:
 
 1. Re-read the system prompt from disk (identity edits take effect here
    and at channel switches — never mid-stretch).
-2. Read the **witness cursor**: the turn number on the last line of the
-   moves file (ch. 10). If the witness has never run — no moves file,
-   or an empty one — the cursor is 0.
+2. Read the **witness cursor**: the contiguous compression frontier of
+   the moves file (ch. 10) — the tail when the file is gapless. If the
+   witness has never run — no moves file, or an empty one — the cursor
+   is 0.
 3. Drop all messages belonging to turns **at or below the cursor** —
    whole turns only, never a partial turn. These turns are represented
    in the arc; dropping them loses nothing.

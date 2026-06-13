@@ -30,8 +30,12 @@ as everything else. No part of the record lives in a database.
   compressions (ch. 04), appended one line per turn: a 1–2 sentence
   structural summary with its turn number. Moves are what make
   compaction lossless — a turn whose move exists can be dropped from
-  context without losing the arc. The witness cursor is simply the
-  turn number on the **last line** of the moves file.
+  context without losing the arc. The witness cursor is the
+  **contiguous compression frontier**: the highest turn such that
+  every turn from the file's first move through it has a move. For an
+  untouched file that is the tail; a hand-deleted line pulls the
+  cursor back to just before the gap, and the witness regenerates the
+  missing moves from the record.
 
 Compression stops at moves. There is no second summary layer: old moves
 fall out of the context's arc budget (ch. 03) but remain in the record,

@@ -163,8 +163,9 @@ impl MovesFile {
         Ok(Self { path, file })
     }
 
-    /// Append one move line and fsync. Appending turn N moves the
-    /// witness cursor to N — the cursor is the tail.
+    /// Append one move line and fsync. The file stays append-only
+    /// even when the witness backfills a gap, so regenerated moves
+    /// can land out of turn order — readers sort by turn.
     pub fn append(&mut self, turn: u64, summary: &str) -> anyhow::Result<String> {
         let line = MoveLine {
             id: ulid::Ulid::new().to_string(),
@@ -212,10 +213,27 @@ pub fn read_moves(path: &Path) -> anyhow::Result<Vec<MoveLine>> {
     Ok(moves)
 }
 
-/// The witness cursor: the turn number on the moves file's last line.
-/// No moves file, or an empty one — the cursor is 0 (wall ch. 03).
+/// The witness cursor: the highest turn T such that every turn from
+/// the file's first move through T has a move — the contiguous
+/// compression frontier (wall chs. 03, 04). For an untouched file
+/// this is the tail; a hand-deleted middle line pulls the cursor back
+/// to just before the gap, so compaction cannot drop the uncompressed
+/// turns and the witness regenerates them. No moves — the cursor is 0.
 pub fn witness_cursor(path: &Path) -> anyhow::Result<u64> {
-    Ok(read_moves(path)?.last().map(|m| m.turn).unwrap_or(0))
+    let mut turns: Vec<u64> = read_moves(path)?.iter().map(|m| m.turn).collect();
+    turns.sort_unstable();
+    turns.dedup();
+    let Some(&first) = turns.first() else {
+        return Ok(0);
+    };
+    let mut frontier = first;
+    for &turn in &turns[1..] {
+        if turn != frontier + 1 {
+            break;
+        }
+        frontier = turn;
+    }
+    Ok(frontier)
 }
 
 #[cfg(test)]
@@ -301,6 +319,26 @@ mod tests {
             .append(41, "local_main", RecordRole::User, Some("x"))
             .unwrap();
         assert_eq!(last_turn(record.path()).unwrap(), 41);
+    }
+
+    #[test]
+    fn witness_cursor_is_the_contiguous_frontier() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut moves = MovesFile::open(dir.path()).unwrap();
+        assert_eq!(witness_cursor(moves.path()).unwrap(), 0, "no moves");
+        for turn in [5u64, 6, 7] {
+            moves.append(turn, "m").unwrap();
+        }
+        assert_eq!(witness_cursor(moves.path()).unwrap(), 7, "contiguous: the tail");
+
+        // A gap (hand edit, or a backfill not yet done): the cursor
+        // stops before it, whatever the file order says.
+        moves.append(9, "m").unwrap();
+        assert_eq!(witness_cursor(moves.path()).unwrap(), 7, "gap at 8");
+
+        // The backfilled move closes the gap from the tail.
+        moves.append(8, "m").unwrap();
+        assert_eq!(witness_cursor(moves.path()).unwrap(), 9, "frontier recovered");
     }
 
     #[test]

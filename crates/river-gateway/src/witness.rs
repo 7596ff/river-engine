@@ -11,9 +11,11 @@
 //! never lost from the arc.
 //!
 //! The wake signal is the latest settled turn number; the witness
-//! processes every turn from its cursor + 1 up to it, in order. That
-//! makes it self-healing: missed signals, restarts, and downtime all
-//! recover by catch-up.
+//! scans the record for every turn up to it that has no move line and
+//! processes them in order. That makes it self-healing twice over:
+//! missed signals, restarts, and downtime recover by catch-up, and a
+//! hand-edited moves.jsonl (a deleted line) regenerates from the
+//! record — the record is the truth, the moves are derived.
 
 use std::path::{Path, PathBuf};
 
@@ -115,8 +117,7 @@ impl<C: Chat> Witness<C> {
         loop {
             if self.on_turn.is_some() {
                 let target = *latest_turn.borrow();
-                let cursor = record::witness_cursor(self.moves.path())?;
-                for turn in (cursor + 1)..=target {
+                for turn in self.missing_moves(target)? {
                     self.move_for(turn).await?;
                     // Flat-probability gleaning (wall ch. 04): the
                     // agent cannot predict which turns get gleaned.
@@ -139,6 +140,26 @@ impl<C: Chat> Witness<C> {
                 return Ok(());
             }
         }
+    }
+
+    /// The catch-up set: every turn present in the record up to
+    /// `target` with no move line. Normally the contiguous run after
+    /// the last move; after a hand edit of moves.jsonl it also holds
+    /// the holes, which regenerate from the record.
+    fn missing_moves(&self, target: u64) -> anyhow::Result<Vec<u64>> {
+        let have: std::collections::HashSet<u64> = record::read_moves(self.moves.path())?
+            .iter()
+            .map(|m| m.turn)
+            .collect();
+        let mut missing: Vec<u64> =
+            record::scan(&self.workspace.join("record").join("turns.jsonl"))?
+                .iter()
+                .map(|l| l.turn)
+                .filter(|t| *t <= target && !have.contains(t))
+                .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        Ok(missing)
     }
 
     /// Duty two (wall ch. 04): review the recent stretch and write
@@ -486,6 +507,68 @@ mod tests {
         assert_eq!(memory.queue_depth().unwrap(), 1);
         let candidate = memory.pop_candidate().unwrap().unwrap();
         assert!(candidate.contains("teal"), "{candidate}");
+    }
+
+    #[tokio::test]
+    async fn hand_deleted_moves_regenerate_from_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_witness(dir.path());
+        for turn in 1..=3 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+
+        // First pass: moves for all three turns.
+        let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
+        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let moves_path = witness.moves.path().to_path_buf();
+        let (latest_tx, latest_rx) = watch::channel(3u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        for _ in 0..100 {
+            if read_moves(&moves_path).unwrap().len() == 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        shutdown_tx.send(true).unwrap();
+        drop(latest_tx);
+        handle.await.unwrap().unwrap();
+
+        // Ground's hand edit: delete the middle move's line.
+        let text = std::fs::read_to_string(&moves_path).unwrap();
+        let kept: Vec<&str> = text.lines().filter(|l| !l.contains("move two")).collect();
+        std::fs::write(&moves_path, format!("{}\n", kept.join("\n"))).unwrap();
+        assert_eq!(
+            record::witness_cursor(&moves_path).unwrap(),
+            1,
+            "the cursor falls back to before the gap — turn 2 is undroppable again"
+        );
+
+        // Next wake: the gap regenerates from the record; new turns
+        // still process.
+        record_turn(dir.path(), 4, "q4", Some("a4"));
+        let model = FakeModel::replying(vec![ok("move two, retold"), ok("move four")]);
+        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let (latest_tx, latest_rx) = watch::channel(4u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        for _ in 0..100 {
+            if read_moves(&moves_path).unwrap().len() == 4 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        shutdown_tx.send(true).unwrap();
+        drop(latest_tx);
+        handle.await.unwrap().unwrap();
+
+        let moves = read_moves(&moves_path).unwrap();
+        let mut turns: Vec<u64> = moves.iter().map(|m| m.turn).collect();
+        turns.sort_unstable();
+        assert_eq!(turns, vec![1, 2, 3, 4], "no gaps, no duplicates");
+        let two = moves.iter().find(|m| m.turn == 2).unwrap();
+        assert_eq!(two.summary, "move two, retold");
+        assert_eq!(record::witness_cursor(&moves_path).unwrap(), 4, "frontier recovered");
     }
 
     #[tokio::test]
