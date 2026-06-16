@@ -281,13 +281,23 @@ impl PersistentContext {
     /// in the record. Sorted by turn, not file order — a backfilled
     /// move (witness regenerating a hand-deleted line) appends at the
     /// tail but belongs in its place in the arc.
+    ///
+    /// Moves whose turn is currently in hot are skipped: the full
+    /// turn at high resolution already represents it, and the
+    /// compressed summary would only duplicate. Skipping these frees
+    /// arc budget for older moves the model can't see any other way.
     fn reload_arc(&mut self, workspace: &Path) -> anyhow::Result<()> {
+        let hot_turns: std::collections::HashSet<u64> =
+            self.hot.iter().map(|e| e.turn).collect();
         let mut all = record::read_moves(&record::moves_path(workspace))?;
         all.sort_by_key(|m| m.turn);
         let budget = self.knobs.fill_target * self.knobs.limit as f64;
         let mut chosen: Vec<MoveLine> = Vec::new();
         let mut used = 0.0;
         for move_line in all.into_iter().rev() {
+            if hot_turns.contains(&move_line.turn) {
+                continue;
+            }
             let cost = self.estimator.estimate(&move_line.summary);
             if used + cost > budget && !chosen.is_empty() {
                 break;
@@ -587,6 +597,56 @@ mod tests {
         assert_eq!(ctx.len(), 4);
         let (_, list) = ctx.messages();
         assert!(list[0].content.ends_with('2'), "whole turns, in order");
+    }
+
+    #[test]
+    fn arc_skips_moves_for_turns_currently_in_hot() {
+        let dir = tempfile::tempdir().unwrap();
+        // Moves exist for turns 1..=4, but the build will pull whole
+        // turns 1..=4 into hot via backfill. The arc should not
+        // duplicate them as compressed summaries.
+        write_moves(
+            dir.path(),
+            &[(1, "m1"), (2, "m2"), (3, "m3"), (4, "m4")],
+        );
+        // Seed the record so backfill has whole turns to load.
+        let record_dir = dir.path().join("record");
+        std::fs::create_dir_all(&record_dir).unwrap();
+        let mut text = String::new();
+        for turn in 1..=4u64 {
+            text.push_str(&format!(
+                "{}\n",
+                serde_json::json!({
+                    "id": ulid::Ulid::new().to_string(),
+                    "turn": turn,
+                    "channel": "local_main",
+                    "role": "user",
+                    "content": format!("q{turn}")
+                })
+            ));
+        }
+        std::fs::write(record_dir.join("turns.jsonl"), text).unwrap();
+
+        let ctx = PersistentContext::build(
+            dir.path(),
+            "local_main",
+            "sys".into(),
+            ContextConfig {
+                min_messages: 10, // pull everything into hot
+                ..small_knobs()
+            },
+        )
+        .unwrap();
+        assert_eq!(ctx.len(), 4, "all four turns backfilled into hot");
+
+        // The arc must hold no moves whose turn is already in hot.
+        let assembled = ctx.system_string();
+        for n in 1..=4 {
+            assert!(
+                !assembled.contains(&format!("turn {n}: m{n}")),
+                "move for turn {n} duplicates the in-hot turn: {assembled}"
+            );
+        }
     }
 
     #[test]

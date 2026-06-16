@@ -459,3 +459,20 @@ Engine-internal entries (explicit-cursor markers, anything with
 between "never heard from" and "heard from but the window is empty"
 at the tool's edge. Full spec:
 `docs/superpowers/specs/2026-06-16-channel-read-tool-design.md`.
+
+## 2026-06-16 — arc dedupes against hot
+
+Compaction's backfill (wall ch. 03) can pull whole turns at-or-below
+the witness cursor into hot, while `reload_arc` independently loads
+moves for all compressed turns. Result: a turn could appear twice in
+context — once at full fidelity in hot, again as a one-line move in
+the arc.
+
+Decision: `reload_arc` skips moves whose `turn` is already in
+`self.hot`. The full turn at high resolution is the representation;
+the compressed summary would only duplicate. Skipping these frees
+the arc budget for older moves the model has no other way to see —
+exactly the moves the arc layer exists for. The wall amendment
+applies to both `build` (session start, channel switch) and
+`compact` (mid-life) since both end by reloading the arc after
+backfill.
