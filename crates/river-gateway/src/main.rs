@@ -202,6 +202,10 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
                 guild_id,
                 listen_names,
                 token,
+                max_attachment_bytes: agent.attachments.max_bytes,
+                download_timeout: std::time::Duration::from_secs(
+                    agent.attachments.download_timeout_secs,
+                ),
             };
             let (speak_tx, speak_rx) = tokio::sync::mpsc::channel(64);
             Some((settings, speak_tx, speak_rx))

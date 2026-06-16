@@ -82,6 +82,32 @@ pub struct AgentConfig {
     pub activation: ActivationConfig,
     #[serde(default)]
     pub adapters: Vec<AdapterConfig>,
+    /// Attachment knobs. Optional; the defaults here are v1's values.
+    #[serde(default)]
+    pub attachments: AttachmentsConfig,
+}
+
+/// Attachment-handling knobs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AttachmentsConfig {
+    /// Per-file cap on inbound downloads. Over-cap files append with
+    /// `path: null, skipped: too_large` so the agent learns they
+    /// existed without storing them. Default: 25 MiB (Discord's
+    /// free-tier upload ceiling).
+    pub max_bytes: u64,
+    /// Per-download HTTP timeout. One in-process retry is attempted
+    /// before a failure is accepted.
+    pub download_timeout_secs: u64,
+}
+
+impl Default for AttachmentsConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 25 * 1024 * 1024,
+            download_timeout_secs: 30,
+        }
+    }
 }
 
 fn default_heartbeat_minutes() -> u64 {

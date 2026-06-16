@@ -8,6 +8,7 @@
 //! the single-writer invariant, wall ch. 10); reads scan fresh.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,49 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 pub const NEVER_VISITED_TAIL: usize = 50;
+
+/// Subdirectory under the workspace where inbound attachment blobs land,
+/// grouped by the entry ULID that names them.
+pub const ATTACHMENTS_DIR: &str = "attachments";
+
+/// One file carried by a channel entry. Inbound attachments are
+/// downloaded and written under `{workspace}/attachments/{entry_ulid}/`;
+/// outbound attachments point at workspace files the agent already
+/// authored. A `None` path means the engine could not store the blob —
+/// `skipped` says why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Attachment {
+    pub filename: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<String>,
+    pub mime: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub skipped: Option<SkippedReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkippedReason {
+    TooLarge,
+    DownloadFailed,
+}
+
+/// An inbound attachment ready to be persisted: the adapter has either
+/// fetched the bytes or recorded why it couldn't.
+pub enum InboundAttachment {
+    Fetched {
+        filename: String,
+        mime: String,
+        bytes: Vec<u8>,
+    },
+    Skipped {
+        filename: String,
+        mime: String,
+        size: u64,
+        reason: SkippedReason,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,6 +92,11 @@ pub struct ChannelEntry {
     /// call.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub up_to: Option<String>,
+    /// Files carried with this entry. Missing = no attachments;
+    /// existing logs (and adapters that don't speak attachments) read
+    /// unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// A queued wake pointer. Pointers, never payloads.
@@ -63,6 +112,7 @@ pub struct Channels {
 }
 
 struct Inner {
+    workspace: PathBuf,
     dir: PathBuf,
     files: Mutex<HashMap<String, File>>,
     notify: mpsc::Sender<Notification>,
@@ -74,6 +124,7 @@ impl Channels {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(Self {
             inner: Arc::new(Inner {
+                workspace: workspace.to_path_buf(),
                 dir,
                 files: Mutex::new(HashMap::new()),
                 notify,
@@ -103,6 +154,7 @@ impl Channels {
             msg_id: msg_id.map(str::to_string),
             cursor: false,
             up_to: None,
+            attachments: Vec::new(),
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?; // ← must succeed first
@@ -126,6 +178,21 @@ impl Channels {
         adapter: &str,
         msg_id: Option<&str>,
     ) -> anyhow::Result<String> {
+        self.agent_spoke_with_attachments(channel, content, adapter, msg_id, Vec::new())
+    }
+
+    /// Outbound with attachments. Each entry's `path` is the
+    /// workspace-relative path the agent supplied — the engine does
+    /// not copy outbound files into the `attachments/` tree (two
+    /// truths are not created).
+    pub fn agent_spoke_with_attachments(
+        &self,
+        channel: &str,
+        content: &str,
+        adapter: &str,
+        msg_id: Option<&str>,
+        attachments: Vec<Attachment>,
+    ) -> anyhow::Result<String> {
         let entry = ChannelEntry {
             id: ulid::Ulid::new().to_string(),
             role: EntryRole::Agent,
@@ -136,10 +203,113 @@ impl Channels {
             msg_id: msg_id.map(str::to_string),
             cursor: false,
             up_to: None,
+            attachments,
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?;
         Ok(ulid)
+    }
+
+    /// Inbound with attachments. Blobs land on disk under
+    /// `{workspace}/attachments/{ulid}/` BEFORE the JSONL line is
+    /// appended — a torn turn never leaves a log entry pointing at
+    /// a missing file. Skipped attachments (oversized or download
+    /// failures) append with `path: None` so the text content is
+    /// never lost over a broken blob.
+    pub async fn inbound_with_attachments(
+        &self,
+        channel: &str,
+        author: &str,
+        author_id: Option<&str>,
+        content: &str,
+        adapter: &str,
+        msg_id: Option<&str>,
+        attachments: Vec<InboundAttachment>,
+    ) -> anyhow::Result<String> {
+        let ulid = ulid::Ulid::new().to_string();
+        let stored = self.store_inbound_attachments(&ulid, attachments)?;
+        let entry = ChannelEntry {
+            id: ulid.clone(),
+            role: EntryRole::Other,
+            author: Some(author.to_string()),
+            author_id: author_id.map(str::to_string),
+            content: Some(content.to_string()),
+            adapter: Some(adapter.to_string()),
+            msg_id: msg_id.map(str::to_string),
+            cursor: false,
+            up_to: None,
+            attachments: stored,
+        };
+        self.append(channel, &entry)?;
+        self.inner
+            .notify
+            .send(Notification {
+                channel: channel.to_string(),
+                ulid: ulid.clone(),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("notification queue closed"))?;
+        Ok(ulid)
+    }
+
+    /// Write each fetched attachment to disk under the entry's ULID,
+    /// uniquifying filename collisions and sanitizing inputs.
+    fn store_inbound_attachments(
+        &self,
+        ulid: &str,
+        attachments: Vec<InboundAttachment>,
+    ) -> anyhow::Result<Vec<Attachment>> {
+        if attachments.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dir = self.inner.workspace.join(ATTACHMENTS_DIR).join(ulid);
+        let mut used: HashSet<String> = HashSet::new();
+        let mut out = Vec::with_capacity(attachments.len());
+        let mut dir_created = false;
+        for attachment in attachments {
+            match attachment {
+                InboundAttachment::Fetched {
+                    filename,
+                    mime,
+                    bytes,
+                } => {
+                    if !dir_created {
+                        std::fs::create_dir_all(&dir).with_context(|| {
+                            format!("creating attachments dir {}", dir.display())
+                        })?;
+                        dir_created = true;
+                    }
+                    let original = sanitize_attachment_filename(&filename);
+                    let unique = uniquify(&original, &mut used);
+                    let abs = dir.join(&unique);
+                    std::fs::write(&abs, &bytes)
+                        .with_context(|| format!("writing {}", abs.display()))?;
+                    let rel = format!("{ATTACHMENTS_DIR}/{ulid}/{unique}");
+                    out.push(Attachment {
+                        filename,
+                        path: Some(rel),
+                        mime,
+                        size: bytes.len() as u64,
+                        skipped: None,
+                    });
+                }
+                InboundAttachment::Skipped {
+                    filename,
+                    mime,
+                    size,
+                    reason,
+                } => {
+                    out.push(Attachment {
+                        filename,
+                        path: None,
+                        mime,
+                        size,
+                        skipped: Some(reason),
+                    });
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Explicit cursor: "I read to `up_to`" without speaking. Written
@@ -157,6 +327,7 @@ impl Channels {
             msg_id: None,
             cursor: true,
             up_to: Some(up_to.to_string()),
+            attachments: Vec::new(),
         };
         let ulid = entry.id.clone();
         self.append(channel, &entry)?;
@@ -263,6 +434,74 @@ impl Channels {
 /// Compose an engine channel name from adapter + platform channel id.
 pub fn channel_name(adapter: &str, channel_id: &str) -> String {
     sanitize(&format!("{adapter}_{channel_id}"))
+}
+
+/// Sanitize a platform-supplied attachment filename for safe use as a
+/// leaf component of a workspace path. Strips path separators, null
+/// bytes, and control characters; falls back to "file" if nothing
+/// printable survives. Does NOT preserve directory-ness — collisions
+/// against existing siblings are resolved by `uniquify`.
+pub fn sanitize_attachment_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control() && *c != '/' && *c != '\\' && *c != '\0')
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Append `-2`, `-3`, ... before the extension until the name is unique
+/// in `used`, then mark it taken.
+fn uniquify(name: &str, used: &mut HashSet<String>) -> String {
+    if used.insert(name.to_string()) {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    let mut n = 2;
+    loop {
+        let candidate = format!("{stem}-{n}{ext}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Validate an outbound-attachment path: workspace-relative only, no
+/// absolute paths, no parent-directory escape, and after symlink
+/// resolution must still live inside the workspace. Returns the
+/// canonical absolute path the adapter should read.
+pub fn validate_outbound_path(workspace: &Path, supplied: &str) -> anyhow::Result<PathBuf> {
+    let p = Path::new(supplied);
+    if p.is_absolute() {
+        anyhow::bail!("attachment path must be workspace-relative: {supplied:?}");
+    }
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        anyhow::bail!("attachment path may not contain '..': {supplied:?}");
+    }
+    let abs = workspace.join(p);
+    let canonical = abs
+        .canonicalize()
+        .with_context(|| format!("resolving attachment {}", abs.display()))?;
+    let workspace_canonical = workspace
+        .canonicalize()
+        .with_context(|| format!("resolving workspace {}", workspace.display()))?;
+    if !canonical.starts_with(&workspace_canonical) {
+        anyhow::bail!("attachment escapes workspace: {supplied:?}");
+    }
+    if !canonical.is_file() {
+        anyhow::bail!("attachment is not a regular file: {supplied:?}");
+    }
+    Ok(canonical)
 }
 
 fn sanitize(name: &str) -> String {
@@ -414,6 +653,112 @@ mod tests {
     async fn channel_names_compose_and_sanitize() {
         assert_eq!(channel_name("local", "main"), "local_main");
         assert_eq!(channel_name("discord", "general #1"), "discord_general__1");
+    }
+
+    #[tokio::test]
+    async fn inbound_with_attachments_writes_blobs_under_ulid() {
+        let (channels, mut rx, dir) = layer().await;
+        let ulid = channels
+            .inbound_with_attachments(
+                "c",
+                "cass",
+                None,
+                "look at this",
+                "discord",
+                Some("m1"),
+                vec![
+                    InboundAttachment::Fetched {
+                        filename: "cat.png".into(),
+                        mime: "image/png".into(),
+                        bytes: b"PNG-BYTES".to_vec(),
+                    },
+                    InboundAttachment::Skipped {
+                        filename: "big.zip".into(),
+                        mime: "application/zip".into(),
+                        size: 999_999_999,
+                        reason: SkippedReason::TooLarge,
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        let note = rx.try_recv().unwrap();
+        assert_eq!(note.channel, "c");
+        assert_eq!(note.ulid, ulid);
+
+        let entries = channels.scan("c").unwrap();
+        assert_eq!(entries.len(), 1);
+        let atts = &entries[0].attachments;
+        assert_eq!(atts.len(), 2);
+
+        assert_eq!(atts[0].filename, "cat.png");
+        let rel = atts[0].path.as_deref().unwrap();
+        assert_eq!(rel, &format!("attachments/{ulid}/cat.png"));
+        assert_eq!(atts[0].size, b"PNG-BYTES".len() as u64);
+        assert!(atts[0].skipped.is_none());
+
+        let blob = std::fs::read(dir.path().join(rel)).unwrap();
+        assert_eq!(blob, b"PNG-BYTES");
+
+        assert!(atts[1].path.is_none());
+        assert_eq!(atts[1].skipped, Some(SkippedReason::TooLarge));
+        assert_eq!(atts[1].size, 999_999_999);
+    }
+
+    #[tokio::test]
+    async fn inbound_attachment_filename_collisions_uniquify() {
+        let (channels, _rx, dir) = layer().await;
+        let ulid = channels
+            .inbound_with_attachments(
+                "c",
+                "cass",
+                None,
+                "",
+                "discord",
+                None,
+                vec![
+                    InboundAttachment::Fetched {
+                        filename: "img.png".into(),
+                        mime: "image/png".into(),
+                        bytes: b"A".to_vec(),
+                    },
+                    InboundAttachment::Fetched {
+                        filename: "img.png".into(),
+                        mime: "image/png".into(),
+                        bytes: b"B".to_vec(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        let entries = channels.scan("c").unwrap();
+        let atts = &entries[0].attachments;
+        let p0 = atts[0].path.as_deref().unwrap();
+        let p1 = atts[1].path.as_deref().unwrap();
+        assert_ne!(p0, p1);
+        assert!(p0.ends_with("img.png"));
+        assert!(p1.ends_with("img-2.png"));
+        assert_eq!(std::fs::read(dir.path().join(p1)).unwrap(), b"B");
+        let _ = ulid;
+    }
+
+    #[tokio::test]
+    async fn outbound_path_validation_rejects_escapes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ok.txt"), b"hi").unwrap();
+        validate_outbound_path(dir.path(), "ok.txt").unwrap();
+        assert!(validate_outbound_path(dir.path(), "../etc/passwd").is_err());
+        assert!(validate_outbound_path(dir.path(), "/etc/passwd").is_err());
+        assert!(validate_outbound_path(dir.path(), "missing.txt").is_err());
+    }
+
+    #[test]
+    fn sanitize_attachment_filename_strips_separators_and_controls() {
+        assert_eq!(sanitize_attachment_filename("cat.png"), "cat.png");
+        assert_eq!(sanitize_attachment_filename("a/b\\c\nd"), "abcd");
+        assert_eq!(sanitize_attachment_filename(""), "file");
+        assert_eq!(sanitize_attachment_filename("..."), "file");
     }
 
     #[tokio::test]

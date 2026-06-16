@@ -399,12 +399,17 @@ impl Tool for SpeakTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "speak".into(),
-            description: "Say something on the current channel (or a named one). This is how anything you want heard gets delivered.".into(),
+            description: "Say something on the current channel (or a named one). This is how anything you want heard gets delivered. Discord channels also accept attachments: a list of workspace-relative file paths.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "content": { "type": "string" },
-                    "channel": { "type": "string", "description": "optional override" }
+                    "channel": { "type": "string", "description": "optional override" },
+                    "attachments": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "workspace-relative paths to attach (discord only)"
+                    }
                 },
                 "required": ["content"]
             }),
@@ -417,6 +422,19 @@ impl Tool for SpeakTool {
                 .as_str()
                 .unwrap_or(&ctx.current_channel)
                 .to_string();
+            let supplied_attachments: Vec<String> = match args.get("attachments") {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .map(str::to_string)
+                            .ok_or_else(|| anyhow::anyhow!("attachments entries must be strings"))
+                    })
+                    .collect::<anyhow::Result<_>>()?,
+                Some(Value::Null) | None => Vec::new(),
+                Some(_) => anyhow::bail!("attachments must be a list of paths"),
+            };
+
             // Discord channels route to the adapter, which delivers
             // and logs post-acceptance; the platform msg_id (or the
             // error) comes back as tool-result text (wall ch. 06).
@@ -424,22 +442,31 @@ impl Tool for SpeakTool {
                 let Some(discord) = &ctx.discord else {
                     anyhow::bail!("no discord adapter configured");
                 };
+                let attachments =
+                    resolve_outbound_attachments(&ctx.workspace, &supplied_attachments)?;
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 discord
                     .send(crate::discord::SpeakRequest {
                         channel: channel.clone(),
                         content: content.to_string(),
+                        attachments,
                         reply: reply_tx,
                     })
                     .await
                     .map_err(|_| anyhow::anyhow!("discord adapter is down"))?;
-                let msg_id = tokio::time::timeout(Duration::from_secs(15), reply_rx)
+                let msg_id = tokio::time::timeout(Duration::from_secs(60), reply_rx)
                     .await
                     .map_err(|_| anyhow::anyhow!("discord delivery timed out"))?
                     .map_err(|_| anyhow::anyhow!("discord adapter dropped the request"))??;
                 return Ok(format!("spoken on {channel} (msg {msg_id}){SPOKEN_CUE}"));
             }
 
+            // Local: no attachment support in v1; refuse before any
+            // delivery so the channel-log entry isn't desynced from the
+            // platform truth.
+            if !supplied_attachments.is_empty() {
+                anyhow::bail!("attachments are only supported on discord channels");
+            }
             // Local: the broadcast is the delivery; the agent entry
             // doubles as the cursor (wall ch. 05).
             let _ = ctx.outbound.send(OutboundMessage {
@@ -451,6 +478,50 @@ impl Tool for SpeakTool {
             Ok(format!("spoken on {channel}{SPOKEN_CUE}"))
         })
     }
+}
+
+fn resolve_outbound_attachments(
+    workspace: &Path,
+    supplied: &[String],
+) -> anyhow::Result<Vec<crate::discord::OutboundAttachment>> {
+    supplied
+        .iter()
+        .map(|rel| {
+            let absolute = crate::channels::validate_outbound_path(workspace, rel)?;
+            let filename = absolute
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| anyhow::anyhow!("attachment has no filename: {rel:?}"))?
+                .to_string();
+            let mime = mime_for_extension(&filename);
+            Ok(crate::discord::OutboundAttachment {
+                absolute,
+                relative: rel.clone(),
+                filename,
+                mime,
+            })
+        })
+        .collect()
+}
+
+fn mime_for_extension(filename: &str) -> String {
+    let lower = filename.to_ascii_lowercase();
+    let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "txt" | "md" => "text/plain",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 struct SearchTool;

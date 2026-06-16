@@ -10,23 +10,39 @@
 //! later card. Channel names key by id: `discord_<channel_id>`.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use tokio::sync::{mpsc, oneshot, watch};
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt as _};
+use twilight_model::http::attachment::Attachment as TwilightAttachment;
 use twilight_model::id::Id;
 use twilight_model::id::marker::{ChannelMarker, GuildMarker};
 
-use crate::channels::{Channels, channel_name};
+use crate::channels::{
+    Attachment, Channels, InboundAttachment, SkippedReason, channel_name,
+    sanitize_attachment_filename,
+};
 
 pub const ADAPTER: &str = "discord";
 pub const CHANNEL_PREFIX: &str = "discord_";
+
+/// One outbound attachment the agent supplied: an absolute path the
+/// adapter reads, and the workspace-relative form to log post-acceptance.
+pub struct OutboundAttachment {
+    pub absolute: PathBuf,
+    pub relative: String,
+    pub filename: String,
+    pub mime: String,
+}
 
 /// A speak delivery request from the tool layer; the reply carries
 /// the platform message id or the error, as tool-result text.
 pub struct SpeakRequest {
     pub channel: String, // engine channel name: discord_<id>
     pub content: String,
+    pub attachments: Vec<OutboundAttachment>,
     pub reply: oneshot::Sender<anyhow::Result<String>>,
 }
 
@@ -36,6 +52,11 @@ pub struct DiscordSettings {
     pub guild_id: Option<u64>,
     pub listen_names: Vec<String>,
     pub token: String,
+    /// Per-file cap on inbound downloads.
+    pub max_attachment_bytes: u64,
+    /// Per-download HTTP timeout. One retry is attempted on transient
+    /// failure before we accept the failure.
+    pub download_timeout: Duration,
 }
 
 /// Supervise the adapter: panics and errors restart it with
@@ -123,6 +144,10 @@ async fn run_once(
     working: &watch::Receiver<Option<String>>,
 ) -> anyhow::Result<()> {
     let http = std::sync::Arc::new(twilight_http::Client::new(settings.token.clone()));
+    let downloader = reqwest::Client::builder()
+        .timeout(settings.download_timeout)
+        .build()
+        .context("building attachment downloader")?;
     let _typing = AbortOnDrop(tokio::spawn(typing_loop(http.clone(), working.clone())));
 
     let me = http.current_user().await?.model().await?;
@@ -159,7 +184,14 @@ async fn run_once(
             _ = async { let _ = shutdown.wait_for(|&s| s).await; } => return Ok(()),
             request = speak_rx.recv() => match request {
                 Some(request) => {
-                    let outcome = deliver(&http, channels, &request.channel, &request.content).await;
+                    let outcome = deliver(
+                        &http,
+                        channels,
+                        &request.channel,
+                        &request.content,
+                        &request.attachments,
+                    )
+                    .await;
                     let _ = request.reply.send(outcome);
                 }
                 None => return Ok(()),
@@ -175,14 +207,21 @@ async fn run_once(
                     ) {
                         let engine_channel =
                             channel_name(ADAPTER, &msg.channel_id.get().to_string());
+                        let inbound_attachments = fetch_inbound_attachments(
+                            &downloader,
+                            &msg.attachments,
+                            settings.max_attachment_bytes,
+                        )
+                        .await;
                         if let Err(e) = channels
-                            .inbound(
+                            .inbound_with_attachments(
                                 &engine_channel,
                                 &msg.author.name,
                                 Some(&msg.author.id.get().to_string()),
                                 &msg.content,
                                 ADAPTER,
                                 Some(&msg.id.get().to_string()),
+                                inbound_attachments,
                             )
                             .await
                         {
@@ -201,12 +240,15 @@ async fn run_once(
 }
 
 /// Deliver, then log post-acceptance — the agent entry doubles as the
-/// cursor (wall ch. 05).
+/// cursor (wall ch. 05). Attachments are read from disk by the adapter
+/// and uploaded as multipart; the channel-log entry references the
+/// agent-supplied workspace-relative path (no copy).
 async fn deliver(
     http: &twilight_http::Client,
     channels: &Channels,
     engine_channel: &str,
     content: &str,
+    attachments: &[OutboundAttachment],
 ) -> anyhow::Result<String> {
     let id_text = engine_channel
         .strip_prefix(CHANNEL_PREFIX)
@@ -216,15 +258,129 @@ async fn deliver(
             .parse::<u64>()
             .with_context(|| format!("bad discord channel id {id_text:?}"))?,
     );
-    let sent = http
-        .create_message(channel_id)
-        .content(content)
-        .await?
-        .model()
-        .await?;
+
+    let mut twilight_attachments: Vec<TwilightAttachment> = Vec::with_capacity(attachments.len());
+    let mut logged: Vec<Attachment> = Vec::with_capacity(attachments.len());
+    for (idx, att) in attachments.iter().enumerate() {
+        let bytes = tokio::fs::read(&att.absolute)
+            .await
+            .with_context(|| format!("reading attachment {}", att.absolute.display()))?;
+        let size = bytes.len() as u64;
+        twilight_attachments.push(TwilightAttachment::from_bytes(
+            att.filename.clone(),
+            bytes,
+            idx as u64,
+        ));
+        logged.push(Attachment {
+            filename: att.filename.clone(),
+            path: Some(att.relative.clone()),
+            mime: att.mime.clone(),
+            size,
+            skipped: None,
+        });
+    }
+
+    let mut create = http.create_message(channel_id);
+    if !content.is_empty() {
+        create = create.content(content);
+    }
+    if !twilight_attachments.is_empty() {
+        create = create.attachments(&twilight_attachments);
+    }
+    let sent = create.await?.model().await?;
     let msg_id = sent.id.get().to_string();
-    channels.agent_spoke(engine_channel, content, ADAPTER, Some(&msg_id))?;
+    channels.agent_spoke_with_attachments(
+        engine_channel,
+        content,
+        ADAPTER,
+        Some(&msg_id),
+        logged,
+    )?;
     Ok(msg_id)
+}
+
+/// Download each attachment to memory under the size cap, with one
+/// retry on transient failure. Successes carry bytes; failures and
+/// over-cap files become `Skipped` so the JSONL entry still records
+/// that the attachment existed.
+async fn fetch_inbound_attachments(
+    client: &reqwest::Client,
+    attachments: &[twilight_model::channel::Attachment],
+    max_bytes: u64,
+) -> Vec<InboundAttachment> {
+    let mut out = Vec::with_capacity(attachments.len());
+    for att in attachments {
+        let filename = sanitize_attachment_filename(&att.filename);
+        let mime = att.content_type.clone().unwrap_or_else(default_mime);
+        if att.size > max_bytes {
+            tracing::info!(
+                filename = %filename,
+                size = att.size,
+                max = max_bytes,
+                "discord attachment skipped: too large"
+            );
+            out.push(InboundAttachment::Skipped {
+                filename,
+                mime,
+                size: att.size,
+                reason: SkippedReason::TooLarge,
+            });
+            continue;
+        }
+        match try_download(client, &att.url, max_bytes).await {
+            Ok(bytes) => out.push(InboundAttachment::Fetched {
+                filename,
+                mime,
+                bytes,
+            }),
+            Err(e) => {
+                tracing::warn!(filename = %filename, error = %e, "discord attachment download failed");
+                out.push(InboundAttachment::Skipped {
+                    filename,
+                    mime,
+                    size: att.size,
+                    reason: SkippedReason::DownloadFailed,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// One in-process retry on transient failure. CDN URLs may be on the
+/// edge of expiring; a background queue would race the signed window.
+async fn try_download(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: u64,
+) -> anyhow::Result<Vec<u8>> {
+    match download_once(client, url, max_bytes).await {
+        Ok(bytes) => Ok(bytes),
+        Err(_first) => {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            download_once(client, url, max_bytes).await
+        }
+    }
+}
+
+async fn download_once(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let response = client.get(url).send().await?.error_for_status()?;
+    let bytes = response.bytes().await?;
+    if bytes.len() as u64 > max_bytes {
+        anyhow::bail!(
+            "downloaded body exceeds cap ({} > {max_bytes})",
+            bytes.len()
+        );
+    }
+    Ok(bytes.to_vec())
+}
+
+fn default_mime() -> String {
+    "application/octet-stream".to_string()
 }
 
 /// The admission rule: DMs always pass; guild messages need the

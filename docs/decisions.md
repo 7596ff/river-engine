@@ -412,3 +412,28 @@ the next prompt. Wall ch. 01 amended.
 
 Picked threshold = 20% so most turns (1-2 rounds) never see budget
 frames; the counter only appears when the budget actually matters.
+
+## 2026-06-16 — attachments (v1)
+
+Wall chs. 05 and 06 describe text-only channel entries and adapters.
+Decision: extend the channel JSONL shape with an optional
+`attachments` array (each `{filename, path, mime, size, skipped?}`),
+ship discord inbound + outbound, and leave the local surface
+attachment-free for now. Inbound blobs land under
+`{workspace}/attachments/{entry_ulid}/{filename}` so the existing
+indexer picks them up as ordinary workspace files; outbound entries
+reference the agent-supplied workspace-relative paths directly (no
+copy, no second truth). The model perceives attachments as a
+metadata line — opening them is its choice, via the file tools.
+
+Per-attachment status replaces drop-the-entry: oversized and
+download-failed attachments append with `path: null` and a `skipped`
+reason so text content survives a broken blob. One in-process retry
+per download — Discord CDN URLs are signed and a background queue
+would race the expiry. Outbound `speak` validates paths in the
+channel layer (workspace-relative, no `..`, must resolve inside the
+workspace, must be a regular file); attachments on a non-discord
+channel return a tool error before any delivery. Knobs live under
+`agents.<name>.attachments` (`max_bytes` default 25 MiB,
+`download_timeout_secs` default 30). Full design:
+`docs/superpowers/specs/2026-06-15-attachments-design.md`.

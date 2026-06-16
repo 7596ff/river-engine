@@ -329,7 +329,8 @@ impl<C: Chat> TurnLoop<C> {
                     for entry in &entries {
                         if let Some(content) = &entry.content {
                             let author = entry.author.as_deref().unwrap_or("unknown");
-                            let formatted = format!("[{channel}] {author}: {content}");
+                            let formatted =
+                                format_inbound(&channel, author, content, &entry.attachments);
                             self.append(n, RecordRole::User, &formatted)?;
                         }
                     }
@@ -467,7 +468,13 @@ impl<C: Chat> TurnLoop<C> {
                     for entry in &entries {
                         if let Some(content) = &entry.content {
                             let author = entry.author.as_deref().unwrap_or("unknown");
-                            notice.push_str(&format!("\n[{channel}] {author}: {content}"));
+                            notice.push('\n');
+                            notice.push_str(&format_inbound(
+                                channel,
+                                author,
+                                content,
+                                &entry.attachments,
+                            ));
                             anything_new = true;
                         }
                     }
@@ -587,6 +594,37 @@ impl<C: Chat> TurnLoop<C> {
         )?;
         Ok(())
     }
+}
+
+/// Render an inbound channel entry for the model: the text, then a
+/// metadata line per attachment so the agent can choose to open it
+/// with the file tools (or knows it existed when it can't).
+fn format_inbound(
+    channel: &str,
+    author: &str,
+    content: &str,
+    attachments: &[crate::channels::Attachment],
+) -> String {
+    let mut out = format!("[{channel}] {author}: {content}");
+    for att in attachments {
+        out.push('\n');
+        out.push_str(&format_attachment(att));
+    }
+    out
+}
+
+fn format_attachment(att: &crate::channels::Attachment) -> String {
+    use crate::channels::SkippedReason;
+    let where_ = match (&att.path, att.skipped) {
+        (Some(path), _) => format!("path={path}"),
+        (None, Some(SkippedReason::TooLarge)) => "skipped=too_large".to_string(),
+        (None, Some(SkippedReason::DownloadFailed)) => "skipped=download_failed".to_string(),
+        (None, None) => "skipped=unknown".to_string(),
+    };
+    format!(
+        "  [attachment: {} ({}, {} bytes) {where_}]",
+        att.filename, att.mime, att.size,
+    )
 }
 
 pub fn fresh_system_prompt(
