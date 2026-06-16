@@ -599,7 +599,7 @@ impl<C: Chat> TurnLoop<C> {
 /// Render an inbound channel entry for the model: the text, then a
 /// metadata line per attachment so the agent can choose to open it
 /// with the file tools (or knows it existed when it can't).
-fn format_inbound(
+pub(crate) fn format_inbound(
     channel: &str,
     author: &str,
     content: &str,
@@ -613,7 +613,7 @@ fn format_inbound(
     out
 }
 
-fn format_attachment(att: &crate::channels::Attachment) -> String {
+pub(crate) fn format_attachment(att: &crate::channels::Attachment) -> String {
     use crate::channels::SkippedReason;
     let where_ = match (&att.path, att.skipped) {
         (Some(path), _) => format!("path={path}"),

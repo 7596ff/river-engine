@@ -437,3 +437,25 @@ channel return a tool error before any delivery. Knobs live under
 `agents.<name>.attachments` (`max_bytes` default 25 MiB,
 `download_timeout_secs` default 30). Full design:
 `docs/superpowers/specs/2026-06-15-attachments-design.md`.
+
+## 2026-06-16 — channel_read tool
+
+Wall ch. 07's eight core tools have no path for the agent to look at
+a channel's history other than the auto-read fired at turn start by
+a notification. Decision: add a ninth core tool, `channel_read`, as
+a pure-peek window: takes `channel_id` (defaulting to the current
+channel), engine-ULID `before_id` / `after_id` (mutually exclusive)
+for directional pagination, `limit` defaulting to 50 with a hard cap
+at 500. Returns the same prose the turn loop produces from
+`format_inbound`, with a header line carrying the boundary ULIDs the
+agent paginates with. Never advances the cursor, never notifies,
+never bumps activation — re-examination has its own surface that
+does not corrupt the consume path.
+
+Engine-internal entries (explicit-cursor markers, anything with
+`up_to`) are filtered from the output. Agent entries render as
+`[channel] (agent): content`. Missing channel logs render as
+`(0 messages)` like the empty range — there is no useful distinction
+between "never heard from" and "heard from but the window is empty"
+at the tool's edge. Full spec:
+`docs/superpowers/specs/2026-06-16-channel-read-tool-design.md`.

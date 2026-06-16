@@ -21,6 +21,8 @@ use crate::turn::{LOCAL_ADAPTER, OutboundMessage};
 
 const BASH_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_RESULT_BYTES: usize = 64 * 1024;
+const MAX_CHANNEL_READ_LIMIT: usize = 500;
+const DEFAULT_CHANNEL_READ_LIMIT: usize = 50;
 
 /// What tools need from the engine. Built per turn (the current
 /// channel changes).
@@ -66,6 +68,7 @@ impl Registry {
                 Box::new(BashTool),
                 Box::new(SpeakTool),
                 Box::new(SearchTool),
+                Box::new(ChannelReadTool),
             ],
         }
     }
@@ -559,6 +562,129 @@ impl Tool for SearchTool {
     }
 }
 
+/// Pure-peek window into a channel's history. Never mutates the
+/// cursor, never notifies, never bumps activation. `before_id` /
+/// `after_id` are engine ULIDs and mutually exclusive; the slicing
+/// direction picks oldest-first or newest-first inside the window,
+/// but the returned prose is always chronological so it reads in the
+/// same shape the agent gets from auto-read at turn start.
+struct ChannelReadTool;
+impl Tool for ChannelReadTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "channel_read".into(),
+            description: "Read entries from a channel's history without advancing the cursor. Defaults to the current channel and the tail of the log. Pass before_id to scroll back, after_id to scroll forward; they are mutually exclusive. Limit defaults to 50 and is capped at 500.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "channel_id": {
+                        "type": "string",
+                        "description": "engine channel name (e.g. discord_12345, local_main); defaults to the current channel"
+                    },
+                    "before_id": {
+                        "type": "string",
+                        "description": "engine ULID; return entries with id < before_id (backward pagination)"
+                    },
+                    "after_id": {
+                        "type": "string",
+                        "description": "engine ULID; return entries with id > after_id (forward pagination)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "max entries; default 50, hard cap 500"
+                    }
+                }
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let channel = args["channel_id"]
+                .as_str()
+                .unwrap_or(&ctx.current_channel)
+                .to_string();
+            let before_id = args.get("before_id").and_then(Value::as_str).map(str::to_string);
+            let after_id = args.get("after_id").and_then(Value::as_str).map(str::to_string);
+            if before_id.is_some() && after_id.is_some() {
+                anyhow::bail!("before_id and after_id are mutually exclusive");
+            }
+            let requested = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+                .unwrap_or(DEFAULT_CHANNEL_READ_LIMIT)
+                .max(1);
+            let limit = requested.min(MAX_CHANNEL_READ_LIMIT);
+
+            let entries = ctx.channels.scan(&channel)?;
+            // Engine-internal entries don't belong to conversation.
+            let conversational: Vec<_> = entries
+                .into_iter()
+                .filter(|e| !e.cursor && e.up_to.is_none())
+                .collect();
+
+            let windowed: Vec<_> = match (&before_id, &after_id) {
+                (Some(b), _) => conversational.into_iter().filter(|e| &e.id < b).collect(),
+                (_, Some(a)) => conversational.into_iter().filter(|e| &e.id > a).collect(),
+                _ => conversational,
+            };
+
+            // after_id paginates forward: take the oldest `limit` after
+            // the cursor. Otherwise take the newest `limit` of the
+            // window (tail for default and before_id alike).
+            let sliced: Vec<_> = if after_id.is_some() {
+                windowed.into_iter().take(limit).collect()
+            } else {
+                let drop = windowed.len().saturating_sub(limit);
+                windowed.into_iter().skip(drop).collect()
+            };
+
+            let mut out = String::new();
+            out.push_str(&format_header(&channel, &sliced, requested, limit));
+            for entry in &sliced {
+                if let Some(content) = &entry.content {
+                    let author = entry
+                        .author
+                        .as_deref()
+                        .unwrap_or_else(|| match entry.role {
+                            crate::channels::EntryRole::Agent => "(agent)",
+                            crate::channels::EntryRole::Other => "unknown",
+                        });
+                    out.push('\n');
+                    out.push_str(&crate::turn::format_inbound(
+                        &channel,
+                        author,
+                        content,
+                        &entry.attachments,
+                    ));
+                }
+            }
+            Ok(out)
+        })
+    }
+}
+
+fn format_header(
+    channel: &str,
+    sliced: &[crate::channels::ChannelEntry],
+    requested: usize,
+    limit: usize,
+) -> String {
+    if sliced.is_empty() {
+        return format!("— channel {channel} (0 messages)");
+    }
+    let oldest = &sliced.first().unwrap().id;
+    let newest = &sliced.last().unwrap().id;
+    let count = sliced.len();
+    if requested > limit {
+        format!(
+            "— channel {channel} ({count} messages, showing {limit} of {requested} requested, oldest: {oldest}, newest: {newest})"
+        )
+    } else {
+        format!("— channel {channel} ({count} messages, oldest: {oldest}, newest: {newest})")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,7 +692,11 @@ mod tests {
 
     fn ctx() -> (ToolContext, tempfile::TempDir, broadcast::Receiver<OutboundMessage>) {
         let dir = tempfile::tempdir().unwrap();
-        let (notify_tx, _notify_rx) = mpsc::channel(16);
+        let (notify_tx, notify_rx) = mpsc::channel(16);
+        // Leak the receiver so the notification queue stays open for
+        // the test's lifetime; no inbound() call should fail because
+        // its pointer had nowhere to go.
+        Box::leak(Box::new(notify_rx));
         let channels = Channels::open(dir.path(), notify_tx).unwrap();
         let (outbound, outbound_rx) = broadcast::channel(16);
         let ctx = ToolContext {
@@ -589,7 +719,7 @@ mod tests {
             arguments: args.to_string(),
         };
         let profile: Vec<String> =
-            ["read", "write", "edit", "glob", "grep", "bash", "speak"]
+            ["read", "write", "edit", "glob", "grep", "bash", "speak", "channel_read"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
@@ -683,6 +813,132 @@ mod tests {
         };
         let out = registry.execute(&call, &narrow, &ctx).await;
         assert!(out.contains("not available"), "{out}");
+    }
+
+    async fn seed_channel(
+        ctx: &ToolContext,
+        channel: &str,
+        count: usize,
+    ) -> Vec<String> {
+        let mut ids = Vec::with_capacity(count);
+        for i in 0..count {
+            let id = ctx
+                .channels
+                .inbound(channel, "cass", None, &format!("msg {i}"), "local", None)
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn channel_read_defaults_to_current_channel_tail() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let ids = seed_channel(&ctx, "local_main", 5).await;
+        let out = run(&registry, &ctx, "channel_read", json!({})).await;
+        assert!(out.contains("— channel local_main (5 messages"), "{out}");
+        assert!(out.contains(&format!("oldest: {}", ids[0])), "{out}");
+        assert!(out.contains(&format!("newest: {}", ids[4])), "{out}");
+        assert!(out.contains("msg 0") && out.contains("msg 4"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_before_id_paginates_backward() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let ids = seed_channel(&ctx, "local_main", 10).await;
+        let out = run(
+            &registry,
+            &ctx,
+            "channel_read",
+            json!({"before_id": ids[5], "limit": 3}),
+        )
+        .await;
+        assert!(out.contains("(3 messages"), "{out}");
+        assert!(out.contains("msg 2") && out.contains("msg 3") && out.contains("msg 4"), "{out}");
+        assert!(!out.contains("msg 5"), "before_id is exclusive: {out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_after_id_paginates_forward() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let ids = seed_channel(&ctx, "local_main", 10).await;
+        let out = run(
+            &registry,
+            &ctx,
+            "channel_read",
+            json!({"after_id": ids[5], "limit": 3}),
+        )
+        .await;
+        assert!(out.contains("(3 messages"), "{out}");
+        assert!(out.contains("msg 6") && out.contains("msg 7") && out.contains("msg 8"), "{out}");
+        assert!(!out.contains("msg 5"), "after_id is exclusive: {out}");
+        assert!(!out.contains("msg 9"), "forward slice takes the oldest 3: {out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_rejects_both_bounds() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let ids = seed_channel(&ctx, "local_main", 3).await;
+        let out = run(
+            &registry,
+            &ctx,
+            "channel_read",
+            json!({"before_id": ids[2], "after_id": ids[0]}),
+        )
+        .await;
+        assert!(out.contains("mutually exclusive"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_clamps_oversize_limit() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        seed_channel(&ctx, "local_main", 3).await;
+        let out = run(&registry, &ctx, "channel_read", json!({"limit": 999})).await;
+        assert!(out.contains("(3 messages"), "{out}");
+        // limit > MAX_CHANNEL_READ_LIMIT (500) triggers the showing-of-requested note,
+        // even when the actual return is smaller than either.
+        assert!(out.contains("showing 500 of 999 requested"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_empty_and_missing_channels_render_zero() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "channel_read", json!({"channel_id": "nope"})).await;
+        assert_eq!(out, "— channel nope (0 messages)");
+    }
+
+    #[tokio::test]
+    async fn channel_read_filters_engine_cursor_entries() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let ids = seed_channel(&ctx, "local_main", 2).await;
+        ctx.channels.mark_read("local_main", &ids[1]).unwrap();
+        let out = run(&registry, &ctx, "channel_read", json!({})).await;
+        assert!(out.contains("(2 messages"), "explicit cursor entry filtered: {out}");
+        assert!(!out.contains("up_to"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn channel_read_renders_agent_entries_with_agent_marker() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        ctx.channels
+            .inbound("local_main", "cass", None, "hi", "local", None)
+            .await
+            .unwrap();
+        ctx.channels
+            .agent_spoke("local_main", "good morning", "local", None)
+            .unwrap();
+        let out = run(&registry, &ctx, "channel_read", json!({})).await;
+        assert!(out.contains("[local_main] cass: hi"), "{out}");
+        assert!(out.contains("[local_main] (agent): good morning"), "{out}");
     }
 
     #[tokio::test]
