@@ -30,11 +30,16 @@ trait Adapter {
   delivers them to the platform, and returns the platform's message id
   (or an error, which becomes tool-result text for the agent).
 - **Features:** each implementation declares what its platform
-  supports — send, edit, delete, react, typing, threads, history. The
-  gateway folds the declarations into the agent's system prompt, so
-  the model knows what each place can actually do. Feature lists are
-  data, not capabilities: an adapter with a feature the agent never
-  uses costs nothing.
+  supports — send, edit, delete, react, typing, threads, history,
+  attachments-send, attachments-receive. The gateway folds the
+  declarations into the agent's system prompt, so the model knows
+  what each place can actually do. Feature lists are data, not
+  capabilities: an adapter with a feature the agent never uses costs
+  nothing. The two attachment features gate the channel-entry shape
+  (ch. 05): adapters that declare neither receive nor produce entries
+  with the `attachments` field, and `speak` with attachments to a
+  channel whose adapter does not declare `attachments-send` returns a
+  tool error before any platform call.
 
 ## Supervision
 
@@ -56,9 +61,17 @@ A trait implementation owning a Discord gateway websocket connection.
   persisted in the data directory); DMs to the bot always pass.
 - **Inbound:** message-create events from listened channels and DMs,
   normalized; the bot's own messages excluded.
-- **Outbound:** send (with optional reply-to), typing indicator.
+- **Outbound:** send (with optional reply-to), typing indicator,
+  attachments uploaded as multipart (the agent supplies workspace-
+  relative paths).
+- **Inbound attachments:** each `message.attachments` entry is
+  downloaded into the workspace per ch. 05, subject to a per-file
+  size cap (default 25 MiB) and a per-download timeout (default 30s).
+  One in-process retry on transient failure; CDN signing windows
+  preclude a background retry queue.
 - **Features declared:** send, receive, reply, edit, delete, react,
-  typing, history — per what the implementation actually wires.
+  typing, history, attachments-send, attachments-receive — per what
+  the implementation actually wires.
 - **Token:** read from the environment at startup (ch. 09); never in
   config or logs.
 

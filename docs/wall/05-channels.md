@@ -38,6 +38,17 @@ Every line is one JSON entry. Three kinds:
   care whether the other speaker is a human, a bot, or another agent.
   Me, or not-me.
 - A `cursor` entry is a bookmark, not a message: "I read to here."
+- `attachments` — optional array; absent or empty when the entry
+  carries no files. Each element is
+  `{filename, path, mime, size, skipped?}`. For inbound, the engine
+  downloads each blob to
+  `{workspace}/attachments/{entry_ulid}/{filename}` *before* the
+  JSONL line is appended, and `path` is workspace-relative. For
+  outbound, `path` is the workspace-relative location the agent
+  supplied; the engine does not copy the file. A `path: null` entry
+  with a `skipped` reason (`too_large`, `download_failed`) records
+  that the attachment existed even when the engine could not store
+  it — text content is never lost over a broken blob.
 
 ## Cursors
 
@@ -106,3 +117,8 @@ plain JSONL, trivially archivable by hand if one ever grows obnoxious.
   warning, never fatal.
 - **Outbound logged post-acceptance.** The agent entry is appended
   after the platform confirms delivery.
+- **Attachments write-then-append.** Every inbound attachment with a
+  non-null `path` is durably on disk before the JSONL entry is
+  appended. Failed downloads and oversized files append with
+  `path: null` and a `skipped` reason; the entry itself is never
+  dropped over a broken blob.

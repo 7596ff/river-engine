@@ -18,7 +18,7 @@ an agent's reach is an edit to a config file, not a rebuild.
 
 ## The core tools
 
-The default profile, eight tools:
+The default profile, nine tools:
 
 | tool | what it does |
 |---|---|
@@ -28,17 +28,35 @@ The default profile, eight tools:
 | `glob` | find files by pattern |
 | `grep` | search file contents |
 | `bash` | run a shell command in the workspace |
-| `speak` | say something on the current channel |
+| `speak` | say something on the current channel; attachments on supporting adapters |
 | `search` | semantic search over the indexed workspace (ch. 02) |
+| `channel_read` | pure-peek window into a channel's history (ch. 05) |
 
 `speak` resolves "the current channel" from the turn's context — the
 channel whose notification woke the agent, or the channel it last
 spoke on. An explicit channel argument overrides. The outbound path is
-ch. 05's: deliver via the adapter, log on acceptance.
+ch. 05's: deliver via the adapter, log on acceptance. On adapters that
+declare `attachments-send`, an optional list of workspace-relative
+paths rides as multipart; the channel-log entry references those
+paths directly (no copy).
 
 `search` returns the top-k segments by cosine similarity with file
 paths and scores. Each result is an ambient access (ch. 02) for the
 notes it touches.
+
+`channel_read` opens a window into any channel's history without
+mutating the cursor (ch. 05): `channel_read(channel_id?, before_id?,
+after_id?, limit?=50)` — `channel_id` defaults to the current
+channel; `before_id` / `after_id` are engine ULIDs and mutually
+exclusive (the directional intent picks tail or head slicing inside
+the window); `limit` is hard-capped at 500. Returns chronologically
+ordered prose in the same shape the agent sees from turn-start
+auto-read, headed by a line carrying the count and the boundary
+ULIDs for the next call. Engine-internal entries (cursor markers,
+`up_to` bookkeeping) are filtered. Empty and nonexistent channels
+both render as `(0 messages)`. The tool emits no notifications,
+advances no cursor, and bumps no activation — re-examination has its
+own surface, separate from the consume path.
 
 ## File tools are memory instruments
 

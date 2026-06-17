@@ -51,6 +51,10 @@ model call:
 5. Reload the arc: moves newest-first from the record until the
    **fill target** (default 40% of limit) is reached, then presented
    oldest-first. Old moves fall off here — they remain in the record.
+   Moves whose turn is currently in hot are skipped: the full turn at
+   high resolution already represents it, and the compressed summary
+   would only duplicate. Skipping them frees the arc budget for older
+   moves the model has no other way to see.
 6. Refresh the memory slot.
 7. **Never re-trigger.** If the result still exceeds the threshold (the
    witness is far behind), accept it and continue; the next compaction
@@ -119,5 +123,9 @@ threshold; turn-lag threshold of 10.
 - **Slot discipline.** Memory content appears only in the memory slot,
   between arc and hot. Memory may leave it empty; assembly never blocks
   on memory.
+- **Arc–hot disjoint.** A turn appears in at most one layer at a
+  time: as a full turn in hot, or as a one-line move in the arc,
+  never both. When backfill pulls a compressed turn back into hot,
+  its move is suppressed from the arc for that assembly.
 - **Calibration** uses reported prompt tokens only, with the 0.7/0.3
   weighted average and zero-skip.
