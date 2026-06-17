@@ -18,7 +18,7 @@ an agent's reach is an edit to a config file, not a rebuild.
 
 ## The core tools
 
-The default profile, nine tools:
+The default profile, ten tools:
 
 | tool | what it does |
 |---|---|
@@ -31,6 +31,7 @@ The default profile, nine tools:
 | `speak` | say something on the current channel; attachments on supporting adapters |
 | `search` | semantic search over the indexed workspace (ch. 02) |
 | `channel_read` | pure-peek window into a channel's history (ch. 05) |
+| `reject_candidate` | mark the current digestion candidate as no-go (ch. 04) |
 
 `speak` resolves "the current channel" from the turn's context — the
 channel whose notification woke the agent, or the channel it last
@@ -43,6 +44,17 @@ paths directly (no copy).
 `search` returns the top-k segments by cosine similarity with file
 paths and scores. Each result is an ambient access (ch. 02) for the
 notes it touches.
+
+`reject_candidate` is the agent's voice on the divided-authorship
+seam (ch. 04). It is only valid inside a `Wake::Digestion` turn —
+the engine carries the current candidate's id and text on the tool
+context. Signature: `reject_candidate(reason?: string)`. The tool
+appends one entry to `workspace/witness/rejections.jsonl` capturing
+the candidate id, candidate text, optional reason, the digestion
+turn, and a timestamp. The witness reads the last N entries before
+its next glean and surfaces them as `{recent_rejections}` in
+`on-glean.md`. Calling the tool outside a digestion turn returns a
+tool error.
 
 `channel_read` opens a window into any channel's history without
 mutating the cursor (ch. 05): `channel_read(channel_id?, before_id?,

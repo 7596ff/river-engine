@@ -820,8 +820,10 @@ impl Memory {
         self.queue_notify.notified().await;
     }
 
-    /// Agent-side: take the front of the FIFO queue.
-    pub fn pop_candidate(&self) -> anyhow::Result<Option<String>> {
+    /// Agent-side: take the front of the FIFO queue. Returns the
+    /// row's id alongside the candidate text so the digestion turn
+    /// can record an attributable rejection (wall ch. 04).
+    pub fn pop_candidate(&self) -> anyhow::Result<Option<(String, String)>> {
         let db = self.db.lock().expect("db lock");
         let front: Option<(String, String)> = db
             .query_row(
@@ -832,7 +834,7 @@ impl Memory {
             .ok();
         if let Some((id, candidate)) = front {
             db.execute("DELETE FROM extraction_queue WHERE id = ?1", [&id])?;
-            return Ok(Some(candidate));
+            return Ok(Some((id, candidate)));
         }
         Ok(None)
     }
@@ -1438,9 +1440,15 @@ pub mod tests {
         mem.enqueue_candidate("first").unwrap();
         mem.enqueue_candidate("second").unwrap();
         assert_eq!(mem.queue_depth().unwrap(), 2);
-        assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("first"));
-        assert_eq!(mem.pop_candidate().unwrap().as_deref(), Some("second"));
-        assert_eq!(mem.pop_candidate().unwrap(), None);
+        assert_eq!(
+            mem.pop_candidate().unwrap().map(|(_, text)| text).as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            mem.pop_candidate().unwrap().map(|(_, text)| text).as_deref(),
+            Some("second")
+        );
+        assert!(mem.pop_candidate().unwrap().is_none());
     }
 
     #[tokio::test]

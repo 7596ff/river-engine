@@ -41,6 +41,19 @@ pub struct ToolContext {
     pub reindex: Option<tokio::sync::mpsc::Sender<()>>,
     /// Routes speak requests for discord_* channels to the adapter.
     pub discord: Option<tokio::sync::mpsc::Sender<crate::discord::SpeakRequest>>,
+    /// Set on Wake::Digestion turns only; gives `reject_candidate` the
+    /// id and text of the candidate the agent is currently digesting.
+    pub digestion: Option<DigestionInfo>,
+}
+
+/// The candidate the agent is being asked to digest this turn. Carries
+/// what `reject_candidate` needs to write an attributable entry into
+/// `workspace/witness/rejections.jsonl`.
+#[derive(Debug, Clone)]
+pub struct DigestionInfo {
+    pub candidate_id: String,
+    pub candidate_text: String,
+    pub turn: u64,
 }
 
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + 'a>>;
@@ -69,6 +82,7 @@ impl Registry {
                 Box::new(SpeakTool),
                 Box::new(SearchTool),
                 Box::new(ChannelReadTool),
+                Box::new(RejectCandidateTool),
             ],
         }
     }
@@ -685,6 +699,101 @@ fn format_header(
     }
 }
 
+/// Append one rejection entry to `workspace/witness/rejections.jsonl`,
+/// creating the file (and parent dir) if absent.
+pub(crate) fn append_rejection(
+    workspace: &Path,
+    candidate_id: &str,
+    candidate_text: &str,
+    reason: Option<&str>,
+    turn: u64,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    let path = workspace.join("witness").join("rejections.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("creating {}: {e}", parent.display()))?;
+    }
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "candidate_id".into(),
+        serde_json::Value::String(candidate_id.to_string()),
+    );
+    obj.insert(
+        "candidate".into(),
+        serde_json::Value::String(candidate_text.to_string()),
+    );
+    if let Some(reason) = reason {
+        obj.insert(
+            "reason".into(),
+            serde_json::Value::String(reason.to_string()),
+        );
+    }
+    obj.insert(
+        "turn".into(),
+        serde_json::Value::Number(serde_json::Number::from(turn)),
+    );
+    obj.insert(
+        "at".into(),
+        serde_json::Value::String(jiff::Timestamp::now().to_string()),
+    );
+    let mut json = serde_json::to_string(&serde_json::Value::Object(obj))?;
+    json.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| anyhow::anyhow!("appending {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| anyhow::anyhow!("fsyncing {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// The agent's `reject_candidate` call: writes an attributable entry
+/// to `rejections.jsonl` so the witness can read its prior misses.
+/// Available only inside a `Wake::Digestion` turn — outside of one,
+/// returns an error result.
+struct RejectCandidateTool;
+impl Tool for RejectCandidateTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "reject_candidate".into(),
+            description: "Reject the current digestion candidate so your witness can learn from it. Optional reason — a short why. Available only inside a digestion turn.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "why this candidate didn't land — short, honest, the witness reads it"
+                    }
+                }
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let Some(digestion) = &ctx.digestion else {
+                anyhow::bail!("reject_candidate is only valid inside a digestion turn");
+            };
+            let reason = args.get("reason").and_then(Value::as_str);
+            append_rejection(
+                &ctx.workspace,
+                &digestion.candidate_id,
+                &digestion.candidate_text,
+                reason,
+                digestion.turn,
+            )?;
+            Ok(format!(
+                "rejected candidate {} ({})",
+                digestion.candidate_id,
+                reason.unwrap_or("no reason given")
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +817,7 @@ mod tests {
             memory: None,
             reindex: None,
             discord: None,
+            digestion: None,
         };
         (ctx, dir, outbound_rx)
     }
@@ -719,7 +829,7 @@ mod tests {
             arguments: args.to_string(),
         };
         let profile: Vec<String> =
-            ["read", "write", "edit", "glob", "grep", "bash", "speak", "channel_read"]
+            ["read", "write", "edit", "glob", "grep", "bash", "speak", "channel_read", "reject_candidate"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
@@ -939,6 +1049,74 @@ mod tests {
         let out = run(&registry, &ctx, "channel_read", json!({})).await;
         assert!(out.contains("[local_main] cass: hi"), "{out}");
         assert!(out.contains("[local_main] (agent): good morning"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn reject_candidate_appends_an_entry_with_reason() {
+        let (mut ctx, dir, _) = ctx();
+        ctx.digestion = Some(DigestionInfo {
+            candidate_id: "01CAND".into(),
+            candidate_text: "the witness gleaned this, badly".into(),
+            turn: 42,
+        });
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "reject_candidate",
+            json!({"reason": "warm goodnight, not a claim"}),
+        )
+        .await;
+        assert!(out.contains("rejected candidate 01CAND"), "{out}");
+        let path = dir.path().join("witness/rejections.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(entry["candidate_id"], "01CAND");
+        assert_eq!(entry["candidate"], "the witness gleaned this, badly");
+        assert_eq!(entry["reason"], "warm goodnight, not a claim");
+        assert_eq!(entry["turn"], 42);
+        assert!(entry["at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn reject_candidate_omits_reason_when_absent() {
+        let (mut ctx, dir, _) = ctx();
+        ctx.digestion = Some(DigestionInfo {
+            candidate_id: "01CAND".into(),
+            candidate_text: "anything".into(),
+            turn: 7,
+        });
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "reject_candidate", json!({})).await;
+        assert!(out.contains("no reason given"), "{out}");
+        let text = std::fs::read_to_string(dir.path().join("witness/rejections.jsonl")).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert!(entry.get("reason").is_none(), "{entry}");
+    }
+
+    #[tokio::test]
+    async fn reject_candidate_outside_digestion_turn_errors() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "reject_candidate", json!({"reason": "n/a"})).await;
+        assert!(out.contains("only valid inside a digestion turn"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn reject_candidate_called_multiple_times_appends_each() {
+        let (mut ctx, dir, _) = ctx();
+        ctx.digestion = Some(DigestionInfo {
+            candidate_id: "01CAND".into(),
+            candidate_text: "complicated".into(),
+            turn: 9,
+        });
+        let registry = Registry::core();
+        run(&registry, &ctx, "reject_candidate", json!({"reason": "first reason"})).await;
+        run(&registry, &ctx, "reject_candidate", json!({"reason": "second reason"})).await;
+        let text = std::fs::read_to_string(dir.path().join("witness/rejections.jsonl")).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("first reason"));
+        assert!(text.contains("second reason"));
     }
 
     #[tokio::test]

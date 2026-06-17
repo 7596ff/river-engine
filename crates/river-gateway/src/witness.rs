@@ -92,11 +92,18 @@ pub struct Witness<C: Chat> {
     /// Refractory threshold: minimum turns of forward movement
     /// required between queued candidates. Zero disables the gate.
     glean_min_new_turns: u64,
+    /// Hard ceiling on the extraction queue at enqueue time. Zero
+    /// disables. Refractory state stays untouched on a drop.
+    max_queue_depth: u64,
+    /// How many recent rejections to render into `{recent_rejections}`.
+    recent_rejections_window: usize,
     /// The `up_to_turn` of the most recently queued candidate;
     /// recovered at load from the log tail, updated on each enqueue.
     last_glean_through: Option<u64>,
     /// `workspace/witness/glean-log.jsonl`.
     glean_log_path: PathBuf,
+    /// `workspace/witness/rejections.jsonl`.
+    rejections_path: PathBuf,
 }
 
 /// One entry in `glean-log.jsonl`: the receipt for a queued candidate.
@@ -105,6 +112,88 @@ struct GleanLogEntry {
     id: String,
     turn: u64,
     at: String,
+}
+
+/// One entry in `rejections.jsonl`: written by the agent's
+/// `reject_candidate` tool, read here so the witness can learn what
+/// the agent already turned away.
+#[derive(serde::Deserialize)]
+struct RejectionEntry {
+    #[allow(dead_code)]
+    candidate_id: String,
+    candidate: String,
+    #[serde(default)]
+    reason: Option<String>,
+    turn: u64,
+    #[allow(dead_code)]
+    at: String,
+}
+
+const REJECTION_PREVIEW_CHARS: usize = 80;
+
+/// Tail-read N rejection entries. Missing file or empty → empty list;
+/// torn lines skipped with a warning, same as channels.rs.
+fn recent_rejections(path: &Path, window: usize) -> Vec<RejectionEntry> {
+    if window == 0 {
+        return Vec::new();
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "reading rejections.jsonl");
+            return Vec::new();
+        }
+    };
+    let mut all: Vec<RejectionEntry> = Vec::new();
+    for (line_no, raw) in text.lines().enumerate() {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<RejectionEntry>(raw) {
+            Ok(entry) => all.push(entry),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                line = line_no + 1,
+                error = %e,
+                "skipping malformed rejection entry"
+            ),
+        }
+    }
+    let drop = all.len().saturating_sub(window);
+    all.into_iter().skip(drop).collect()
+}
+
+/// Render rejections as the `{recent_rejections}` block. Empty list
+/// substitutes to an empty string so the prompt reads naturally
+/// on day-one.
+fn format_rejections(entries: &[RejectionEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n[your prior gleans the agent rejected]\n");
+    for entry in entries {
+        let preview = preview_line(&entry.candidate);
+        match &entry.reason {
+            Some(reason) => out.push_str(&format!(
+                "turn {}: \"{preview}\" — reason: {reason}\n",
+                entry.turn
+            )),
+            None => out.push_str(&format!("turn {}: \"{preview}\"\n", entry.turn)),
+        }
+    }
+    out
+}
+
+fn preview_line(text: &str) -> String {
+    let first_line = text.lines().next().unwrap_or("").trim();
+    if first_line.chars().count() <= REJECTION_PREVIEW_CHARS {
+        first_line.to_string()
+    } else {
+        let mut t: String = first_line.chars().take(REJECTION_PREVIEW_CHARS).collect();
+        t.push('…');
+        t
+    }
 }
 
 impl<C: Chat> Witness<C> {
@@ -118,6 +207,8 @@ impl<C: Chat> Witness<C> {
         memory: Option<crate::memory::Memory>,
         glean_probability: f64,
         glean_min_new_turns: u64,
+        max_queue_depth: u64,
+        recent_rejections_window: usize,
     ) -> anyhow::Result<Self> {
         let identity_path = workspace.join("witness").join("identity.md");
         let identity = match std::fs::read_to_string(&identity_path) {
@@ -166,6 +257,7 @@ impl<C: Chat> Witness<C> {
         let moves = MovesFile::open(workspace)?;
         let glean_log_path = workspace.join("witness").join("glean-log.jsonl");
         let last_glean_through = recover_last_glean_through(&glean_log_path);
+        let rejections_path = workspace.join("witness").join("rejections.jsonl");
         Ok(Self {
             workspace: workspace.to_path_buf(),
             client,
@@ -176,8 +268,11 @@ impl<C: Chat> Witness<C> {
             memory,
             glean_probability,
             glean_min_new_turns,
+            max_queue_depth,
+            recent_rejections_window,
             last_glean_through,
             glean_log_path,
+            rejections_path,
         })
     }
 
@@ -297,7 +392,11 @@ impl<C: Chat> Witness<C> {
             }
         }
 
-        let prompt = template.replace("{recent_record}", &recent);
+        let rejections = recent_rejections(&self.rejections_path, self.recent_rejections_window);
+        let rejection_block = format_rejections(&rejections);
+        let prompt = template
+            .replace("{recent_record}", &recent)
+            .replace("{recent_rejections}", &rejection_block);
         let messages = [ChatMessage::user(prompt)];
         match self.client.chat(&self.identity, &messages, &[]).await {
             Ok(response) => {
@@ -306,6 +405,18 @@ impl<C: Chat> Witness<C> {
                     || candidate.eq_ignore_ascii_case(NOTHING_TO_GLEAN)
                 {
                     tracing::debug!(turn = up_to_turn, "glean: nothing");
+                } else if self.max_queue_depth > 0
+                    && memory.queue_depth().unwrap_or(0) >= self.max_queue_depth
+                {
+                    // Queue at cap: drop. Refractory stays where it was
+                    // — the drop should not burn forward movement.
+                    tracing::warn!(
+                        turn = up_to_turn,
+                        depth = memory.queue_depth().unwrap_or(0),
+                        cap = self.max_queue_depth,
+                        candidate = %candidate,
+                        "glean: candidate dropped (queue at cap)"
+                    );
                 } else {
                     let id = memory.enqueue_candidate(candidate)?;
                     // Log only after the queue insert succeeds — a torn
@@ -580,7 +691,7 @@ mod tests {
     fn missing_identity_fails_naming_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let model = FakeModel::replying(vec![]);
-        let err = match Witness::load(dir.path(), model, None, 0.0, 0) {
+        let err = match Witness::load(dir.path(), model, None, 0.0, 0, 0, 0) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("load should fail without witness identity"),
         };
@@ -595,7 +706,7 @@ mod tests {
         std::fs::write(witness_dir.join("identity.md"), "You are the witness.").unwrap();
 
         let model = FakeModel::replying(vec![]);
-        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         assert!(witness.on_turn.is_none());
     }
 
@@ -608,7 +719,7 @@ mod tests {
         let model = FakeModel::replying(vec![ok(
             "  Cass asked what teal is; you defined it as blue-green.  \n",
         )]);
-        let mut witness = Witness::load(dir.path(), model.clone(), None, 0.0, 0).unwrap();
+        let mut witness = Witness::load(dir.path(), model.clone(), None, 0.0, 0, 0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -635,7 +746,7 @@ mod tests {
         record_turn(dir.path(), 1, "hello?", None);
 
         let model = FakeModel::replying(vec![Err(anyhow::anyhow!("witness model down"))]);
-        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -652,7 +763,7 @@ mod tests {
         record_turn(dir.path(), 1, "hi", Some("hello"));
 
         let model = FakeModel::replying(vec![ok("   \n ")]);
-        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -687,7 +798,7 @@ mod tests {
             ok("nothing to glean"),
         ]);
         let witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
 
         let (latest_tx, latest_rx) = watch::channel(1u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -704,7 +815,7 @@ mod tests {
 
         // One real candidate; the sentinel enqueued nothing.
         assert_eq!(memory.queue_depth().unwrap(), 1);
-        let candidate = memory.pop_candidate().unwrap().unwrap();
+        let (_, candidate) = memory.pop_candidate().unwrap().unwrap();
         assert!(candidate.contains("teal"), "{candidate}");
     }
 
@@ -741,7 +852,7 @@ mod tests {
 
         let model = FakeModel::replying(vec![]);
         let mut witness =
-            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0).unwrap();
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
         witness.glean(1).await.unwrap();
 
         assert_eq!(memory.queue_depth().unwrap(), 0);
@@ -783,7 +894,7 @@ mod tests {
 
         let model = FakeModel::replying(vec![ok("rosemary and teal — cass's signals")]);
         let mut witness =
-            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0).unwrap();
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
         witness.glean(3).await.unwrap();
 
         let prompts = model.prompts.lock().unwrap();
@@ -895,7 +1006,7 @@ mod tests {
 
         // First pass: moves for all three turns.
         let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         let moves_path = witness.moves.path().to_path_buf();
         let (latest_tx, latest_rx) = watch::channel(3u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -924,7 +1035,7 @@ mod tests {
         // still process.
         record_turn(dir.path(), 4, "q4", Some("a4"));
         let model = FakeModel::replying(vec![ok("move two, retold"), ok("move four")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         let (latest_tx, latest_rx) = watch::channel(4u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
@@ -956,7 +1067,7 @@ mod tests {
         }
 
         let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         let moves_path = witness.moves.path().to_path_buf();
 
         let (latest_tx, latest_rx) = watch::channel(3u64);
@@ -1017,7 +1128,7 @@ mod tests {
         // empty queue.
         let model = FakeModel::replying(vec![ok("candidate one — worth a note")]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12, 0, 0).unwrap();
 
         witness.glean(6).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 1);
@@ -1040,7 +1151,7 @@ mod tests {
             ok("candidate two"),
         ]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12, 0, 0).unwrap();
 
         witness.glean(6).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 1);
@@ -1059,7 +1170,7 @@ mod tests {
         let memory = fresh_memory(dir.path());
         let model = FakeModel::replying(vec![ok("first one")]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000, 0, 0).unwrap();
 
         witness.glean(3).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 1, "no prior gleans, gate is open");
@@ -1078,7 +1189,7 @@ mod tests {
         {
             let model = FakeModel::replying(vec![ok("candidate one")]);
             let mut witness =
-                Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+                Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12, 0, 0).unwrap();
             witness.glean(6).await.unwrap();
             assert_eq!(memory.queue_depth().unwrap(), 1);
         }
@@ -1101,6 +1212,8 @@ mod tests {
                 Some(memory.clone()),
                 1.0,
                 12,
+                0,
+                0,
             )
             .unwrap();
             witness.glean(11).await.unwrap();
@@ -1122,7 +1235,7 @@ mod tests {
         let memory = fresh_memory(dir.path());
         let model = FakeModel::replying(vec![ok("the very first one")]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000, 0, 0).unwrap();
         // No log file exists; the first glean fires.
         witness.glean(1).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 1);
@@ -1148,7 +1261,7 @@ mod tests {
         let memory = fresh_memory(dir.path());
         let model = FakeModel::replying(vec![ok("after torn")]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12, 0, 0).unwrap();
         // Within refractory of turn 6 → suppressed.
         witness.glean(11).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 0);
@@ -1167,11 +1280,178 @@ mod tests {
         let memory = fresh_memory(dir.path());
         let model = FakeModel::replying(vec![ok("one"), ok("two"), ok("three")]);
         let mut witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
 
         witness.glean(1).await.unwrap();
         witness.glean(2).await.unwrap();
         witness.glean(3).await.unwrap();
         assert_eq!(memory.queue_depth().unwrap(), 3, "gate disabled, all fire");
+    }
+
+    fn write_rejection_line(workspace: &Path, turn: u64, candidate: &str, reason: Option<&str>) {
+        let path = workspace.join("witness/rejections.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut entry = serde_json::json!({
+            "candidate_id": format!("01TEST{turn}"),
+            "candidate": candidate,
+            "turn": turn,
+            "at": "2026-06-17T00:00:00Z",
+        });
+        if let Some(reason) = reason {
+            entry["reason"] = serde_json::Value::String(reason.into());
+        }
+        let line = format!("{entry}\n");
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(line.as_bytes()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn glean_prompt_substitutes_recent_rejections_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nRejections:{recent_rejections}\nGlean.",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "hi", Some("hello"));
+        write_rejection_line(dir.path(), 5, "warm goodnight", Some("not a claim"));
+        write_rejection_line(
+            dir.path(),
+            6,
+            "the pattern of enqueue-before-log",
+            Some("meta-mining"),
+        );
+
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("nothing to glean")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 5)
+                .unwrap();
+        witness.glean(1).await.unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let body = &prompts[0].1;
+        assert!(
+            body.contains("[your prior gleans the agent rejected]"),
+            "{body}"
+        );
+        assert!(body.contains("warm goodnight"), "{body}");
+        assert!(body.contains("reason: not a claim"), "{body}");
+        assert!(body.contains("turn 5"), "{body}");
+        assert!(body.contains("turn 6"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn glean_prompt_substitutes_empty_when_no_rejections_file() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nRejections:{recent_rejections}\nGlean.",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "hi", Some("hello"));
+
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("nothing to glean")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 5)
+                .unwrap();
+        witness.glean(1).await.unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        let body = &prompts[0].1;
+        // {recent_rejections} substitutes to empty; the literal label
+        // ("Rejections:") remains alone with nothing under it.
+        assert!(!body.contains("[your prior gleans"), "{body}");
+        assert!(body.contains("Rejections:\nGlean."), "{body}");
+    }
+
+    #[tokio::test]
+    async fn queue_cap_drops_enqueue_and_preserves_refractory_state() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=30u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        // Pre-fill the queue past the cap (=1) so the next glean drops.
+        memory.enqueue_candidate("already there").unwrap();
+
+        let model = FakeModel::replying(vec![
+            ok("would-have-been-a-candidate"),
+            ok("the second one fires once cap clears"),
+        ]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 1, 0)
+                .unwrap();
+
+        // First glean: model returns text, but cap is at 1 already.
+        // Drop should not consume refractory state.
+        witness.glean(6).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1, "drop, queue unchanged");
+
+        // Pop the pre-existing entry — queue is now empty.
+        let _ = memory.pop_candidate().unwrap().unwrap();
+
+        // Second glean fires because cap is no longer reached and
+        // last_glean_through stayed None (the previous drop preserved it).
+        witness.glean(7).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1, "second one queued");
+    }
+
+    #[tokio::test]
+    async fn queue_cap_zero_disables() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=10u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        // Stuff the queue ahead of time.
+        for i in 0..5 {
+            memory.enqueue_candidate(&format!("pre-{i}")).unwrap();
+        }
+
+        let model = FakeModel::replying(vec![ok("candidate")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
+        witness.glean(6).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 6, "no cap, no drop");
+    }
+
+    #[tokio::test]
+    async fn rejection_window_zero_returns_no_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        write_rejection_line(dir.path(), 1, "anything", Some("any reason"));
+        let path = dir.path().join("witness/rejections.jsonl");
+        let entries = recent_rejections(&path, 0);
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejection_torn_line_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        let path = dir.path().join("witness/rejections.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "{\"candidate_id\":\"01A\",\"candidate\":\"good one\",\"turn\":5,\"at\":\"x\"}\n\
+             {\"candidate_id\":\"01B\",\"candi\n\
+             {\"candidate_id\":\"01C\",\"candidate\":\"after\",\"turn\":6,\"at\":\"x\"}\n",
+        )
+        .unwrap();
+        let entries = recent_rejections(&path, 10);
+        assert_eq!(entries.len(), 2, "torn line skipped");
+        assert_eq!(entries[1].candidate, "after");
     }
 }

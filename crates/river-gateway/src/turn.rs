@@ -50,8 +50,10 @@ enum Wake {
     Notifications(Vec<Notification>),
     Heartbeat,
     /// A quiet-trigger digestion turn carrying one extraction
-    /// candidate (wall ch. 02).
-    Digestion(String),
+    /// candidate (wall ch. 02). The ULID is the queue row id;
+    /// the reject tool needs both to write an attributable entry
+    /// to workspace/witness/rejections.jsonl.
+    Digestion { id: String, candidate: String },
     /// The queue changed while parked: recompute the select arms.
     Recheck,
     Shutdown,
@@ -242,7 +244,7 @@ impl<C: Chat> TurnLoop<C> {
                 } => {
                     if matches!(quiet_in, Some(_)) {
                         match memory.as_ref().and_then(|m| m.pop_candidate().ok().flatten()) {
-                            Some(candidate) => Wake::Digestion(candidate),
+                            Some((id, candidate)) => Wake::Digestion { id, candidate },
                             None => Wake::Recheck,
                         }
                     } else {
@@ -301,6 +303,7 @@ impl<C: Chat> TurnLoop<C> {
             self.active_flashes.retain(|(_, remaining)| *remaining > 0);
         }
 
+        let mut digestion: Option<crate::tools::DigestionInfo> = None;
         match wake {
             Wake::Notifications(batch) => {
                 // Dedup channels, preserving arrival order.
@@ -342,7 +345,12 @@ impl<C: Chat> TurnLoop<C> {
             Wake::Heartbeat => {
                 self.append(n, RecordRole::User, HEARTBEAT_MARKER)?;
             }
-            Wake::Digestion(candidate) => {
+            Wake::Digestion { id, candidate } => {
+                digestion = Some(crate::tools::DigestionInfo {
+                    candidate_id: id,
+                    candidate_text: candidate.clone(),
+                    turn: n,
+                });
                 // A digestion turn is itself activity. Reset the
                 // quiet gate so the next candidate waits a full
                 // QUIET_TRIGGER before firing, regardless of queue
@@ -397,6 +405,7 @@ impl<C: Chat> TurnLoop<C> {
             memory: self.memory.clone(),
             reindex: self.reindex.clone(),
             discord: self.discord.clone(),
+            digestion,
         };
 
         // Budget warning fires in the last 20% of the turn's tool
@@ -924,7 +933,7 @@ mod tests {
         let mut h = harness(dir.path(), model);
 
         h.turn_loop
-            .turn(Wake::Digestion("the agent kept circling teal".into()))
+            .turn(Wake::Digestion { id: "01JTEST".into(), candidate: "the agent kept circling teal".into() })
             .await
             .unwrap();
 
@@ -1024,7 +1033,7 @@ mod tests {
         h.turn_loop.last_significant_at =
             std::time::Instant::now() - std::time::Duration::from_secs(1000);
         h.turn_loop
-            .turn(Wake::Digestion("the agent kept circling teal".into()))
+            .turn(Wake::Digestion { id: "01JTEST".into(), candidate: "the agent kept circling teal".into() })
             .await
             .unwrap();
 

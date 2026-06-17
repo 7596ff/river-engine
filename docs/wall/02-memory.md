@@ -103,7 +103,10 @@ It never writes it.
 
 **Step 2 — the queue waits.** Candidates accumulate in a FIFO queue in
 the engine's database. The queue is patient; it usually survives
-restarts; losing it is acceptable — the witness gleans again.
+restarts; losing it is acceptable — the witness gleans again. Depth
+is bounded by `witness.max_queue_depth` (ch. 04, default 5) to keep
+one productive session from filling the next quiet stretch with weak
+candidates.
 
 **Step 3 — the quiet trigger drains it.** After 5 minutes without
 inbound messages (ch. 01), the agent takes candidates from the front of

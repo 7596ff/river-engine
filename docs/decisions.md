@@ -498,3 +498,35 @@ Workspace location (not data_dir) so iris can grep her own dedup
 decisions, and so the gate stays armed across data_dir disposal. Wall
 chs. 04 and 10 amended. Spec:
 `docs/superpowers/specs/2026-06-16-witness-glean-refractory-design.md`.
+
+## 2026-06-17 — witness rejection memory + queue cap
+
+iris-strix reported: post-restart she woke to 8 separate [digestion]
+turns over a quiet night, rejecting each one individually. Refractory
+(2026-06-16) had stopped the same-window cascade, but the witness was
+still stateless across calls — no awareness of queue contents, no
+memory of what the agent had already rejected. Two failure modes
+iris named: fixation on warm passages (goodnights, brief affectionate
+exchanges) and mining the witness's own design conversation.
+
+Decision: give the witness a persistent memory of rejections, plus a
+hard queue-depth ceiling as a guardrail.
+
+`reject_candidate(reason?)` joins the core profile (now 10 tools).
+Only valid inside a `Wake::Digestion` turn — the engine carries the
+current candidate's id and text on the tool context. Each call
+appends one entry (candidate_id, candidate, reason, turn, at) to
+`workspace/witness/rejections.jsonl`. The witness reads the last N
+entries (configurable, default 5) before each glean and renders them
+into a new `{recent_rejections}` slot in `on-glean.md`. Seed prompt
+updated to take rejections seriously.
+
+Queue cap (`witness.max_queue_depth`, default 5; zero disables) is
+enforced at enqueue time inside the witness. A drop is logged but
+does not consume refractory state — `last_glean_through` stays where
+it was, so a quieter moment lets the next eligible glean still fire.
+
+Workspace location (not data_dir) so the memory survives DB disposal
+and matches the inspectability rule already set for glean-log.jsonl.
+Wall chs. 02/04/07/10 amended. Spec:
+`docs/superpowers/specs/2026-06-17-witness-rejection-memory-design.md`.

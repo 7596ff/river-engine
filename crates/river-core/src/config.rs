@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-pub const DEFAULT_TOOLS: [&str; 9] = [
+pub const DEFAULT_TOOLS: [&str; 10] = [
     "read", "write", "edit", "glob", "grep", "bash", "speak", "search", "channel_read",
+    "reject_candidate",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -100,12 +101,24 @@ pub struct WitnessConfig {
     /// dice and shutdown pass) honor it. Zero disables. Default 12 =
     /// 2 × the 6-turn glean window.
     pub glean_min_new_turns: u64,
+    /// Hard ceiling on the extraction queue at enqueue time. The
+    /// witness drops candidates beyond this depth with a warning log;
+    /// refractory state stays untouched on a drop. Zero disables.
+    /// Default 5 — matches "0-1 candidates per quiet stretch" with
+    /// headroom for genuinely-productive sessions.
+    pub max_queue_depth: u64,
+    /// How many recent rejections (from rejections.jsonl) get rendered
+    /// into the witness's on-glean.md `{recent_rejections}` slot.
+    /// Default 5.
+    pub recent_rejections_window: usize,
 }
 
 impl Default for WitnessConfig {
     fn default() -> Self {
         Self {
             glean_min_new_turns: 12,
+            max_queue_depth: 5,
+            recent_rejections_window: 5,
         }
     }
 }

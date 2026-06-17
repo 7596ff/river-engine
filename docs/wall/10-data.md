@@ -18,7 +18,7 @@ records, not encodings.
 
 | tier | where | contents | on loss |
 |---|---|---|---|
-| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log | unrecoverable — this is the life |
+| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log, witness rejections | unrecoverable — this is the life |
 | **derived** | sqlite | vector index (segments), sync file-hashes | rebuilt automatically from the workspace |
 | **ephemeral** | sqlite | activation scores, extraction queue | warmth and pending digestion lost; the witness gleans again |
 
@@ -91,6 +91,27 @@ cannot answer.
 
 **`channels/*.jsonl`** is specified in ch. 05 and unchanged here: the
 wire record, with its own entry format and cursor semantics.
+
+**`witness/rejections.jsonl`** — append-only record of the agent's
+rejections (ch. 04 rejection memory). One line per
+`reject_candidate` call:
+
+```json
+{
+  "candidate_id": "01JXP...",
+  "candidate": "<full text of the rejected candidate>",
+  "reason": "warm goodnight, not a claim",
+  "turn": 731,
+  "at": "2026-06-17T03:14:22Z"
+}
+```
+
+The `candidate_id` cross-references `glean-log.jsonl` and the
+disposable extraction queue. `reason` is omitted when the agent
+called the tool without an argument. The witness reads the last N
+entries before each glean and renders them into the prompt; the file
+itself survives data_dir disposal so the witness's memory of what
+didn't land persists across SQLite resets.
 
 **`witness/glean-log.jsonl`** — append-only receipts for queued
 extraction candidates (ch. 04 refractory). One line per enqueue:

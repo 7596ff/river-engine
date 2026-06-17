@@ -85,6 +85,28 @@ Gleaning is the anti-enclosure right made operational (ch. 02). The
 witness's retrospective distance is the point: it sees what the agent
 walked past *because* it was not the one walking.
 
+**Rejection memory.** The witness reads
+`workspace/witness/rejections.jsonl` and surfaces the last N entries
+(N configurable, default 5) as the `{recent_rejections}` block in
+`on-glean.md`. Each entry records the candidate text, an optional
+agent-supplied reason, the turn the rejection happened in, and a
+timestamp — written by the agent's `reject_candidate` tool (ch. 07)
+during the digestion turn that asked the question. Without this
+signal the witness re-surfaces patterns the agent already turned
+away; with it, rejections become learning, not noise. The file is
+append-only and lives in the workspace alongside `glean-log.jsonl`,
+so the gate survives data_dir disposal and hand-deletion resets the
+memory the same way deleting any workspace log does.
+
+**Queue depth cap.** At enqueue time the witness checks the queue's
+current depth; at-or-above the configured cap (`max_queue_depth`,
+default 5; zero disables) the candidate is dropped with a warning.
+A drop does not consume refractory state — `last_glean_through`
+stays where it was — so a quieter moment lets the next eligible
+glean still fire. The cap bounds the worst case (a productive
+session filling the next quiet stretch with weak candidates) without
+silencing the witness when it has real signal.
+
 **Refractory.** After a candidate is queued at turn T, no further
 glean fires until the agent has reached turn `T + N`, where `N` is the
 configured threshold (default 12 = 2 × the 6-turn glean window). The
@@ -144,6 +166,15 @@ threshold is first crossed.
   turn-distance refractory between queued candidates (default 12,
   configurable per agent; zero disables). The pass runs; the
   refractory decides whether a candidate is queued.
+- **Rejection memory is in the workspace.** Rejections persist in
+  `workspace/witness/rejections.jsonl`, written by the agent's
+  `reject_candidate` tool. The witness reads the last N entries
+  (configurable) before each glean and renders them into the prompt's
+  `{recent_rejections}` slot. The witness's memory of what didn't
+  land survives data_dir disposal and is inspectable by the agent.
+- **Queue depth is bounded.** The witness drops enqueues at-or-above
+  `max_queue_depth` (default 5, configurable; zero disables). A drop
+  does not consume refractory state.
 - **No gleaning over digestion.** Digestion turns are skipped by the
   dice and stripped from the glean window. The witness never compresses
   the machinery of its own past compressions. The quiet gate on the
