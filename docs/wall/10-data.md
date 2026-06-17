@@ -18,7 +18,7 @@ records, not encodings.
 
 | tier | where | contents | on loss |
 |---|---|---|---|
-| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth | unrecoverable — this is the life |
+| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log | unrecoverable — this is the life |
 | **derived** | sqlite | vector index (segments), sync file-hashes | rebuilt automatically from the workspace |
 | **ephemeral** | sqlite | activation scores, extraction queue | warmth and pending digestion lost; the witness gleans again |
 
@@ -91,6 +91,21 @@ cannot answer.
 
 **`channels/*.jsonl`** is specified in ch. 05 and unchanged here: the
 wire record, with its own entry format and cursor semantics.
+
+**`witness/glean-log.jsonl`** — append-only receipts for queued
+extraction candidates (ch. 04 refractory). One line per enqueue:
+
+```json
+{"id":"01JXP...","turn":47,"at":"2026-06-16T03:14:22Z"}
+```
+
+The `id` matches the candidate's row id in the disposable extraction
+queue, so the log cross-references the queue while surviving it. The
+tail's `turn` is the witness's `last_glean_through` — the gate
+recovers from the file alone, with no SQLite dependency. Hand-deleting
+the log resets the gate to "open"; deleting individual lines is the
+same idiom as hand-editing `moves.jsonl` (the next glean reads what's
+left and acts accordingly).
 
 ## The database
 

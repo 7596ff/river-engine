@@ -476,3 +476,25 @@ exactly the moves the arc layer exists for. The wall amendment
 applies to both `build` (session start, channel switch) and
 `compact` (mid-life) since both end by reloading the arc after
 backfill.
+
+## 2026-06-16 — witness glean refractory
+
+Live report from iris-strix: nine candidates queued in one stretch,
+eight of them noise from the same narrow band of material (a
+channel_read debug session across three restarts). Wall ch. 04's flat
+per-turn probability plus guaranteed end-of-session pass has nothing
+preventing successive gleans over heavily overlapping source windows.
+
+Decision: add a pre-model **refractory** keyed on turn-distance from
+the last queued candidate. Configurable per agent under
+`agents.<name>.witness.glean_min_new_turns`; default 12 (= 2 ×
+GLEAN_WINDOW_TURNS). The gate is structural — no semantic check on
+the candidate — and applies to both wake paths (dice and shutdown).
+State persists in `workspace/witness/glean-log.jsonl`, an append-only
+log keyed by the candidate's ULID so it cross-references the
+disposable extraction queue while surviving it.
+
+Workspace location (not data_dir) so iris can grep her own dedup
+decisions, and so the gate stays armed across data_dir disposal. Wall
+chs. 04 and 10 amended. Spec:
+`docs/superpowers/specs/2026-06-16-witness-glean-refractory-design.md`.

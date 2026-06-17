@@ -85,6 +85,29 @@ pub struct AgentConfig {
     /// Attachment knobs. Optional; the defaults here are v1's values.
     #[serde(default)]
     pub attachments: AttachmentsConfig,
+    /// Witness-side knobs (wall ch. 04). Optional; defaults bind here.
+    #[serde(default)]
+    pub witness: WitnessConfig,
+}
+
+/// Witness-side knobs (wall ch. 04). Every field optional in config;
+/// defaults here are the wall's numbers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WitnessConfig {
+    /// Refractory: minimum turns of forward movement required between
+    /// queued candidates. Pre-model gate; both wake paths (per-turn
+    /// dice and shutdown pass) honor it. Zero disables. Default 12 =
+    /// 2 × the 6-turn glean window.
+    pub glean_min_new_turns: u64,
+}
+
+impl Default for WitnessConfig {
+    fn default() -> Self {
+        Self {
+            glean_min_new_turns: 12,
+        }
+    }
 }
 
 /// Attachment-handling knobs.

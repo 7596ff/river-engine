@@ -85,6 +85,20 @@ Gleaning is the anti-enclosure right made operational (ch. 02). The
 witness's retrospective distance is the point: it sees what the agent
 walked past *because* it was not the one walking.
 
+**Refractory.** After a candidate is queued at turn T, no further
+glean fires until the agent has reached turn `T + N`, where `N` is the
+configured threshold (default 12 = 2 × the 6-turn glean window). The
+gate is pre-model: when within refractory the witness does not even
+call its model. Both wake paths — per-turn dice and the end-of-session
+pass — honor the gate; "guaranteed end-of-session pass" names a *pass*
+that runs, not a candidate that must be queued. The threshold is a
+structural rule, not a semantic judgment: a stretch of activity that
+keeps mining the same narrow band of material produces zero or one
+candidate, not many, regardless of what the model would have said.
+`last_glean_through` persists across restarts in
+`workspace/witness/glean-log.jsonl` (one append-only entry per queued
+candidate), so the gate survives even when the data_dir cache is wiped.
+
 The witness does not glean over its own gleanings. Digestion turns
 (ch. 02) — the system frames carrying a candidate plus the agent's
 response to it — are excluded from the glean window, and the dice are
@@ -126,7 +140,10 @@ threshold is first crossed.
   forward from the tail — so a hand-edited moves file (a deleted
   line) regenerates on the next settled turn.
 - **Glean cadence.** Flat per-turn probability (default 0.25,
-  configurable) + guaranteed end-of-session pass.
+  configurable) + guaranteed end-of-session pass, both subject to a
+  turn-distance refractory between queued candidates (default 12,
+  configurable per agent; zero disables). The pass runs; the
+  refractory decides whether a candidate is queued.
 - **No gleaning over digestion.** Digestion turns are skipped by the
   dice and stripped from the glean window. The witness never compresses
   the machinery of its own past compressions. The quiet gate on the

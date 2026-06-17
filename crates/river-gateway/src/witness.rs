@@ -29,6 +29,57 @@ use crate::turn::DIGESTION_MARKER;
 pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
 const GLEAN_WINDOW_TURNS: u64 = 6;
 
+/// Read `glean-log.jsonl` and recover the tail entry's turn. Torn
+/// lines and parse failures are skipped with a warning — the tail
+/// before the torn line still wins.
+fn recover_last_glean_through(path: &Path) -> Option<u64> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "reading glean-log.jsonl");
+            return None;
+        }
+    };
+    let mut last: Option<u64> = None;
+    for (line_no, raw) in text.lines().enumerate() {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<GleanLogEntry>(raw) {
+            Ok(entry) => last = Some(entry.turn),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                line = line_no + 1,
+                error = %e,
+                "skipping malformed glean-log entry"
+            ),
+        }
+    }
+    last
+}
+
+/// Append one entry to `glean-log.jsonl`, creating the file if absent.
+fn append_glean_log(path: &Path, entry: &GleanLogEntry) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut json = serde_json::to_string(entry)?;
+    json.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("appending to {}", path.display()))?;
+    file.sync_data()
+        .with_context(|| format!("fsyncing {}", path.display()))?;
+    Ok(())
+}
+
 pub struct Witness<C: Chat> {
     workspace: PathBuf,
     client: C,
@@ -38,6 +89,22 @@ pub struct Witness<C: Chat> {
     moves: MovesFile,
     memory: Option<crate::memory::Memory>,
     glean_probability: f64,
+    /// Refractory threshold: minimum turns of forward movement
+    /// required between queued candidates. Zero disables the gate.
+    glean_min_new_turns: u64,
+    /// The `up_to_turn` of the most recently queued candidate;
+    /// recovered at load from the log tail, updated on each enqueue.
+    last_glean_through: Option<u64>,
+    /// `workspace/witness/glean-log.jsonl`.
+    glean_log_path: PathBuf,
+}
+
+/// One entry in `glean-log.jsonl`: the receipt for a queued candidate.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GleanLogEntry {
+    id: String,
+    turn: u64,
+    at: String,
 }
 
 impl<C: Chat> Witness<C> {
@@ -50,6 +117,7 @@ impl<C: Chat> Witness<C> {
         client: C,
         memory: Option<crate::memory::Memory>,
         glean_probability: f64,
+        glean_min_new_turns: u64,
     ) -> anyhow::Result<Self> {
         let identity_path = workspace.join("witness").join("identity.md");
         let identity = match std::fs::read_to_string(&identity_path) {
@@ -96,6 +164,8 @@ impl<C: Chat> Witness<C> {
         };
 
         let moves = MovesFile::open(workspace)?;
+        let glean_log_path = workspace.join("witness").join("glean-log.jsonl");
+        let last_glean_through = recover_last_glean_through(&glean_log_path);
         Ok(Self {
             workspace: workspace.to_path_buf(),
             client,
@@ -105,6 +175,9 @@ impl<C: Chat> Witness<C> {
             moves,
             memory,
             glean_probability,
+            glean_min_new_turns,
+            last_glean_through,
+            glean_log_path,
         })
     }
 
@@ -192,6 +265,18 @@ impl<C: Chat> Witness<C> {
             tracing::debug!(turn = up_to_turn, "glean: skipped (digestion turn)");
             return Ok(());
         }
+        if let Some(last) = self.last_glean_through
+            && self.glean_min_new_turns > 0
+            && up_to_turn.saturating_sub(last) < self.glean_min_new_turns
+        {
+            tracing::debug!(
+                turn = up_to_turn,
+                last_glean_through = last,
+                min_new = self.glean_min_new_turns,
+                "glean: skipped (refractory)"
+            );
+            return Ok(());
+        }
         let digestion_turns: std::collections::HashSet<u64> = (from_turn..=up_to_turn)
             .filter(|t| is_digestion_turn(&all_lines, *t))
             .collect();
@@ -222,7 +307,21 @@ impl<C: Chat> Witness<C> {
                 {
                     tracing::debug!(turn = up_to_turn, "glean: nothing");
                 } else {
-                    memory.enqueue_candidate(candidate)?;
+                    let id = memory.enqueue_candidate(candidate)?;
+                    // Log only after the queue insert succeeds — a torn
+                    // log line cannot describe a phantom queue row, and
+                    // a failed log write leaves the gate untouched so
+                    // the next call retries naturally.
+                    let entry = GleanLogEntry {
+                        id,
+                        turn: up_to_turn,
+                        at: jiff::Timestamp::now().to_string(),
+                    };
+                    if let Err(e) = append_glean_log(&self.glean_log_path, &entry) {
+                        tracing::warn!(turn = up_to_turn, error = %e, "glean-log append failed");
+                    } else {
+                        self.last_glean_through = Some(up_to_turn);
+                    }
                     tracing::info!(turn = up_to_turn, "glean: candidate queued");
                 }
             }
@@ -481,7 +580,7 @@ mod tests {
     fn missing_identity_fails_naming_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let model = FakeModel::replying(vec![]);
-        let err = match Witness::load(dir.path(), model, None, 0.0) {
+        let err = match Witness::load(dir.path(), model, None, 0.0, 0) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("load should fail without witness identity"),
         };
@@ -496,7 +595,7 @@ mod tests {
         std::fs::write(witness_dir.join("identity.md"), "You are the witness.").unwrap();
 
         let model = FakeModel::replying(vec![]);
-        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         assert!(witness.on_turn.is_none());
     }
 
@@ -509,7 +608,7 @@ mod tests {
         let model = FakeModel::replying(vec![ok(
             "  Cass asked what teal is; you defined it as blue-green.  \n",
         )]);
-        let mut witness = Witness::load(dir.path(), model.clone(), None, 0.0).unwrap();
+        let mut witness = Witness::load(dir.path(), model.clone(), None, 0.0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -536,7 +635,7 @@ mod tests {
         record_turn(dir.path(), 1, "hello?", None);
 
         let model = FakeModel::replying(vec![Err(anyhow::anyhow!("witness model down"))]);
-        let mut witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -553,7 +652,7 @@ mod tests {
         record_turn(dir.path(), 1, "hi", Some("hello"));
 
         let model = FakeModel::replying(vec![ok("   \n ")]);
-        let mut witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let mut witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         witness.move_for(1).await.unwrap();
 
         let moves = read_moves(witness.moves.path()).unwrap();
@@ -588,7 +687,7 @@ mod tests {
             ok("nothing to glean"),
         ]);
         let witness =
-            Witness::load(dir.path(), model, Some(memory.clone()), 1.0).unwrap();
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0).unwrap();
 
         let (latest_tx, latest_rx) = watch::channel(1u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -642,7 +741,7 @@ mod tests {
 
         let model = FakeModel::replying(vec![]);
         let mut witness =
-            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0).unwrap();
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0).unwrap();
         witness.glean(1).await.unwrap();
 
         assert_eq!(memory.queue_depth().unwrap(), 0);
@@ -684,7 +783,7 @@ mod tests {
 
         let model = FakeModel::replying(vec![ok("rosemary and teal — cass's signals")]);
         let mut witness =
-            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0).unwrap();
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0).unwrap();
         witness.glean(3).await.unwrap();
 
         let prompts = model.prompts.lock().unwrap();
@@ -796,7 +895,7 @@ mod tests {
 
         // First pass: moves for all three turns.
         let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         let moves_path = witness.moves.path().to_path_buf();
         let (latest_tx, latest_rx) = watch::channel(3u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -825,7 +924,7 @@ mod tests {
         // still process.
         record_turn(dir.path(), 4, "q4", Some("a4"));
         let model = FakeModel::replying(vec![ok("move two, retold"), ok("move four")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         let (latest_tx, latest_rx) = watch::channel(4u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
@@ -857,7 +956,7 @@ mod tests {
         }
 
         let model = FakeModel::replying(vec![ok("move one"), ok("move two"), ok("move three")]);
-        let witness = Witness::load(dir.path(), model, None, 0.0).unwrap();
+        let witness = Witness::load(dir.path(), model, None, 0.0, 0).unwrap();
         let moves_path = witness.moves.path().to_path_buf();
 
         let (latest_tx, latest_rx) = watch::channel(3u64);
@@ -883,5 +982,196 @@ mod tests {
         );
         assert_eq!(moves[2].summary, "move three");
         assert_eq!(record::witness_cursor(&moves_path).unwrap(), 3);
+    }
+
+    fn seed_glean(workspace: &Path) {
+        seed_witness(workspace);
+        std::fs::write(
+            workspace.join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nGlean.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+    }
+
+    fn fresh_memory(workspace: &Path) -> crate::memory::Memory {
+        crate::memory::Memory::open(
+            &workspace.join("data"),
+            workspace,
+            &[],
+            std::sync::Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn refractory_blocks_glean_within_threshold_without_calling_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=10u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        // One reply for the first glean only. If the second (refractory-
+        // blocked) glean called the model, FakeModel would panic on the
+        // empty queue.
+        let model = FakeModel::replying(vec![ok("candidate one — worth a note")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+
+        witness.glean(6).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+        // Within refractory (6 → 11 is only 5 turns of forward movement,
+        // threshold is 12): no model call, no enqueue, no panic.
+        witness.glean(11).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn refractory_releases_after_threshold_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=30u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![
+            ok("candidate one"),
+            ok("candidate two"),
+        ]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+
+        witness.glean(6).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+        // 6 → 18 is exactly 12 turns: refractory releases.
+        witness.glean(18).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn first_glean_always_fires() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=3u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("first one")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000).unwrap();
+
+        witness.glean(3).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1, "no prior gleans, gate is open");
+    }
+
+    #[tokio::test]
+    async fn refractory_state_persists_across_witness_load() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=30u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+
+        // First witness queues at turn 6 and writes the log.
+        {
+            let model = FakeModel::replying(vec![ok("candidate one")]);
+            let mut witness =
+                Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+            witness.glean(6).await.unwrap();
+            assert_eq!(memory.queue_depth().unwrap(), 1);
+        }
+
+        // Second witness loads with the same workspace; the log tail
+        // recovers last_glean_through, so a glean at turn 11 (only 5
+        // forward) stays gated even though the queue could be empty
+        // (we already popped to verify recovery is from the log, not
+        // the queue).
+        memory.pop_candidate().unwrap().unwrap();
+        {
+            // One reply — if the gate doesn't recover, the model is
+            // called and the reply is consumed; we then check the
+            // depth went up. If the gate recovers, no call, depth stays
+            // at zero.
+            let model = FakeModel::replying(vec![ok("would-be candidate two")]);
+            let mut witness = Witness::load(
+                dir.path(),
+                model.clone(),
+                Some(memory.clone()),
+                1.0,
+                12,
+            )
+            .unwrap();
+            witness.glean(11).await.unwrap();
+            assert_eq!(
+                memory.queue_depth().unwrap(),
+                0,
+                "refractory recovered from the log; no enqueue"
+            );
+            // And explicitly: model was not called.
+            assert_eq!(model.prompts.lock().unwrap().len(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_log_means_open_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        record_turn(dir.path(), 1, "q1", Some("a1"));
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("the very first one")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 1000).unwrap();
+        // No log file exists; the first glean fires.
+        witness.glean(1).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn torn_log_line_does_not_poison_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=30u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        // Write a log by hand: one good entry at turn 6, then a torn
+        // line. Recovery should land on turn 6 — the torn line is
+        // skipped, not fatal.
+        let log_path = dir.path().join("witness/glean-log.jsonl");
+        std::fs::write(
+            &log_path,
+            "{\"id\":\"01J\",\"turn\":6,\"at\":\"2026-06-16T00:00:00Z\"}\n{\"id\":\"01K\",\"turn\":\n",
+        )
+        .unwrap();
+
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("after torn")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 12).unwrap();
+        // Within refractory of turn 6 → suppressed.
+        witness.glean(11).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 0);
+        // 6 → 18 releases the gate.
+        witness.glean(18).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn refractory_zero_disables_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        for turn in 1..=5u64 {
+            record_turn(dir.path(), turn, &format!("q{turn}"), Some(&format!("a{turn}")));
+        }
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("one"), ok("two"), ok("three")]);
+        let mut witness =
+            Witness::load(dir.path(), model, Some(memory.clone()), 1.0, 0).unwrap();
+
+        witness.glean(1).await.unwrap();
+        witness.glean(2).await.unwrap();
+        witness.glean(3).await.unwrap();
+        assert_eq!(memory.queue_depth().unwrap(), 3, "gate disabled, all fire");
     }
 }

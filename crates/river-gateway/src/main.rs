@@ -168,6 +168,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         witness_client,
         mem.clone(),
         agent.glean_probability,
+        agent.witness.glean_min_new_turns,
     )?;
 
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
