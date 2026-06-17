@@ -94,6 +94,30 @@ Skip the update when either side of the division is zero. All estimates
 multiply by the current ratio. The weighted average smooths
 content-type swings (code vs prose) and converges within a few turns.
 
+## Session resume
+
+A restart is not a death. Between sessions, the ephemeral pieces of
+the context — the current channel, the estimator's calibration ratio,
+the memory slot's active flashes, the quiet-gate timer — would
+otherwise reset, producing a "little death" in which the agent wakes
+on `local_main` with cold estimates and an empty slot regardless of
+what it was doing before. `workspace/session.json` carries these
+across restarts.
+
+- **Written at every settle** via atomic tmp + fsync + rename, so a
+  live snapshot is at most one turn behind reality and a killed
+  gateway mid-write never leaves a torn file.
+- **Loaded once at startup.** Missing or malformed file → fall back
+  to derivation: the channel is the tail of `record/turns.jsonl`
+  (where iris was actually talking), other fields reset to defaults.
+- **Hot and arc still rebuild from the record + moves** — those are
+  ground truth in the workspace already. Session resume only carries
+  the in-memory state that has no other home.
+- `quiet_seconds` is the elapsed wall-clock between the last
+  significant event and the snapshot. On resume the timer continues
+  as if that much silence had already passed — extended downtime is
+  extended silence, and a candidate that was about to fire fires.
+
 ## Configuration
 
 Four knobs, nothing per-layer:
@@ -127,5 +151,10 @@ threshold; turn-lag threshold of 10.
   time: as a full turn in hot, or as a one-line move in the arc,
   never both. When backfill pulls a compressed turn back into hot,
   its move is suppressed from the arc for that assembly.
+- **Session resume is honest.** `workspace/session.json` is written
+  atomically at every settle and read once at startup. Missing or
+  malformed → fall back to derivation; the record tail names the
+  channel. Hot and arc are never persisted in the snapshot — they
+  rebuild from `record/turns.jsonl` and `record/moves.jsonl`.
 - **Calibration** uses reported prompt tokens only, with the 0.7/0.3
   weighted average and zero-skip.

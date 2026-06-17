@@ -530,3 +530,28 @@ Workspace location (not data_dir) so the memory survives DB disposal
 and matches the inspectability rule already set for glean-log.jsonl.
 Wall chs. 02/04/07/10 amended. Spec:
 `docs/superpowers/specs/2026-06-17-witness-rejection-memory-design.md`.
+
+## 2026-06-17 — session resume
+
+Cass: restart was a "little death." The dominant loss was the
+channel — startup hardcoded `DEFAULT_CHANNEL = "local_main"`, so
+iris's discord hot vanished from working memory on every restart
+even though the record + moves remained on disk. Secondary losses:
+estimator calibration ratio reset to 1.0, active flashes died
+mid-countdown, quiet-gate timer reset.
+
+Decision: `workspace/session.json` — single JSON object written
+atomically (tmp + fsync + rename) at every settle, read once at
+startup. Carries channel + turn_number + saved_at + estimator_ratio
++ active_flashes + quiet_seconds. Missing/torn/version-mismatched
+file falls back to derivation: the channel comes from the record
+tail (where iris was actually talking); other fields reset.
+
+Workspace location (not data_dir) so resume survives DB disposal,
+matches the inspectability pattern already set by glean-log /
+rejections, and gives the agent a way to look at "what was I
+doing." Hot and arc are not snapshotted — they rebuild from the
+record + moves once the channel is right. Wall chs. 03/10 amended.
+Spec:
+`docs/superpowers/specs/2026-06-17-context-resume-design.md` (none
+yet — we went straight from brainstorm to code).

@@ -137,13 +137,39 @@ impl<C: Chat> TurnLoop<C> {
         reindex: Option<mpsc::Sender<()>>,
         discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
         working: watch::Sender<Option<String>>,
+        resume: Option<crate::session::SessionSnapshot>,
     ) -> anyhow::Result<Self> {
         let record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
         let turn_number = last_turn(record.path())?;
         let system_prompt = fresh_system_prompt(&workspace, &tz)?;
-        let context =
-            PersistentContext::build(&workspace, DEFAULT_CHANNEL, system_prompt, knobs.clone())?;
+
+        // Pick the resume channel: session.json wins, then the
+        // record's tail (where iris was actually talking), then
+        // DEFAULT_CHANNEL for first-session cold starts.
+        let channel = match &resume {
+            Some(snap) => snap.channel.clone(),
+            None => crate::session::channel_from_record_tail(&workspace)
+                .unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+        };
+        let mut context =
+            PersistentContext::build(&workspace, &channel, system_prompt, knobs.clone())?;
+
+        let (last_significant_at, active_flashes) = match resume {
+            Some(snap) => {
+                context.set_estimator_ratio(snap.estimator_ratio);
+                let last_significant_at = std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(snap.quiet_seconds))
+                    .unwrap_or_else(std::time::Instant::now);
+                let active = snap
+                    .active_flashes
+                    .into_iter()
+                    .map(crate::session::FlashSnapshot::into_active)
+                    .collect();
+                (last_significant_at, active)
+            }
+            None => (std::time::Instant::now(), Vec::new()),
+        };
 
         Ok(Self {
             workspace,
@@ -168,9 +194,9 @@ impl<C: Chat> TurnLoop<C> {
             reindex,
             discord,
             working,
-            last_significant_at: std::time::Instant::now(),
+            last_significant_at,
             positions: HashMap::new(),
-            active_flashes: Vec::new(),
+            active_flashes,
         })
     }
 
@@ -543,11 +569,28 @@ impl<C: Chat> TurnLoop<C> {
         });
         let _ = self.snapshot.send(self.context.snapshot(n));
         let _ = self.working.send(None);
+        if let Err(e) = self.write_session() {
+            tracing::warn!(turn = n, error = %e, "session.json write failed");
+        }
         // Persist-before-announce: every append above fsynced inline,
         // so the record already holds the whole turn.
         let _ = self.settled.send(n);
         tracing::debug!(turn = n, "settled");
         Ok(())
+    }
+
+    /// Snapshot the ephemeral context state for the next session
+    /// (wall ch. 03 — session resume). Written atomically each settle;
+    /// missing or torn on next startup falls back to derivation.
+    fn write_session(&self) -> anyhow::Result<()> {
+        let snap = crate::session::SessionSnapshot::new(
+            self.context.channel().to_string(),
+            self.turn_number,
+            self.context.estimator_ratio(),
+            &self.active_flashes,
+            self.last_significant_at.elapsed().as_secs(),
+        );
+        snap.write_atomic(&self.workspace.join("session.json"))
     }
 
     /// Persist-once: context append and record append are one act,
@@ -728,6 +771,14 @@ mod tests {
     }
 
     fn harness(dir: &Path, model: Arc<FakeModel>) -> Harness {
+        harness_with_resume(dir, model, None)
+    }
+
+    fn harness_with_resume(
+        dir: &Path,
+        model: Arc<FakeModel>,
+        resume: Option<crate::session::SessionSnapshot>,
+    ) -> Harness {
         write_identity(dir);
         let (notify_tx, notify_rx) = mpsc::channel(256);
         let channels = Channels::open(dir, notify_tx).unwrap();
@@ -756,6 +807,7 @@ mod tests {
             None,
             None,
             watch::channel(None).0,
+            resume,
         )
         .unwrap();
         Harness {
@@ -1156,5 +1208,125 @@ mod tests {
         // The reply was spoken (and cursored) on the new channel.
         let porch = h.channels.scan("porch_main").unwrap();
         assert_eq!(porch.last().unwrap().content.as_deref(), Some("hi front porch"));
+    }
+
+    #[tokio::test]
+    async fn settle_writes_session_json_with_current_channel_and_ratio() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![speak("hi"), done("")]);
+        let mut h = harness(dir.path(), model.clone());
+        let n1 = say(&mut h, "porch_main", "ping").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![n1]))
+            .await
+            .unwrap();
+
+        let snap = crate::session::load(&dir.path().join("session.json"))
+            .expect("session.json should be written at settle");
+        assert_eq!(snap.channel, "porch_main");
+        assert_eq!(snap.version, 1);
+        assert!(snap.turn_number >= 1);
+    }
+
+    #[tokio::test]
+    async fn resume_picks_channel_from_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        // Seed a record so build() has something to scan.
+        crate::record::TurnRecord::open(dir.path())
+            .unwrap()
+            .append(
+                1,
+                "porch_main",
+                crate::record::RecordRole::User,
+                Some("[porch_main] cass: hi"),
+            )
+            .unwrap();
+        let snap = crate::session::SessionSnapshot::new(
+            "porch_main".into(),
+            1,
+            0.88,
+            &[],
+            10,
+        );
+        snap.write_atomic(&dir.path().join("session.json")).unwrap();
+
+        let model = FakeModel::replying(vec![]);
+        let h = harness_with_resume(dir.path(), model, Some(snap));
+        assert_eq!(h.turn_loop.context.channel(), "porch_main");
+        assert!(
+            (h.turn_loop.context.estimator_ratio() - 0.88).abs() < 1e-9,
+            "estimator ratio restored"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_derives_channel_from_record_tail_when_no_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::record::TurnRecord::open(dir.path())
+            .unwrap()
+            .append(
+                1,
+                "porch_main",
+                crate::record::RecordRole::User,
+                Some("[porch_main] cass: hi"),
+            )
+            .unwrap();
+        let model = FakeModel::replying(vec![]);
+        let h = harness_with_resume(dir.path(), model, None);
+        assert_eq!(h.turn_loop.context.channel(), "porch_main");
+    }
+
+    #[tokio::test]
+    async fn cold_start_with_no_record_uses_default_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![]);
+        let h = harness_with_resume(dir.path(), model, None);
+        assert_eq!(h.turn_loop.context.channel(), DEFAULT_CHANNEL);
+    }
+
+    #[tokio::test]
+    async fn resume_round_trip_active_flashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = crate::session::SessionSnapshot::new(
+            DEFAULT_CHANNEL.into(),
+            0,
+            1.0,
+            &[(
+                crate::memory::Flash {
+                    note_id: "n1".into(),
+                    text: "first flash".into(),
+                    neighbors: vec![],
+                },
+                2,
+            )],
+            0,
+        );
+        snap.write_atomic(&dir.path().join("session.json")).unwrap();
+
+        let model = FakeModel::replying(vec![]);
+        let h = harness_with_resume(dir.path(), model, Some(snap));
+        assert_eq!(h.turn_loop.active_flashes.len(), 1);
+        assert_eq!(h.turn_loop.active_flashes[0].0.note_id, "n1");
+        assert_eq!(h.turn_loop.active_flashes[0].1, 2);
+    }
+
+    #[tokio::test]
+    async fn resume_quiet_seconds_shifts_last_significant_at_into_the_past() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = crate::session::SessionSnapshot::new(
+            DEFAULT_CHANNEL.into(),
+            0,
+            1.0,
+            &[],
+            200,
+        );
+        snap.write_atomic(&dir.path().join("session.json")).unwrap();
+        let model = FakeModel::replying(vec![]);
+        let h = harness_with_resume(dir.path(), model, Some(snap));
+        let elapsed = h.turn_loop.last_significant_at.elapsed().as_secs();
+        assert!(
+            elapsed >= 200 && elapsed < 210,
+            "elapsed = {elapsed}, expected ~200"
+        );
     }
 }

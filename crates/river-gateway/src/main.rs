@@ -6,6 +6,7 @@ mod identity;
 mod memory;
 mod model;
 mod record;
+mod session;
 mod surface;
 mod tools;
 mod turn;
@@ -217,6 +218,16 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     };
     let discord_tx = discord_setup.as_ref().map(|(_, tx, _)| tx.clone());
     let (working_tx, working_rx) = tokio::sync::watch::channel(None);
+    let resume = session::load(&agent.workspace.join("session.json"));
+    if let Some(snap) = &resume {
+        tracing::info!(
+            channel = %snap.channel,
+            turn_number = snap.turn_number,
+            estimator_ratio = snap.estimator_ratio,
+            quiet_seconds = snap.quiet_seconds,
+            "resuming from session.json"
+        );
+    }
 
     let turn_loop = turn::TurnLoop::new(
         agent.workspace.clone(),
@@ -238,6 +249,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         reindex_tx,
         discord_tx,
         working_tx,
+        resume,
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

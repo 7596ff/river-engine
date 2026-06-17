@@ -46,6 +46,10 @@ impl Estimator {
     pub fn ratio(&self) -> f64 {
         self.ratio
     }
+
+    pub fn set_ratio(&mut self, ratio: f64) {
+        self.ratio = ratio;
+    }
 }
 
 /// One look at the assembled window (wall ch. 03 + the /context
@@ -179,6 +183,17 @@ impl PersistentContext {
     /// (slot discipline, wall ch. 03).
     pub fn set_memory_slot(&mut self, text: String) {
         self.memory_slot = text;
+    }
+
+    /// Estimator calibration ratio — `session.json` persists this so
+    /// the next session's estimates don't jolt back to 1.0.
+    pub fn estimator_ratio(&self) -> f64 {
+        self.estimator.ratio()
+    }
+
+    /// Restore a calibration ratio recovered from `session.json`.
+    pub fn set_estimator_ratio(&mut self, ratio: f64) {
+        self.estimator.set_ratio(ratio);
     }
 
     pub fn needs_compaction(&self) -> bool {

@@ -18,7 +18,7 @@ records, not encodings.
 
 | tier | where | contents | on loss |
 |---|---|---|---|
-| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log, witness rejections | unrecoverable — this is the life |
+| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log, witness rejections, session snapshot | unrecoverable — this is the life |
 | **derived** | sqlite | vector index (segments), sync file-hashes | rebuilt automatically from the workspace |
 | **ephemeral** | sqlite | activation scores, extraction queue | warmth and pending digestion lost; the witness gleans again |
 
@@ -91,6 +91,29 @@ cannot answer.
 
 **`channels/*.jsonl`** is specified in ch. 05 and unchanged here: the
 wire record, with its own entry format and cursor semantics.
+
+**`session.json`** — checkpoint of the ephemeral context state for
+the next session (ch. 03). Single JSON object, rewritten atomically
+each settle (tmp + fsync + rename):
+
+```json
+{
+  "version": 1,
+  "channel": "discord_1472099087783297035",
+  "turn_number": 664,
+  "saved_at": "2026-06-17T03:14:22Z",
+  "estimator_ratio": 0.988,
+  "active_flashes": [
+    {"note_id": "...", "text": "...", "neighbors": [["extends", "..."]], "remaining": 2}
+  ],
+  "quiet_seconds": 247
+}
+```
+
+A missing, torn, or version-mismatched file is treated as absent;
+startup falls through to derivation (channel from record tail, other
+fields reset to defaults). The snapshot never carries hot or arc —
+those rebuild from the record and moves files.
 
 **`witness/rejections.jsonl`** — append-only record of the agent's
 rejections (ch. 04 rejection memory). One line per
