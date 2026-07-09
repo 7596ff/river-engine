@@ -235,8 +235,11 @@ A sync service watches `knowledge/`, `loom/`, and `record/moments/`
 hash each file, embed new or changed content in segments, remove
 vectors for deleted files. Embeddings come from a configured embedding
 endpoint. Search is cosine similarity over the stored vectors, exposed
-to the agent as the `search` tool (ch. 07) and to context assembly as
-the retrieval source for the memory slot.
+to the agent as the `search` tool (ch. 07), to context assembly as
+the retrieval source for the memory slot, and to the witness's
+**connect duty** (ch. 04) through a no-bump variant that omits the
+ambient warmth the agent-facing search fires — a per-turn duty must
+not pump warmth into every semantically-adjacent note.
 
 `record/moments/` is the agent's own compression layer (ch. 03): the
 moment files there carry frontmatter and a body, both indexed like
@@ -246,6 +249,14 @@ link parallel to `extends` and `wiki` in the graph.
 
 The index is derived, always. Delete it and the sync service rebuilds it
 from the workspace. It is never the source of anything.
+
+A second derived vector table lives alongside `segments`:
+`rejection_vectors` — one row per rejection in
+`workspace/witness/rejections.jsonl`, embedded at write time by the
+`reject_candidate` tool (ch. 07) and used by the witness's σ
+retrieval into `{similar_rejections}` (ch. 04). Same discipline: the
+jsonl is ground truth; the vectors are derived, rebuilt at startup
+from the jsonl if empty or dim-mismatched, and safely disposable.
 
 ## Contracts
 

@@ -18,8 +18,8 @@ records, not encodings.
 
 | tier | where | contents | on loss |
 |---|---|---|---|
-| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, moments, birth, witness glean-log, witness rejections, session snapshot | unrecoverable — this is the life |
-| **derived** | sqlite | vector index (segments), sync file-hashes | rebuilt automatically from the workspace |
+| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, moments, birth, witness glean-log, witness connect-log, witness rejections, session snapshot | unrecoverable — this is the life |
+| **derived** | sqlite | vector index (segments), rejection vectors, sync file-hashes | rebuilt automatically from the workspace |
 | **ephemeral** | sqlite | activation scores, extraction queue | warmth and pending digestion lost; the witness gleans again |
 
 The consequence, stated plainly: **the database is disposable.** Delete
@@ -188,6 +188,22 @@ the log resets the gate to "open"; deleting individual lines is the
 same idiom as hand-editing `moves.jsonl` (the next glean reads what's
 left and acts accordingly).
 
+**`witness/connect-log.jsonl`** — append-only receipts for fired
+connect frames (ch. 04 connect duty). One line per posted frame:
+
+```json
+{"turn":47,"target_ref":"NTEAL","at":"2026-06-16T03:14:22Z"}
+```
+
+Same discipline as `glean-log.jsonl`: the tail's `turn` is the
+witness's `last_connect_through`; the file's presence gates the
+connect refractory across restarts with no SQLite dependency. The
+`target_ref` (the target note's wikilink — frontmatter id if present,
+else filename stem) is recorded for provenance and future
+telemetry; the refractory itself keys only on `turn`. Written after
+the mpsc post to the turn loop succeeds — a torn log line cannot
+describe a phantom frame.
+
 ## The database
 
 One SQLite file per agent in its data directory, WAL mode, embedded
@@ -218,6 +234,17 @@ CREATE TABLE segments (
 );
 CREATE INDEX idx_segments_path ON segments (file_path);
 
+-- rejection vectors (ch. 02 / ch. 04); derived from rejections.jsonl
+CREATE TABLE rejection_vectors (
+    candidate_id TEXT PRIMARY KEY,           -- shared with rejections.jsonl
+    turn         INTEGER NOT NULL,
+    candidate    TEXT NOT NULL,              -- verbatim candidate text
+    reason       TEXT,                       -- agent-supplied, optional
+    at           TEXT NOT NULL,              -- ISO-8601, mirrors jsonl
+    embedding    BLOB NOT NULL               -- f32 vector
+);
+CREATE INDEX idx_rejection_vectors_turn ON rejection_vectors (turn);
+
 -- sync state (ch. 02); derived
 CREATE TABLE file_hashes (
     file_path   TEXT PRIMARY KEY,
@@ -225,6 +252,12 @@ CREATE TABLE file_hashes (
     indexed_at  INTEGER NOT NULL
 );
 ```
+
+`rejection_vectors` is rebuilt at startup from
+`witness/rejections.jsonl` if the table is empty (or a dim probe
+against the first stored row disagrees with a fresh embed, indicating
+the embedding model changed) — the jsonl is authoritative, the table
+is a cache the witness's σ retrieval reads.
 
 Vector search may use an extension (e.g. sqlite-vec) or in-process
 cosine over the blobs — an implementation choice; the schema above is
@@ -250,10 +283,15 @@ These bind every component that touches the record or the database:
 - **The cursor is the contiguous frontier.** Derived from the moves
   file's turn numbers at need (the tail when gapless), never cached
   elsewhere. Moves readers sort by turn, never trust file order.
-- **Single writer per file.** The agent task writes the turn record
-  and moment files (via the `create_moment` tool); the witness writes
-  moves; adapter inbound writes channel logs (one writer task per
-  file). The memory system alone writes the database.
+- **Single writer per file.** The turn loop task writes the turn
+  record; the agent task writes moment files (via the `create_moment`
+  tool); the witness writes moves, its own receipt logs
+  (`glean-log.jsonl`, `connect-log.jsonl`), and the derived
+  `rejection_vectors` rows; adapter inbound writes channel logs (one
+  writer task per file). The memory system alone writes the other
+  database tables. The witness's `[connect]` frames route through the
+  turn loop via mpsc so the turn-record's single-writer invariant is
+  preserved.
 - **Torn-line tolerance** everywhere a JSONL file is read.
 - **Disposability.** The database must be safely deletable at rest;
   startup with a missing database rebuilds derived state and starts

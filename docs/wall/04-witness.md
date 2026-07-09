@@ -6,10 +6,15 @@ concurrent task in the same binary, subscribed to the same event bus,
 with its own model assignment (often a smaller, cheaper model than the
 agent's; the work is summarization, not reasoning).
 
-It has exactly two duties: **moves** and **gleaning**. Compression of
-the record, and the harvest of its margins. Nothing else. It writes to
-the moves files and the extraction queue; it never writes to the
-agent's knowledge, never speaks on channels, never touches tools.
+It has three duties: **moves**, **gleaning**, and **connecting**.
+Compression of the record, the harvest of its margins, and the
+retrieval of already-written knowledge the current turn resonates
+with. It writes to the moves file, the extraction queue, and its own
+receipt logs (`glean-log.jsonl`, `connect-log.jsonl`, and the derived
+`rejection_vectors` table, ch. 10). Connect frames it produces are
+routed through the turn loop so the single-writer invariant on
+`turns.jsonl` (ch. 10) is preserved. It never writes to the agent's
+knowledge, never speaks on channels, never touches tools.
 
 ## Prompt-driven, entirely
 
@@ -23,7 +28,11 @@ workspace/witness/
   on-turn.md        produces a move (template vars: {transcript},
                     {turn_number}) — optional
   on-glean.md       produces extraction candidates (template vars:
-                    {recent_record}) — optional
+                    {recent_record}, {recent_rejections},
+                    {similar_rejections}) — optional
+  on-connect.md     composes a one-sentence connection why (template
+                    vars: {transcript}, {target_path},
+                    {target_excerpt}) — optional
 ```
 
 `identity.md` is required: **if it is missing, the gateway fails at
@@ -105,6 +114,25 @@ append-only and lives in the workspace alongside `glean-log.jsonl`,
 so the gate survives data_dir disposal and hand-deletion resets the
 memory the same way deleting any workspace log does.
 
+**Semantic retrieval over rejections.** Recency is a shallow signal
+— it catches "you just turned this away" but misses shape-recurrences
+from beyond the window. So the witness also embeds each rejection at
+write time into a derived `rejection_vectors` SQLite table (ch. 10),
+rebuildable from `rejections.jsonl` on startup. Before every glean it
+embeds the current window text and cosine-scans the vectors, surfacing
+the top-K semantically-similar past rejections as the
+`{similar_rejections}` block in `on-glean.md`. This catches a
+rejection from months back whose substance resembles the current turn,
+in vocabulary or not. Threshold-gated (default cosine 0.60); zero-K
+fully disables the read path (write-side embedding continues so a
+later re-enable is instant). Recent and similar blocks dedup by
+candidate id, recent winning — a rejection already in
+`{recent_rejections}` is dropped from `{similar_rejections}` because
+recency carries context similarity doesn't. This is the σ role
+(retrieval, distinct from the π-shaped Proposer that writes glean
+candidates) staged before any prompt-revision loop: the operator
+authors `on-glean.md` and the engine never rewrites it.
+
 **Queue depth cap.** At enqueue time the witness checks the queue's
 current depth; at-or-above the configured cap (`max_queue_depth`,
 default 5; zero disables) the candidate is dropped with a warning.
@@ -142,10 +170,54 @@ on every digestion for the same reason: the queue must not collapse
 into a sequence of back-to-back digestions the moment the silence
 threshold is first crossed.
 
+## Duty three: connecting
+
+After every settled turn (like moves), the witness embeds the turn's
+transcript and cosine-scans the workspace's vector index — the same
+`segments` table that backs the agent's `search` tool (ch. 02), read
+through a **no-bump** variant so per-turn retrieval does not pump
+warmth into notes the agent never sees. If the top hit clears
+`connect_threshold` (default 0.65) and passes the **self-connection
+guard** (skip hits whose file the agent wrote to within the last N
+turns; default 5), the witness composes a one-sentence why via
+`on-connect.md` and posts a `ConnectFrame` to the turn loop.
+
+The turn loop writes a `[connect]` system-role line to the referenced
+turn's record and, if the turn is still in HOT, synthesises the same
+line into the live window so the model sees it on its very next call.
+The frame's body carries the target note's content: full file if the
+target is an **atomic note** (path under `knowledge/` **and** YAML
+frontmatter with an `id`), otherwise the first 200 words verbatim
+with an ellipsis on truncation.
+
+Refractory (`connect_min_new_turns`, default 6) bounds how often
+frames land; the threshold is the trigger — no probability dice.
+Turns that don't clear it produce no model call at all. Zero
+threshold disables the duty entirely. `last_connect_through`
+persists across restarts in `workspace/witness/connect-log.jsonl`
+(one entry per fired frame), same discipline as glean-log.
+
+The result is a σ role pointed at the knowledge web: the witness
+noticing what already-written note the current turn resonates with,
+offered inline as a record line for the agent to act on or ignore.
+Digestion and heartbeat turns are excluded from connect the same way
+they are from gleaning (their transcripts are not the kind of
+substance connect should search against).
+
+**No queue, no reject.** Unlike gleaning, connect surfaces without
+asking for a decision. The agent may write a link, extend the target
+note, or ignore the frame entirely; there is no structural machinery
+to accept or reject. The connection is a fact-about-the-turn, added
+to the record and left for the agent to act on or not. If the same
+low-quality connection keeps surfacing, that is a σ problem for a
+future measurement pass — not something the engine tracks today.
+
 ## Contracts
 
-- **Two duties only.** Moves and gleaning. The witness writes to the
-  moves files and the extraction queue, nowhere else. It never writes
+- **Three duties.** Moves, gleaning, and connecting. The witness
+  writes to the moves file, the extraction queue, and its own receipt
+  logs. Connect frames it produces are routed through the turn loop;
+  the witness never writes `turns.jsonl` directly. It never writes
   knowledge, never speaks, never executes tools.
 - **Identity required.** Missing `workspace/witness/identity.md` fails
   gateway startup with an error naming the file. Missing event prompts
@@ -193,5 +265,33 @@ threshold is first crossed.
   window: the loom work the agent does during quiet stretches is prime
   material, so a later real turn or the end-of-session pass still
   harvests it.
+- **σ retrieval over rejections.** Each rejection is embedded at write
+  time into the derived `rejection_vectors` table (ch. 10); before
+  every glean the witness surfaces the top-K semantically-similar past
+  rejections into the `{similar_rejections}` prompt slot, deduped by
+  candidate id against `{recent_rejections}`. Threshold-gated; zero-K
+  disables the read path but the write-side embedding continues so
+  re-enable is instant.
+- **Connect fires per settled turn.** The threshold is the trigger
+  (default 0.65 cosine); the refractory (default 6 turns) bounds
+  frame frequency. Zero threshold disables the duty entirely. No
+  probability dice — turns that don't clear it never call the model.
+- **Connect surfaces; the agent acts.** No queue, no reject. A
+  `[connect]` frame lands as a system-role record line on the
+  referenced turn and (when the turn is still in HOT) is synthesised
+  into the live window. The agent decides what to do with it during
+  ordinary turns. Body policy: full file if atomic, else first 200
+  words.
+- **Single-writer preserved for the turn record.** Connect frames
+  route through the turn loop's mpsc; the turn loop's `TurnRecord`
+  remains the sole writer of `turns.jsonl`. The witness holds only
+  the sender.
+- **Connect log recovers refractory.**
+  `workspace/witness/connect-log.jsonl` — one line per fired frame
+  (turn, target_ref, at) — recovers `last_connect_through` across
+  restarts, same discipline as glean-log.
+- **No connect over digestion or heartbeats.** Same exclusions as
+  gleaning, for the same reasons: those turns' inbound is not the
+  substance connect should search against.
 - **Second person.** The shipped identity seed writes the witness as
   "you"; the voice is part of the design, not a style preference.
