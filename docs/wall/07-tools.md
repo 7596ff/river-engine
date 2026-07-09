@@ -18,7 +18,7 @@ an agent's reach is an edit to a config file, not a rebuild.
 
 ## The core tools
 
-The default profile, ten tools:
+The default profile, thirteen tools:
 
 | tool | what it does |
 |---|---|
@@ -32,6 +32,9 @@ The default profile, ten tools:
 | `search` | semantic search over the indexed workspace (ch. 02) |
 | `channel_read` | pure-peek window into a channel's history (ch. 05) |
 | `reject_candidate` | mark the current digestion candidate as no-go (ch. 04) |
+| `create_moment` | author a moment over a turn range (ch. 03) |
+| `read_moves` | scan the witness's moves over a turn range (ch. 03) |
+| `compact` | force a compaction and leave a handoff for the next session (ch. 03) |
 
 `speak` resolves "the current channel" from the turn's context — the
 channel whose notification woke the agent, or the channel it last
@@ -69,6 +72,36 @@ ULIDs for the next call. Engine-internal entries (cursor markers,
 both render as `(0 messages)`. The tool emits no notifications,
 advances no cursor, and bumps no activation — re-examination has its
 own surface, separate from the consume path.
+
+`create_moment` is the agent's own compression voice (ch. 03):
+`create_moment(turn_start, turn_end, body, links?, tags?)`. The range
+is inclusive, must cover at least two turns, and `turn_end` must be
+≤ the current turn (no future-dating). The body is the agent's
+first-person read of the stretch — what it *meant*, not just what
+happened. The engine generates a ULID `id`, writes
+`record/moments/{id}.md` atomically with YAML frontmatter, and the
+file watcher picks it up: the moment is embedded for retrieval, joins
+the typed-link graph (a `links` list becomes `cites` edges to the
+named atomic notes), and overrides witness moves for its covered
+turns at arc-build time.
+
+`read_moves` is the agent's lookback into the witness's reads:
+`read_moves(turn_start, turn_end)`, range size capped at 200 turns.
+Returns one line per turn that has a move — `turn N [channel]:
+summary` — sorted ascending. Channel attribution is taken from the
+turn record. Used to choose what stretch to compress into a moment;
+moments stack with each other (overlap is allowed and shows both) so
+re-reading a stretch later doesn't overwrite the earlier reading.
+
+`compact` is the agent's wind-down tool: `compact(summary)`. It writes
+the summary to `workspace/handoff.md` (atomic tmp + fsync + rename) and
+raises a flag the turn loop honors at the next turn start as a forced
+compaction, even if the threshold has not tripped. The handoff is
+consumed once on the next session's startup: it lands as a system-role
+record line tagged with `last_turn + 1` on the resume channel, and the
+file is deleted. The next live turn picks up after the handoff, with
+the message riding in via hot. The handoff persists in the turn record
+like any other line; it does not show again on subsequent sessions.
 
 ## File tools are memory instruments
 

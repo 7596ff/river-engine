@@ -22,7 +22,7 @@ pub enum RecordRole {
     System,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RecordLine {
     pub id: String,
     pub turn: u64,

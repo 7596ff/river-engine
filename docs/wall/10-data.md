@@ -18,7 +18,7 @@ records, not encodings.
 
 | tier | where | contents | on loss |
 |---|---|---|---|
-| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, birth, witness glean-log, witness rejections, session snapshot | unrecoverable — this is the life |
+| **ground truth** | workspace files | identity files, knowledge, channel logs, the turn record, moves, moments, birth, witness glean-log, witness rejections, session snapshot | unrecoverable — this is the life |
 | **derived** | sqlite | vector index (segments), sync file-hashes | rebuilt automatically from the workspace |
 | **ephemeral** | sqlite | activation scores, extraction queue | warmth and pending digestion lost; the witness gleans again |
 
@@ -81,6 +81,35 @@ regenerates them from the record, and a backfilled move appends at
 the tail out of turn order — readers of the moves file sort by turn,
 never trust file order.
 
+**`record/moments/{ulid}.md`** — the agent's own compressions
+(ch. 03). One markdown file per moment, YAML frontmatter plus body,
+written atomically by the `create_moment` tool (tmp + fsync + rename):
+
+```markdown
+---
+id: 01KW8X7G2VABCDEFGHJKMN
+turn_start: 571
+turn_end: 575
+links: [01JXP20260618164250197, 01JXP20260618165134883]
+tags: [exploitation, dismissal]
+---
+
+Cass asked if what I'm doing feels like labor. I said yes and no.
+The reading was effortful — genuine exertion. But voluntary...
+```
+
+Required frontmatter fields: `id` (ULID, engine-generated),
+`turn_start` and `turn_end` (inclusive integers, `turn_end > turn_start`).
+Optional: `links` (list of atomic-note ULIDs, become `cites` edges in
+the typed-link graph), `tags` (freeform list). Filename is not
+enforced — any `.md` in the directory with valid frontmatter is a
+moment. Torn or invalid files (missing required field, inverted
+range, unreadable YAML) are skipped with a logged warning. At
+arc-build time, moments replace witness moves for the turns they
+cover; overlapping moments stack (ch. 03 moment precedence). The
+directory is in the always-watched set (ch. 02) so moment bodies
+embed and become flash-eligible.
+
 **Reading by turn** is a scan: session start and compaction backfill
 read `record/turns.jsonl` from the end, collecting whole turns that
 touch the wanted channel until they have what they need; the witness
@@ -114,6 +143,14 @@ A missing, torn, or version-mismatched file is treated as absent;
 startup falls through to derivation (channel from record tail, other
 fields reset to defaults). The snapshot never carries hot or arc —
 those rebuild from the record and moves files.
+
+**`workspace/handoff.md`** — transient cross-session courier (ch. 03).
+The `compact` tool writes it (atomic tmp + fsync + rename); the next
+session's startup consumes it once — appending the body as a
+system-role line to the turn record under `last_turn + 1`, then
+deleting the file. It exists only between sessions; an empty or
+unreadable file is discarded with a logged warning. The message
+persists in `record/turns.jsonl` like any other turn-record line.
 
 **`witness/rejections.jsonl`** — append-only record of the agent's
 rejections (ch. 04 rejection memory). One line per
@@ -213,9 +250,10 @@ These bind every component that touches the record or the database:
 - **The cursor is the contiguous frontier.** Derived from the moves
   file's turn numbers at need (the tail when gapless), never cached
   elsewhere. Moves readers sort by turn, never trust file order.
-- **Single writer per file.** The agent task writes the turn record;
-  the witness writes moves; adapter inbound writes channel logs (one
-  writer task per file). The memory system alone writes the database.
+- **Single writer per file.** The agent task writes the turn record
+  and moment files (via the `create_moment` tool); the witness writes
+  moves; adapter inbound writes channel logs (one writer task per
+  file). The memory system alone writes the database.
 - **Torn-line tolerance** everywhere a JSONL file is read.
 - **Disposability.** The database must be safely deletable at rest;
   startup with a missing database rebuilds derived state and starts

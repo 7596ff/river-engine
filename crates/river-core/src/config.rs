@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-pub const DEFAULT_TOOLS: [&str; 10] = [
+pub const DEFAULT_TOOLS: [&str; 13] = [
     "read", "write", "edit", "glob", "grep", "bash", "speak", "search", "channel_read",
-    "reject_candidate",
+    "reject_candidate", "create_moment", "read_moves", "compact",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +111,31 @@ pub struct WitnessConfig {
     /// into the witness's on-glean.md `{recent_rejections}` slot.
     /// Default 5.
     pub recent_rejections_window: usize,
+    /// Top-K semantically similar past rejections rendered into the
+    /// witness's on-glean.md `{similar_rejections}` slot. Zero
+    /// disables the read path entirely (write-path embedding still
+    /// runs so a later re-enable is instant). Default 5.
+    pub similar_rejections_top_k: usize,
+    /// Cosine similarity floor for similar-rejection retrieval; rows
+    /// below this are not surfaced. Default 0.60.
+    pub similar_rejections_threshold: f32,
+    /// Cosine similarity floor for the connect duty's top-hit gate.
+    /// The threshold IS the trigger — no probability dice, no dice
+    /// per turn. Rows below this are not surfaced. Zero disables the
+    /// duty entirely. Default 0.65 (matches the flash system's
+    /// semantic threshold).
+    pub connect_threshold: f32,
+    /// Refractory between fired connects, measured in turns of
+    /// forward movement. Prevents the connect duty from firing on
+    /// every turn of a topic-locked stretch and burying the record in
+    /// [connect] frames. Zero disables. Default 6 (matches glean's
+    /// window).
+    pub connect_min_new_turns: u64,
+    /// Look-back window for the connect duty's self-connection guard.
+    /// If the top-hit's file was written by the agent within this
+    /// many turns, skip the hit and try the next one. Zero disables
+    /// the guard. Default 5.
+    pub connect_self_write_window: u64,
 }
 
 impl Default for WitnessConfig {
@@ -119,6 +144,11 @@ impl Default for WitnessConfig {
             glean_min_new_turns: 12,
             max_queue_depth: 5,
             recent_rejections_window: 5,
+            similar_rejections_top_k: 5,
+            similar_rejections_threshold: 0.60,
+            connect_threshold: 0.65,
+            connect_min_new_turns: 6,
+            connect_self_write_window: 5,
         }
     }
 }

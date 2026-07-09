@@ -13,7 +13,53 @@ use std::path::Path;
 
 use river_core::config::ContextConfig;
 use crate::model::{ChatMessage, ToolCall};
+use crate::moments::{self, Moment};
 use crate::record::{self, MoveLine, RecordRole};
+
+/// One slot in the rendered arc. Moments and moves both compress, but
+/// moments have a turn range and a multi-paragraph body, and they
+/// override the witness's moves for the turns they cover.
+#[derive(Debug, Clone)]
+enum ArcEntry {
+    Move(MoveLine),
+    Moment(MomentEntry),
+}
+
+#[derive(Debug, Clone)]
+struct MomentEntry {
+    id: String,
+    turn_start: u64,
+    turn_end: u64,
+    body: String,
+    filename: String,
+}
+
+impl ArcEntry {
+    fn sort_key(&self) -> (u64, &str) {
+        match self {
+            ArcEntry::Move(m) => (m.turn, ""),
+            ArcEntry::Moment(m) => (m.turn_start, m.id.as_str()),
+        }
+    }
+    fn newest_key(&self) -> u64 {
+        match self {
+            ArcEntry::Move(m) => m.turn,
+            ArcEntry::Moment(m) => m.turn_end,
+        }
+    }
+    fn render(&self) -> String {
+        match self {
+            ArcEntry::Move(m) => format!("turn {}: {}\n", m.turn, m.summary),
+            ArcEntry::Moment(m) => format!(
+                "\n[turns {}–{}, {}]\n{}\n",
+                m.turn_start,
+                m.turn_end,
+                m.filename,
+                m.body.trim_end()
+            ),
+        }
+    }
+}
 
 /// Heuristic, self-correcting token estimator (wall ch. 03).
 #[derive(Debug)]
@@ -90,7 +136,7 @@ pub struct PersistentContext {
     knobs: ContextConfig,
     channel: String,
     system_prompt: String,
-    arc: Vec<MoveLine>,
+    arc: Vec<ArcEntry>,
     memory_slot: String,
     hot: Vec<HotEntry>,
     estimator: Estimator,
@@ -177,6 +223,14 @@ impl PersistentContext {
             tool_calls,
             tool_call_id,
         });
+    }
+
+    /// Is this turn currently in HOT? Used by the connect duty to
+    /// decide whether a live-HOT synthesis is worth doing — if the
+    /// turn has already compacted out, the record line still lands
+    /// but there is no live window to inject into.
+    pub fn contains_turn(&self, turn: u64) -> bool {
+        self.hot.iter().any(|e| e.turn == turn)
     }
 
     /// The memory system fills the slot; assembly only places it
@@ -291,39 +345,94 @@ impl PersistentContext {
         self.hot = new_hot;
     }
 
-    /// Arc budget: moves newest-first until the fill target, then
-    /// presented oldest-first. Old moves fall off here; they remain
-    /// in the record. Sorted by turn, not file order — a backfilled
-    /// move (witness regenerating a hand-deleted line) appends at the
-    /// tail but belongs in its place in the arc.
+    /// Re-scan moments and rebuild the arc against the current hot.
+    /// Called from `build`, `compact`, and after a `create_moment`
+    /// tool result so the agent's own compression is visible in arc
+    /// without waiting for the next compaction.
+    pub fn refresh_arc(&mut self, workspace: &Path) -> anyhow::Result<()> {
+        self.reload_arc(workspace)
+    }
+
+    /// Arc budget: entries newest-first until the fill target, then
+    /// presented oldest-first. Entries are moves *and* moments — the
+    /// agent's own compressions take precedence over the witness's
+    /// for the turns they cover (wall ch. 03 moment precedence).
     ///
-    /// Moves whose turn is currently in hot are skipped: the full
-    /// turn at high resolution already represents it, and the
-    /// compressed summary would only duplicate. Skipping these frees
-    /// arc budget for older moves the model can't see any other way.
+    /// **Arc-hot disjoint** applies to **moves only**: a move whose
+    /// turn sits in hot is skipped, because the full turn at high
+    /// resolution already represents it. Moments are *not* filtered
+    /// against hot — they are the agent's interpretation, not a
+    /// substitute for the raw turns. Both surfaces are valid, and
+    /// the duplication of substance is honest. This is what makes a
+    /// freshly-written moment immediately visible in arc instead of
+    /// waiting for hot to roll past its range.
+    ///
+    /// **Moment precedence**: when a moment covers a turn, the
+    /// witness's move for that turn is suppressed (the moment is
+    /// what the arc shows for that turn). Overlapping moments stack
+    /// — each shows once, in id order.
     fn reload_arc(&mut self, workspace: &Path) -> anyhow::Result<()> {
         let hot_turns: std::collections::HashSet<u64> =
             self.hot.iter().map(|e| e.turn).collect();
-        let mut all = record::read_moves(&record::moves_path(workspace))?;
-        all.sort_by_key(|m| m.turn);
-        let budget = self.knobs.fill_target * self.knobs.limit as f64;
-        let mut chosen: Vec<MoveLine> = Vec::new();
-        let mut used = 0.0;
-        for move_line in all.into_iter().rev() {
-            if hot_turns.contains(&move_line.turn) {
+
+        let kept_moments: Vec<Moment> = moments::scan(workspace);
+        // Turns covered by a moment — the witness's move is
+        // suppressed at those positions, regardless of hot.
+        let covered: std::collections::HashSet<u64> = kept_moments
+            .iter()
+            .flat_map(|m| m.turn_start..=m.turn_end)
+            .collect();
+
+        let mut moves = record::read_moves(&record::moves_path(workspace))?;
+        moves.sort_by_key(|m| m.turn);
+
+        let mut candidates: Vec<ArcEntry> = Vec::new();
+        for m in moves {
+            if hot_turns.contains(&m.turn) || covered.contains(&m.turn) {
                 continue;
             }
-            let cost = self.estimator.estimate(&move_line.summary);
-            if used + cost > budget && !chosen.is_empty() {
-                break;
-            }
+            candidates.push(ArcEntry::Move(m));
+        }
+        for m in kept_moments {
+            let filename = m
+                .file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            candidates.push(ArcEntry::Moment(MomentEntry {
+                id: m.id,
+                turn_start: m.turn_start,
+                turn_end: m.turn_end,
+                body: m.body,
+                filename,
+            }));
+        }
+
+        // Newest-first by anchor turn (move turn / moment turn_end);
+        // id tiebreaks two moments sharing an anchor.
+        candidates.sort_by(|a, b| {
+            b.newest_key()
+                .cmp(&a.newest_key())
+                .then_with(|| match (a, b) {
+                    (ArcEntry::Moment(x), ArcEntry::Moment(y)) => y.id.cmp(&x.id),
+                    _ => std::cmp::Ordering::Equal,
+                })
+        });
+
+        let budget = self.knobs.fill_target * self.knobs.limit as f64;
+        let mut chosen: Vec<ArcEntry> = Vec::new();
+        let mut used = 0.0;
+        for entry in candidates {
+            let cost = self.estimator.estimate(&entry.render());
             if used + cost > budget {
                 break;
             }
             used += cost;
-            chosen.push(move_line);
+            chosen.push(entry);
         }
-        chosen.reverse();
+        // Oldest-first for display, sorted by anchor turn_start and
+        // (for moments at the same start) id ULID — write order.
+        chosen.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
         self.arc = chosen;
         Ok(())
     }
@@ -355,8 +464,8 @@ impl PersistentContext {
             return String::new();
         }
         let mut out = String::from("\n\n[Conversation arc]\n");
-        for move_line in &self.arc {
-            out.push_str(&format!("turn {}: {}\n", move_line.turn, move_line.summary));
+        for entry in &self.arc {
+            out.push_str(&entry.render());
         }
         out
     }
@@ -728,6 +837,122 @@ mod tests {
         .unwrap();
         // Turns 2 and 3 touch discord_g — turn 2 whole (2 entries) + turn 3.
         assert_eq!(discord.len(), 3);
+    }
+
+    fn write_moment(workspace: &Path, id: &str, ts: u64, te: u64, body: &str) {
+        let moments_dir = workspace.join("record").join("moments");
+        std::fs::create_dir_all(&moments_dir).unwrap();
+        let text = format!(
+            "---\nid: {id}\nturn_start: {ts}\nturn_end: {te}\nlinks: []\ntags: []\n---\n\n{body}\n"
+        );
+        std::fs::write(moments_dir.join(format!("{id}.md")), text).unwrap();
+    }
+
+    #[test]
+    fn arc_substitutes_moment_for_covered_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        write_moves(
+            dir.path(),
+            &[(1, "m1"), (2, "m2"), (3, "m3"), (4, "m4"), (5, "m5")],
+        );
+        write_moment(dir.path(), "01M", 2, 4, "the agent's read of turns 2-4");
+
+        let mut ctx = PersistentContext::build(
+            dir.path(),
+            "local_main",
+            "sys".into(),
+            small_knobs(),
+        )
+        .unwrap();
+        let (system, _) = ctx.messages();
+        assert!(system.contains("turn 1: m1"), "{system}");
+        assert!(system.contains("turn 5: m5"), "{system}");
+        assert!(system.contains("[turns 2–4, 01M.md]"), "{system}");
+        assert!(system.contains("the agent's read of turns 2-4"), "{system}");
+        // The moves covered by the moment must not also appear.
+        assert!(!system.contains("turn 2: m2"), "covered by moment: {system}");
+        assert!(!system.contains("turn 3: m3"), "covered by moment: {system}");
+        assert!(!system.contains("turn 4: m4"), "covered by moment: {system}");
+    }
+
+    #[test]
+    fn overlapping_moments_stack_in_id_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write_moves(
+            dir.path(),
+            &[(1, "m1"), (2, "m2"), (3, "m3"), (4, "m4"), (5, "m5")],
+        );
+        // Two moments overlap [2..4] and [3..5]; both appear.
+        write_moment(dir.path(), "01A", 2, 4, "first read");
+        write_moment(dir.path(), "01B", 3, 5, "second read, slightly later");
+        let mut ctx = PersistentContext::build(
+            dir.path(),
+            "local_main",
+            "sys".into(),
+            small_knobs(),
+        )
+        .unwrap();
+        let (system, _) = ctx.messages();
+        let p_a = system.find("first read").expect("A present");
+        let p_b = system.find("second read").expect("B present");
+        assert!(p_a < p_b, "id sort places 01A before 01B: {system}");
+        // No moves for turns 2-5 (all covered by at least one moment).
+        for n in 2..=5 {
+            assert!(
+                !system.contains(&format!("turn {n}: m{n}")),
+                "turn {n} should be suppressed: {system}"
+            );
+        }
+    }
+
+    #[test]
+    fn moment_renders_in_arc_even_when_range_overlaps_hot() {
+        let dir = tempfile::tempdir().unwrap();
+        // Moves AND raw record so backfill pulls turns 1-4 into hot.
+        write_moves(dir.path(), &[(1, "m1"), (2, "m2"), (3, "m3"), (4, "m4")]);
+        let record_dir = dir.path().join("record");
+        std::fs::create_dir_all(&record_dir).unwrap();
+        let mut text = String::new();
+        for turn in 1..=4u64 {
+            text.push_str(&format!(
+                "{}\n",
+                serde_json::json!({
+                    "id": ulid::Ulid::new().to_string(),
+                    "turn": turn,
+                    "channel": "local_main",
+                    "role": "user",
+                    "content": format!("q{turn}")
+                })
+            ));
+        }
+        std::fs::write(record_dir.join("turns.jsonl"), text).unwrap();
+        // The moment covers [3..4], which sits inside hot. Per the
+        // updated arc-hot rule (wall ch. 03), moments are not
+        // filtered against hot — the agent's compression rides in
+        // arc even when the raw turns are still live in hot. The
+        // duplication of substance is honest.
+        write_moment(dir.path(), "01HOT", 3, 4, "my read of the stretch");
+
+        let ctx = PersistentContext::build(
+            dir.path(),
+            "local_main",
+            "sys".into(),
+            ContextConfig {
+                min_messages: 10,
+                ..small_knobs()
+            },
+        )
+        .unwrap();
+        let system = ctx.system_string();
+        assert!(
+            system.contains("my read of the stretch"),
+            "moment overlapping hot still renders in arc: {system}"
+        );
+        // The witness's moves for 3 and 4 are still suppressed (the
+        // moment covers those positions; moves there would be
+        // redundant with the moment).
+        assert!(!system.contains("turn 3: m3"), "{system}");
+        assert!(!system.contains("turn 4: m4"), "{system}");
     }
 
     #[test]

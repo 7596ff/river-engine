@@ -24,10 +24,15 @@ use tokio::sync::watch;
 
 use crate::model::{Chat, ChatMessage};
 use crate::record::{self, MovesFile, RecordLine, RecordRole};
-use crate::turn::DIGESTION_MARKER;
+use crate::turn::{DIGESTION_MARKER, HEARTBEAT_MARKER};
 
 pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
+pub const NOTHING_TO_CONNECT: &str = "nothing to connect";
 const GLEAN_WINDOW_TURNS: u64 = 6;
+/// How many top hits the connect duty scans past when self-write
+/// guards keep tripping. Small on purpose — this is a filter, not a
+/// search widening.
+const CONNECT_SCAN_K: usize = 5;
 
 /// Read `glean-log.jsonl` and recover the tail entry's turn. Torn
 /// lines and parse failures are skipped with a warning — the tail
@@ -57,6 +62,57 @@ fn recover_last_glean_through(path: &Path) -> Option<u64> {
         }
     }
     last
+}
+
+/// Recover the tail `turn` of the connect-log. Same shape as
+/// `recover_last_glean_through`.
+fn recover_last_connect_through(path: &Path) -> Option<u64> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "reading connect-log.jsonl");
+            return None;
+        }
+    };
+    let mut last: Option<u64> = None;
+    for (line_no, raw) in text.lines().enumerate() {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<ConnectLogEntry>(raw) {
+            Ok(entry) => last = Some(entry.turn),
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                line = line_no + 1,
+                error = %e,
+                "skipping malformed connect-log entry"
+            ),
+        }
+    }
+    last
+}
+
+/// Append one entry to `connect-log.jsonl`, creating the file if
+/// absent. Same fsync-per-line discipline as the glean log.
+fn append_connect_log(path: &Path, entry: &ConnectLogEntry) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut json = serde_json::to_string(entry)?;
+    json.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("appending to {}", path.display()))?;
+    file.sync_data()
+        .with_context(|| format!("fsyncing {}", path.display()))?;
+    Ok(())
 }
 
 /// Append one entry to `glean-log.jsonl`, creating the file if absent.
@@ -97,6 +153,12 @@ pub struct Witness<C: Chat> {
     max_queue_depth: u64,
     /// How many recent rejections to render into `{recent_rejections}`.
     recent_rejections_window: usize,
+    /// Top-K semantically similar past rejections to render into
+    /// `{similar_rejections}`. Zero disables the read path — no
+    /// query-side embed, no scan.
+    similar_rejections_top_k: usize,
+    /// Cosine floor for similar-rejection retrieval.
+    similar_rejections_threshold: f32,
     /// The `up_to_turn` of the most recently queued candidate;
     /// recovered at load from the log tail, updated on each enqueue.
     last_glean_through: Option<u64>,
@@ -104,6 +166,26 @@ pub struct Witness<C: Chat> {
     glean_log_path: PathBuf,
     /// `workspace/witness/rejections.jsonl`.
     rejections_path: PathBuf,
+    /// The compose-why prompt loaded from `witness/on-connect.md`, or
+    /// `None` when the file is absent (connect duty disabled).
+    on_connect: Option<String>,
+    /// Cosine floor for the connect duty's top-hit gate. Zero also
+    /// disables the duty (no embed, no scan, no model call).
+    connect_threshold: f32,
+    /// Refractory: minimum turns of forward movement between fired
+    /// connects. Zero disables.
+    connect_min_new_turns: u64,
+    /// Look-back window for the connect duty's self-connection guard.
+    connect_self_write_window: u64,
+    /// The turn of the most recently fired connect, recovered from
+    /// `connect-log.jsonl` on load.
+    last_connect_through: Option<u64>,
+    /// `workspace/witness/connect-log.jsonl`.
+    connect_log_path: PathBuf,
+    /// mpsc sender for connect frames — the seam that preserves the
+    /// turn record's single-writer invariant. None when no memory or
+    /// no sender was attached (duty disabled).
+    connect_sender: Option<tokio::sync::mpsc::Sender<crate::turn::ConnectFrame>>,
 }
 
 /// One entry in `glean-log.jsonl`: the receipt for a queued candidate.
@@ -114,12 +196,21 @@ struct GleanLogEntry {
     at: String,
 }
 
+/// One entry in `connect-log.jsonl`: the receipt for a fired connect
+/// frame. Persisted so refractory state (and idempotency across
+/// restart-mid-catch-up) survives a crash.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConnectLogEntry {
+    turn: u64,
+    target_ref: String,
+    at: String,
+}
+
 /// One entry in `rejections.jsonl`: written by the agent's
 /// `reject_candidate` tool, read here so the witness can learn what
 /// the agent already turned away.
 #[derive(serde::Deserialize)]
 struct RejectionEntry {
-    #[allow(dead_code)]
     candidate_id: String,
     candidate: String,
     #[serde(default)]
@@ -185,6 +276,33 @@ fn format_rejections(entries: &[RejectionEntry]) -> String {
     out
 }
 
+/// Render similar-rejection hits as the `{similar_rejections}` block.
+/// Empty list substitutes to an empty string so the operator's
+/// surrounding label can sit alone on day one without looking broken
+/// (same convention as `{recent_rejections}`).
+fn format_similar_rejections(hits: &[crate::memory::SimilarRejection]) -> String {
+    if hits.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n[your prior gleans, semantically similar to what you're looking at now]\n",
+    );
+    for hit in hits {
+        let preview = preview_line(&hit.candidate);
+        match &hit.reason {
+            Some(reason) => out.push_str(&format!(
+                "turn {} (sim {:.2}): \"{preview}\" — reason: {reason}\n",
+                hit.turn, hit.score
+            )),
+            None => out.push_str(&format!(
+                "turn {} (sim {:.2}): \"{preview}\"\n",
+                hit.turn, hit.score
+            )),
+        }
+    }
+    out
+}
+
 fn preview_line(text: &str) -> String {
     let first_line = text.lines().next().unwrap_or("").trim();
     if first_line.chars().count() <= REJECTION_PREVIEW_CHARS {
@@ -210,6 +328,10 @@ impl<C: Chat> Witness<C> {
         max_queue_depth: u64,
         recent_rejections_window: usize,
     ) -> anyhow::Result<Self> {
+        // σ-retrieval knobs default off; main.rs applies configured
+        // values via `with_similar_rejections` after load.
+        let similar_rejections_top_k: usize = 0;
+        let similar_rejections_threshold: f32 = 0.0;
         let identity_path = workspace.join("witness").join("identity.md");
         let identity = match std::fs::read_to_string(&identity_path) {
             Ok(text) => text,
@@ -258,6 +380,24 @@ impl<C: Chat> Witness<C> {
         let glean_log_path = workspace.join("witness").join("glean-log.jsonl");
         let last_glean_through = recover_last_glean_through(&glean_log_path);
         let rejections_path = workspace.join("witness").join("rejections.jsonl");
+
+        let on_connect_path = workspace.join("witness").join("on-connect.md");
+        let on_connect = match std::fs::read_to_string(&on_connect_path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!(
+                    path = %on_connect_path.display(),
+                    "witness on-connect prompt missing; connect duty disabled"
+                );
+                None
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading {}", on_connect_path.display()));
+            }
+        };
+        let connect_log_path = workspace.join("witness").join("connect-log.jsonl");
+        let last_connect_through = recover_last_connect_through(&connect_log_path);
+
         Ok(Self {
             workspace: workspace.to_path_buf(),
             client,
@@ -270,10 +410,47 @@ impl<C: Chat> Witness<C> {
             glean_min_new_turns,
             max_queue_depth,
             recent_rejections_window,
+            similar_rejections_top_k,
+            similar_rejections_threshold,
             last_glean_through,
             glean_log_path,
             rejections_path,
+            on_connect,
+            connect_threshold: 0.0,
+            connect_min_new_turns: 0,
+            connect_self_write_window: 0,
+            last_connect_through,
+            connect_log_path,
+            connect_sender: None,
         })
+    }
+
+    /// Enable the connect duty: attach the mpsc sender the turn loop
+    /// is listening on and set the threshold + refractory + self-write
+    /// window knobs. If the sender is `None` the duty stays disabled
+    /// (loaders that don't want connect can pass `None`).
+    pub fn with_connect(
+        mut self,
+        sender: Option<tokio::sync::mpsc::Sender<crate::turn::ConnectFrame>>,
+        threshold: f32,
+        min_new_turns: u64,
+        self_write_window: u64,
+    ) -> Self {
+        self.connect_sender = sender;
+        self.connect_threshold = threshold;
+        self.connect_min_new_turns = min_new_turns;
+        self.connect_self_write_window = self_write_window;
+        self
+    }
+
+    /// Enable σ retrieval: the on-glean prompt's `{similar_rejections}`
+    /// slot renders top-K past rejections whose cosine similarity to
+    /// the current window meets the threshold. `top_k == 0` disables
+    /// (which is also the load-time default).
+    pub fn with_similar_rejections(mut self, top_k: usize, threshold: f32) -> Self {
+        self.similar_rejections_top_k = top_k;
+        self.similar_rejections_threshold = threshold;
+        self
     }
 
     /// Run until shutdown: on every settled-turn signal, catch up
@@ -288,6 +465,11 @@ impl<C: Chat> Witness<C> {
                 let target = *latest_turn.borrow();
                 for turn in self.missing_moves(target)? {
                     self.move_for(turn).await?;
+                    // Connect duty (spec 2026-07-07): threshold-gated,
+                    // per settled turn. Runs before the glean dice so a
+                    // fired connect and a fired glean can coexist on the
+                    // same turn without either blocking the other.
+                    self.connect_for(turn).await?;
                     // Flat-probability gleaning (wall ch. 04): the
                     // agent cannot predict which turns get gleaned.
                     if rand::random::<f64>() < self.glean_probability {
@@ -360,6 +542,17 @@ impl<C: Chat> Witness<C> {
             tracing::debug!(turn = up_to_turn, "glean: skipped (digestion turn)");
             return Ok(());
         }
+        // A heartbeat wake is the agent's autonomy floor (wall ch. 01).
+        // Firing a glean from one turns the quiet floor into more
+        // inbound — and the agent finds it intrusive. Skip the dice
+        // when the wake itself is a heartbeat, but keep heartbeat turns
+        // *in* the glean window: the loom work the agent does during
+        // them is prime material (wall ch. 04), it just gets harvested
+        // by the next real conversation turn or the end-of-session pass.
+        if is_heartbeat_turn(&all_lines, up_to_turn) {
+            tracing::debug!(turn = up_to_turn, "glean: skipped (heartbeat turn)");
+            return Ok(());
+        }
         if let Some(last) = self.last_glean_through
             && self.glean_min_new_turns > 0
             && up_to_turn.saturating_sub(last) < self.glean_min_new_turns
@@ -394,9 +587,51 @@ impl<C: Chat> Witness<C> {
 
         let rejections = recent_rejections(&self.rejections_path, self.recent_rejections_window);
         let rejection_block = format_rejections(&rejections);
+
+        // σ-only retrieval: surface semantically similar past rejections
+        // regardless of recency. On any failure — no memory system, no
+        // top_k, embed error — the slot renders empty and the glean
+        // proceeds; the jsonl-backed `{recent_rejections}` still fires.
+        let similar_block = if self.similar_rejections_top_k > 0 {
+            match &self.memory {
+                Some(mem) => match mem
+                    .top_similar_rejections(
+                        &recent,
+                        self.similar_rejections_top_k,
+                        self.similar_rejections_threshold,
+                    )
+                    .await
+                {
+                    Ok(hits) => {
+                        // Dedup: a rejection already in the recent list is
+                        // dropped from the similar list (recent carries
+                        // "you saw this recently" context the similar
+                        // slot doesn't).
+                        let recent_ids: std::collections::HashSet<&str> = rejections
+                            .iter()
+                            .map(|r| r.candidate_id.as_str())
+                            .collect();
+                        let filtered: Vec<_> = hits
+                            .into_iter()
+                            .filter(|h| !recent_ids.contains(h.candidate_id.as_str()))
+                            .collect();
+                        format_similar_rejections(&filtered)
+                    }
+                    Err(e) => {
+                        tracing::warn!(turn = up_to_turn, error = %e, "similar-rejection retrieval failed");
+                        String::new()
+                    }
+                },
+                None => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
         let prompt = template
             .replace("{recent_record}", &recent)
-            .replace("{recent_rejections}", &rejection_block);
+            .replace("{recent_rejections}", &rejection_block)
+            .replace("{similar_rejections}", &similar_block);
         let messages = [ChatMessage::user(prompt)];
         match self.client.chat(&self.identity, &messages, &[]).await {
             Ok(response) => {
@@ -481,6 +716,198 @@ impl<C: Chat> Witness<C> {
         tracing::debug!(turn, "move written");
         Ok(())
     }
+
+    /// Duty three (the connect duty, spec 2026-07-07): after a turn
+    /// settles, semantically search the workspace for a note that
+    /// connects. If the top hit clears the threshold and the self-
+    /// write guard, compose a one-sentence why and post a
+    /// [`ConnectFrame`] to the turn loop. Best-effort throughout —
+    /// any failure downgrades to "no connect this turn."
+    async fn connect_for(&mut self, turn: u64) -> anyhow::Result<()> {
+        let (Some(template), Some(memory), Some(sender)) =
+            (&self.on_connect, &self.memory, &self.connect_sender)
+        else {
+            return Ok(());
+        };
+        if self.connect_threshold <= 0.0 {
+            return Ok(());
+        }
+
+        // Refractory: same shape as glean's.
+        if let Some(last) = self.last_connect_through
+            && self.connect_min_new_turns > 0
+            && turn.saturating_sub(last) < self.connect_min_new_turns
+        {
+            tracing::debug!(
+                turn,
+                last_connect_through = last,
+                min_new = self.connect_min_new_turns,
+                "connect: skipped (refractory)"
+            );
+            return Ok(());
+        }
+
+        let all_lines: Vec<RecordLine> =
+            record::scan(&self.workspace.join("record").join("turns.jsonl"))?;
+        let this_turn_lines: Vec<RecordLine> = all_lines
+            .iter()
+            .filter(|l| l.turn == turn)
+            .cloned()
+            .collect();
+        if this_turn_lines.is_empty() {
+            return Ok(());
+        }
+        // Same exclusions the glean duty uses: digestion and heartbeat
+        // turns don't carry the kind of substance connect should search
+        // against.
+        if is_digestion_turn(&all_lines, turn) || is_heartbeat_turn(&all_lines, turn) {
+            tracing::debug!(turn, "connect: skipped (digestion/heartbeat)");
+            return Ok(());
+        }
+
+        let transcript = format_transcript(&this_turn_lines);
+        // The channel of the settled turn — every RecordLine for one
+        // turn shares it (persist-once, wall ch. 01).
+        let channel = this_turn_lines[0].channel.clone();
+
+        let hits = match memory.search_no_bump(&transcript, CONNECT_SCAN_K).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(turn, error = %e, "connect search failed");
+                return Ok(());
+            }
+        };
+
+        let recent_writes = collect_recent_agent_writes(
+            &all_lines,
+            turn,
+            self.connect_self_write_window,
+            &self.workspace,
+        );
+        let hit = hits.into_iter().find(|h| {
+            if h.score < self.connect_threshold {
+                return false;
+            }
+            if self.connect_self_write_window == 0 {
+                return true;
+            }
+            !recent_writes.iter().any(|w| paths_match(w, &h.file_path))
+        });
+        let Some(hit) = hit else {
+            return Ok(());
+        };
+
+        let target_path = std::path::PathBuf::from(&hit.file_path);
+        let target_ref = crate::memory::target_ref_for_path(&target_path);
+
+        let prompt = template
+            .replace("{transcript}", &transcript)
+            .replace("{target_path}", &hit.file_path)
+            .replace("{target_excerpt}", &hit.text);
+        let messages = [ChatMessage::user(prompt)];
+        let why = match self.client.chat(&self.identity, &messages, &[]).await {
+            Ok(response) => {
+                let text = response.content.trim();
+                if text.is_empty() || text.eq_ignore_ascii_case(NOTHING_TO_CONNECT) {
+                    tracing::debug!(turn, target = %target_ref, "connect: nothing to connect");
+                    return Ok(());
+                }
+                text.to_string()
+            }
+            Err(e) => {
+                tracing::warn!(turn, error = %e, "connect model call failed");
+                return Ok(());
+            }
+        };
+
+        let frame = crate::turn::ConnectFrame {
+            turn,
+            channel,
+            target_ref: target_ref.clone(),
+            target_path,
+            why,
+        };
+        if let Err(e) = sender.try_send(frame) {
+            tracing::warn!(turn, error = %e, "connect frame send failed; dropping");
+            return Ok(());
+        }
+
+        // Log receipt AFTER send succeeds — a torn log line must not
+        // describe a phantom frame (same discipline as glean).
+        let entry = ConnectLogEntry {
+            turn,
+            target_ref: target_ref.clone(),
+            at: jiff::Timestamp::now().to_string(),
+        };
+        if let Err(e) = append_connect_log(&self.connect_log_path, &entry) {
+            tracing::warn!(turn, error = %e, "connect-log append failed");
+        } else {
+            self.last_connect_through = Some(turn);
+        }
+        tracing::info!(turn, target = %target_ref, "connect: frame posted");
+        Ok(())
+    }
+}
+
+/// Walk `record/turns.jsonl` from `turn - window` to `turn` inclusive
+/// and collect every file path the agent wrote or edited during that
+/// span. Used by the connect duty's self-connection guard so a note
+/// the agent just authored does not surface as "you have a note that
+/// connects to this."
+fn collect_recent_agent_writes(
+    all_lines: &[RecordLine],
+    turn: u64,
+    window: u64,
+    workspace: &Path,
+) -> Vec<PathBuf> {
+    if window == 0 {
+        return Vec::new();
+    }
+    let from = turn.saturating_sub(window);
+    let mut out: Vec<PathBuf> = Vec::new();
+    for line in all_lines.iter().filter(|l| l.turn >= from && l.turn <= turn) {
+        if line.role != RecordRole::Assistant {
+            continue;
+        }
+        for call in line.tool_calls.iter().flatten() {
+            let is_write = matches!(call.name.as_str(), "write" | "edit" | "create_moment");
+            if !is_write {
+                continue;
+            }
+            let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
+                continue;
+            };
+            let Some(path_str) = args.get("path").and_then(|v| v.as_str()) else {
+                // create_moment writes under record/moments/{id}.md — but
+                // record/ is not indexed (wall ch. 10), so it never
+                // matches a hit anyway. Nothing to record here.
+                continue;
+            };
+            let candidate = std::path::PathBuf::from(path_str);
+            let abs = if candidate.is_absolute() {
+                candidate
+            } else {
+                workspace.join(candidate)
+            };
+            if !out.contains(&abs) {
+                out.push(abs);
+            }
+        }
+    }
+    out
+}
+
+/// Rough path equality: canonicalise both when possible (they exist),
+/// otherwise fall back to component-wise comparison. Handles the
+/// common shapes — workspace-relative vs. absolute, `./` prefixes.
+fn paths_match(a: &Path, b: &str) -> bool {
+    let b = Path::new(b);
+    if let (Ok(ca), Ok(cb)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        return ca == cb;
+    }
+    let na: PathBuf = a.components().collect();
+    let nb: PathBuf = b.components().collect();
+    na == nb
 }
 
 /// A turn is digestion-driven iff its inbound (non-Assistant,
@@ -503,6 +930,31 @@ fn is_digestion_turn(lines: &[RecordLine], turn: u64) -> bool {
                     return false;
                 }
             }
+            RecordRole::Assistant | RecordRole::Tool => {}
+        }
+    }
+    saw_marker
+}
+
+/// A heartbeat-driven turn: its only inbound is the
+/// [`HEARTBEAT_MARKER`] user line the turn loop appends on the timer
+/// fire (wall ch. 01). Conservative, matching `is_digestion_turn`: any
+/// other inbound (a real user message, a non-marker system frame)
+/// disqualifies, so a heartbeat turn that also caught a mid-turn
+/// arrival is not skipped.
+fn is_heartbeat_turn(lines: &[RecordLine], turn: u64) -> bool {
+    let mut saw_marker = false;
+    for line in lines.iter().filter(|l| l.turn == turn) {
+        match line.role {
+            RecordRole::User => {
+                let Some(content) = &line.content else { continue };
+                if content.trim() == HEARTBEAT_MARKER {
+                    saw_marker = true;
+                } else {
+                    return false;
+                }
+            }
+            RecordRole::System => return false,
             RecordRole::Assistant | RecordRole::Tool => {}
         }
     }
@@ -860,6 +1312,69 @@ mod tests {
             model.prompts.lock().unwrap().is_empty(),
             "model must not be called on a digestion turn",
         );
+    }
+
+    /// Shape of a heartbeat turn as written by `TurnLoop`: a single
+    /// User-role line with the [HEARTBEAT_MARKER] content, plus
+    /// whatever the agent did in response (often loom work).
+    fn record_heartbeat_turn(workspace: &Path, turn: u64, reply: &str) {
+        let mut rec = TurnRecord::open(workspace).unwrap();
+        rec.append(turn, "local_main", RecordRole::User, Some(HEARTBEAT_MARKER))
+            .unwrap();
+        rec.append(turn, "local_main", RecordRole::Assistant, Some(reply))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn glean_skips_heartbeat_turn_without_calling_the_model() {
+        // Heartbeats are the agent's autonomy floor; firing a glean
+        // from them turns the floor into more inbound. Skip the dice
+        // when the wake itself is a heartbeat. Verified by giving
+        // FakeModel zero replies — any call would panic.
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        let memory = fresh_memory(dir.path());
+
+        record_heartbeat_turn(dir.path(), 1, "wrote a loom note about teal.");
+
+        let model = FakeModel::replying(vec![]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
+        witness.glean(1).await.unwrap();
+
+        assert_eq!(memory.queue_depth().unwrap(), 0);
+        assert!(
+            model.prompts.lock().unwrap().is_empty(),
+            "model must not be called on a heartbeat turn",
+        );
+    }
+
+    #[tokio::test]
+    async fn glean_keeps_heartbeat_turns_in_the_window() {
+        // Heartbeats are skipped as a *trigger*, not stripped from the
+        // window — the loom work the agent did during a heartbeat is
+        // still prime glean material when a later real turn rolls the
+        // dice (wall ch. 04).
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        let memory = fresh_memory(dir.path());
+
+        record_heartbeat_turn(dir.path(), 1, "loom note: cass loves teal.");
+        record_turn(dir.path(), 2, "anything new?", Some("nothing big."));
+
+        let model = FakeModel::replying(vec![ok("cass loves teal — worth a note")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
+        witness.glean(2).await.unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "real turn triggers; heartbeat in window");
+        assert!(
+            prompts[0].1.contains("loom note: cass loves teal."),
+            "heartbeat-turn content should still feed the glean window:\n{}",
+            prompts[0].1
+        );
+        assert_eq!(memory.queue_depth().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1453,5 +1968,334 @@ mod tests {
         let entries = recent_rejections(&path, 10);
         assert_eq!(entries.len(), 2, "torn line skipped");
         assert_eq!(entries[1].candidate, "after");
+    }
+
+    #[tokio::test]
+    async fn glean_prompt_substitutes_similar_rejections_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nSimilar:{similar_rejections}\nGlean.",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "warm goodbye", Some("noted"));
+
+        let memory = fresh_memory(dir.path());
+        // Seed a past rejection whose text overlaps the query letters
+        // (goodnight ↔ goodbye ↔ warm — heavy shared letters in the
+        // FakeEmbedder's histogram, so cosine is high).
+        memory
+            .insert_rejection_vector("01OLD", "warm goodnight", Some("not a claim"), 42, "t")
+            .await
+            .unwrap();
+
+        let model = FakeModel::replying(vec![ok("nothing to glean")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0)
+                .unwrap()
+                .with_similar_rejections(3, 0.0);
+        witness.glean(1).await.unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let body = &prompts[0].1;
+        assert!(
+            body.contains("[your prior gleans, semantically similar"),
+            "similar block present:\n{body}"
+        );
+        assert!(body.contains("warm goodnight"), "hit text rendered:\n{body}");
+        assert!(body.contains("turn 42"), "hit turn rendered:\n{body}");
+        assert!(body.contains("reason: not a claim"), "reason rendered:\n{body}");
+    }
+
+    #[tokio::test]
+    async fn glean_prompt_similar_slot_empty_when_top_k_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:\n{recent_record}\nSimilar:{similar_rejections}\nGlean.",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "warm goodbye", Some("noted"));
+
+        let memory = fresh_memory(dir.path());
+        memory
+            .insert_rejection_vector("01OLD", "warm goodnight", None, 42, "t")
+            .await
+            .unwrap();
+
+        let model = FakeModel::replying(vec![ok("nothing to glean")]);
+        // Default: top_k = 0 disables the read path.
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 0).unwrap();
+        witness.glean(1).await.unwrap();
+
+        let body = &model.prompts.lock().unwrap()[0].1;
+        assert!(!body.contains("prior gleans, semantically similar"), "{body}");
+        assert!(body.contains("Similar:\nGlean."), "empty slot renders blank:\n{body}");
+    }
+
+    #[tokio::test]
+    async fn similar_dedups_against_recent_rejections() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        std::fs::write(
+            dir.path().join("witness/on-glean.md"),
+            "Recent:{recent_rejections}\nSimilar:{similar_rejections}\nR:{recent_record}",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "warm goodbye", Some("noted"));
+
+        // Same candidate_id in both places: recent-window rendering
+        // AND vector table. The similar slot must drop it since recent
+        // already shows it.
+        write_rejection_line(dir.path(), 42, "warm goodnight", Some("not a claim"));
+        let memory = fresh_memory(dir.path());
+        memory
+            .insert_rejection_vector("01TEST42", "warm goodnight", Some("not a claim"), 42, "t")
+            .await
+            .unwrap();
+
+        let model = FakeModel::replying(vec![ok("nothing to glean")]);
+        let mut witness =
+            Witness::load(dir.path(), model.clone(), Some(memory.clone()), 1.0, 0, 0, 5)
+                .unwrap()
+                .with_similar_rejections(3, 0.0);
+        witness.glean(1).await.unwrap();
+
+        let body = &model.prompts.lock().unwrap()[0].1;
+        assert!(
+            body.contains("[your prior gleans the agent rejected]"),
+            "recent block rendered:\n{body}"
+        );
+        assert!(
+            !body.contains("[your prior gleans, semantically similar"),
+            "similar block dropped (only hit was already in recent):\n{body}"
+        );
+    }
+
+    // ----- connect duty (spec 2026-07-07) -----
+
+    fn seed_connect(workspace: &Path) {
+        seed_witness(workspace);
+        std::fs::write(
+            workspace.join("witness/on-connect.md"),
+            "Transcript:\n{transcript}\nTarget: {target_path}\n\
+             Excerpt: {target_excerpt}\nCompose the connection.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+    }
+
+    async fn connect_witness(
+        workspace: &Path,
+        model: std::sync::Arc<FakeModel>,
+        memory: crate::memory::Memory,
+        threshold: f32,
+        min_new_turns: u64,
+        self_write_window: u64,
+    ) -> (Witness<std::sync::Arc<FakeModel>>, tokio::sync::mpsc::Receiver<crate::turn::ConnectFrame>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let witness =
+            Witness::load(workspace, model, Some(memory), 0.0, 0, 0, 0)
+                .unwrap()
+                .with_connect(Some(tx), threshold, min_new_turns, self_write_window);
+        (witness, rx)
+    }
+
+    #[tokio::test]
+    async fn connect_fires_on_high_similarity_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal is a shade between blue and green.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+
+        // Turn transcript uses letters overlapping with the note.
+        record_turn(dir.path(), 1, "teal", Some("blue-green"));
+
+        let model = FakeModel::replying(vec![ok("both dwell on the same colour.")]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
+        witness.connect_for(1).await.unwrap();
+
+        let frame = rx.try_recv().expect("connect frame posted");
+        assert_eq!(frame.turn, 1);
+        assert_eq!(frame.target_ref, "NTEAL", "atomic frontmatter id used");
+        assert!(frame.why.contains("dwell"), "why passed through: {}", frame.why);
+
+        // Receipt landed.
+        let log = std::fs::read_to_string(dir.path().join("witness/connect-log.jsonl")).unwrap();
+        assert!(log.contains("\"turn\":1"), "connect-log entry:\n{log}");
+        assert!(log.contains("NTEAL"), "connect-log target_ref:\n{log}");
+    }
+
+    #[tokio::test]
+    async fn connect_skips_on_sentinel_without_logging() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        record_turn(dir.path(), 1, "teal", Some("noted"));
+
+        let model = FakeModel::replying(vec![ok("nothing to connect")]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
+        witness.connect_for(1).await.unwrap();
+
+        assert!(rx.try_recv().is_err(), "sentinel yields no frame");
+        assert!(
+            !dir.path().join("witness/connect-log.jsonl").exists(),
+            "no receipt on sentinel — the log must not describe a phantom frame"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_below_threshold_never_calls_model() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        // Disjoint alphabets — cosine near zero in FakeEmbedder.
+        std::fs::write(
+            dir.path().join("knowledge/x.md"),
+            "---\nid: NX\n---\n\nxxx yyy zzz\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        record_turn(dir.path(), 1, "aaa bbb ccc", Some("ddd"));
+
+        // Zero replies queued — a spurious model call would panic.
+        let model = FakeModel::replying(vec![]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.5, 0, 0).await;
+        witness.connect_for(1).await.unwrap();
+
+        assert!(rx.try_recv().is_err());
+        assert!(model.prompts.lock().unwrap().is_empty(), "model must not be called");
+    }
+
+    #[tokio::test]
+    async fn connect_refractory_blocks_second_fire_without_model_call() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal shade.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        for turn in 1..=8u64 {
+            record_turn(dir.path(), turn, &format!("teal {turn}"), Some("noted"));
+        }
+
+        // One reply for the first connect. If refractory fails, the
+        // second call consumes another reply and panics on the empty
+        // queue.
+        let model = FakeModel::replying(vec![ok("first connect.")]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 6, 0).await;
+
+        witness.connect_for(1).await.unwrap();
+        assert!(rx.try_recv().is_ok(), "first fire");
+        // Within refractory (1 → 5 is only 4 turns forward, min is 6).
+        witness.connect_for(5).await.unwrap();
+        assert!(rx.try_recv().is_err(), "refractory blocks the second fire");
+    }
+
+    #[tokio::test]
+    async fn connect_self_write_guard_skips_recent_target() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        let target_abs = dir.path().join("knowledge/teal.md");
+        std::fs::write(
+            &target_abs,
+            "---\nid: NTEAL\n---\n\nteal shade.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+
+        // The agent wrote the target on turn 1 (recorded as a `write`
+        // tool call). Turn 2 is the settled turn we run connect on.
+        let mut rec = crate::record::TurnRecord::open(dir.path()).unwrap();
+        rec.append_full(
+            1,
+            "local_main",
+            RecordRole::Assistant,
+            Some(""),
+            Some(vec![crate::model::ToolCall {
+                id: "c1".into(),
+                name: "write".into(),
+                arguments: format!(
+                    r#"{{"path":"{}","content":"teal"}}"#,
+                    target_abs.display()
+                ),
+            }]),
+            None,
+        )
+        .unwrap();
+        record_turn(dir.path(), 2, "teal", Some("noted"));
+
+        // Zero model replies — a fire would panic. Guard must skip.
+        let model = FakeModel::replying(vec![]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 5).await;
+        witness.connect_for(2).await.unwrap();
+        assert!(rx.try_recv().is_err(), "self-write guard skipped the hit");
+    }
+
+    #[tokio::test]
+    async fn connect_duty_disabled_without_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_witness(dir.path()); // note: no on-connect.md
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        record_turn(dir.path(), 1, "teal", Some("noted"));
+
+        let model = FakeModel::replying(vec![]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
+        witness.connect_for(1).await.unwrap();
+        assert!(rx.try_recv().is_err());
+        assert!(model.prompts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn connect_skipped_on_digestion_turn_without_model_call() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_connect(dir.path());
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal.\n",
+        )
+        .unwrap();
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        record_digestion_turn(dir.path(), 1, "candidate", "rejected");
+
+        let model = FakeModel::replying(vec![]);
+        let (mut witness, mut rx) =
+            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
+        witness.connect_for(1).await.unwrap();
+        assert!(rx.try_recv().is_err());
+        assert!(model.prompts.lock().unwrap().is_empty());
     }
 }

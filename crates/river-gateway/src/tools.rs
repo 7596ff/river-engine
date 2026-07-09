@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -23,6 +25,7 @@ const BASH_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_READ_LIMIT: usize = 500;
 const DEFAULT_CHANNEL_READ_LIMIT: usize = 50;
+const MAX_READ_MOVES_TURNS: u64 = 200;
 
 /// What tools need from the engine. Built per turn (the current
 /// channel changes).
@@ -31,6 +34,9 @@ pub struct ToolContext {
     pub channels: Channels,
     pub outbound: broadcast::Sender<OutboundMessage>,
     pub current_channel: String,
+    /// The turn number the agent is currently inside. `create_moment`
+    /// uses it to refuse future-dated turn ranges.
+    pub current_turn: u64,
     /// Secret variable names stripped from child environments.
     pub scrub: Vec<String>,
     /// The memory system, when the agent has an embedding model. The
@@ -44,6 +50,14 @@ pub struct ToolContext {
     /// Set on Wake::Digestion turns only; gives `reject_candidate` the
     /// id and text of the candidate the agent is currently digesting.
     pub digestion: Option<DigestionInfo>,
+    /// Raised by `compact`; the turn loop forces a compaction at the
+    /// start of the next turn even if the threshold hasn't tripped.
+    pub compact_requested: Arc<AtomicBool>,
+    /// Raised by `create_moment`; the turn loop refreshes the arc
+    /// (re-scans `record/moments/`) before the next model call so the
+    /// agent's just-written moment is visible without waiting for
+    /// compaction.
+    pub arc_dirty: Arc<AtomicBool>,
 }
 
 /// The candidate the agent is being asked to digest this turn. Carries
@@ -83,6 +97,9 @@ impl Registry {
                 Box::new(SearchTool),
                 Box::new(ChannelReadTool),
                 Box::new(RejectCandidateTool),
+                Box::new(CreateMomentTool),
+                Box::new(ReadMovesTool),
+                Box::new(CompactTool),
             ],
         }
     }
@@ -700,20 +717,23 @@ fn format_header(
 }
 
 /// Append one rejection entry to `workspace/witness/rejections.jsonl`,
-/// creating the file (and parent dir) if absent.
+/// creating the file (and parent dir) if absent. Returns the ISO-8601
+/// timestamp written into the entry, so a downstream vector insert
+/// can share it with the jsonl row.
 pub(crate) fn append_rejection(
     workspace: &Path,
     candidate_id: &str,
     candidate_text: &str,
     reason: Option<&str>,
     turn: u64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     use std::io::Write as _;
     let path = workspace.join("witness").join("rejections.jsonl");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| anyhow::anyhow!("creating {}: {e}", parent.display()))?;
     }
+    let at = jiff::Timestamp::now().to_string();
     let mut obj = serde_json::Map::new();
     obj.insert(
         "candidate_id".into(),
@@ -733,10 +753,7 @@ pub(crate) fn append_rejection(
         "turn".into(),
         serde_json::Value::Number(serde_json::Number::from(turn)),
     );
-    obj.insert(
-        "at".into(),
-        serde_json::Value::String(jiff::Timestamp::now().to_string()),
-    );
+    obj.insert("at".into(), serde_json::Value::String(at.clone()));
     let mut json = serde_json::to_string(&serde_json::Value::Object(obj))?;
     json.push('\n');
     let mut file = std::fs::OpenOptions::new()
@@ -748,7 +765,7 @@ pub(crate) fn append_rejection(
         .map_err(|e| anyhow::anyhow!("appending {}: {e}", path.display()))?;
     file.sync_data()
         .map_err(|e| anyhow::anyhow!("fsyncing {}: {e}", path.display()))?;
-    Ok(())
+    Ok(at)
 }
 
 /// The agent's `reject_candidate` call: writes an attributable entry
@@ -778,19 +795,289 @@ impl Tool for RejectCandidateTool {
                 anyhow::bail!("reject_candidate is only valid inside a digestion turn");
             };
             let reason = args.get("reason").and_then(Value::as_str);
-            append_rejection(
+            let at = append_rejection(
                 &ctx.workspace,
                 &digestion.candidate_id,
                 &digestion.candidate_text,
                 reason,
                 digestion.turn,
             )?;
+            // Best-effort vector insert: the jsonl entry is the truth,
+            // the vector is derived and rebuildable at startup. Failure
+            // here logs and moves on; the tool result is unaffected.
+            if let Some(memory) = &ctx.memory {
+                if let Err(e) = memory
+                    .insert_rejection_vector(
+                        &digestion.candidate_id,
+                        &digestion.candidate_text,
+                        reason,
+                        digestion.turn,
+                        &at,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        candidate_id = %digestion.candidate_id,
+                        error = %e,
+                        "rejection vector insert failed; jsonl is authoritative"
+                    );
+                }
+            }
             Ok(format!(
                 "rejected candidate {} ({})",
                 digestion.candidate_id,
                 reason.unwrap_or("no reason given")
             ))
         })
+    }
+}
+
+/// `create_moment` (wall ch. 03): write a moment file under
+/// `record/moments/{id}.md`. The agent's own compression — replaces
+/// the witness's moves for the covered turn range in the arc layer.
+struct CreateMomentTool;
+impl Tool for CreateMomentTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "create_moment".into(),
+            description: "Write a moment: your own compression of a stretch of turns, in your voice. It will replace the witness's moves for the covered range in the arc. Range must be at least two turns and end at or before the current turn.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "turn_start": {
+                        "type": "integer",
+                        "description": "inclusive start of the covered turn range"
+                    },
+                    "turn_end": {
+                        "type": "integer",
+                        "description": "inclusive end; must be greater than turn_start and ≤ the current turn"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "your compression — first person, what the stretch meant"
+                    },
+                    "links": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "optional ULIDs of atomic notes this moment cites"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "optional freeform tags"
+                    }
+                },
+                "required": ["turn_start", "turn_end", "body"]
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let turn_start = args["turn_start"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("turn_start must be an integer"))?;
+            let turn_end = args["turn_end"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("turn_end must be an integer"))?;
+            if turn_end <= turn_start {
+                anyhow::bail!("turn_end must be greater than turn_start (a moment covers at least two turns)");
+            }
+            if turn_end > ctx.current_turn {
+                anyhow::bail!(
+                    "turn_end ({turn_end}) is in the future — the current turn is {}",
+                    ctx.current_turn
+                );
+            }
+            let body = required_str(&args, "body")?;
+            if body.trim().is_empty() {
+                anyhow::bail!("body must be non-empty");
+            }
+            let links = parse_string_list(&args, "links")?;
+            let tags = parse_string_list(&args, "tags")?;
+            let id = ulid::Ulid::new().to_string();
+            let moment = crate::moments::Moment {
+                id: id.clone(),
+                turn_start,
+                turn_end,
+                links,
+                tags,
+                body: body.to_string(),
+                file_path: std::path::PathBuf::new(),
+            };
+            let path = crate::moments::write(&ctx.workspace, &moment)?;
+            // The capture seam: a moment is an indexed write — let the
+            // memory pipeline embed it on the next sweep.
+            capture_write(ctx, &path);
+            // The arc has a cached entry list; raise the dirty flag so
+            // the turn loop re-scans moments before the next model
+            // call. Without this, the moment is on disk but invisible
+            // in arc until the next compaction.
+            ctx.arc_dirty.store(true, Ordering::Relaxed);
+            Ok(format!(
+                "moment {id} written ({turn_start}–{turn_end})"
+            ))
+        })
+    }
+}
+
+/// `read_moves` (wall ch. 03): scan `record/moves.jsonl` for moves in
+/// a turn range. The agent's retrospective lookback for authoring
+/// moments. Range capped at 200 turns.
+struct ReadMovesTool;
+impl Tool for ReadMovesTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "read_moves".into(),
+            description: "Read the witness's moves for a turn range. Returns one line per turn that has a move, in ascending turn order, across all channels. Range size capped at 200 turns.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "turn_start": {
+                        "type": "integer",
+                        "description": "inclusive start of the range"
+                    },
+                    "turn_end": {
+                        "type": "integer",
+                        "description": "inclusive end of the range; must be ≥ turn_start and within 200 turns"
+                    }
+                },
+                "required": ["turn_start", "turn_end"]
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let turn_start = args["turn_start"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("turn_start must be an integer"))?;
+            let turn_end = args["turn_end"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("turn_end must be an integer"))?;
+            if turn_end < turn_start {
+                anyhow::bail!("turn_end must be ≥ turn_start");
+            }
+            let span = turn_end - turn_start + 1;
+            if span > MAX_READ_MOVES_TURNS {
+                anyhow::bail!(
+                    "range too wide: {span} turns (max {MAX_READ_MOVES_TURNS})"
+                );
+            }
+
+            // Channel attribution: scan the turn record once and build
+            // a turn → facing-channel index. The "facing" channel is
+            // the channel assistant/tool lines were tagged with for
+            // that turn (wall ch. 10); fall back to whatever the turn
+            // touched if no assistant line exists.
+            let record_path = ctx.workspace.join("record").join("turns.jsonl");
+            let lines = crate::record::scan(&record_path)?;
+            let mut facing: std::collections::HashMap<u64, String> =
+                std::collections::HashMap::new();
+            for line in &lines {
+                if line.turn < turn_start || line.turn > turn_end {
+                    continue;
+                }
+                let prefer = matches!(
+                    line.role,
+                    crate::record::RecordRole::Assistant | crate::record::RecordRole::Tool
+                );
+                facing
+                    .entry(line.turn)
+                    .and_modify(|c| {
+                        if prefer {
+                            *c = line.channel.clone();
+                        }
+                    })
+                    .or_insert_with(|| line.channel.clone());
+            }
+
+            let moves_path = crate::record::moves_path(&ctx.workspace);
+            let mut moves = crate::record::read_moves(&moves_path)?;
+            moves.sort_by_key(|m| m.turn);
+            let mut out = String::new();
+            for m in moves
+                .into_iter()
+                .filter(|m| m.turn >= turn_start && m.turn <= turn_end)
+            {
+                let channel = facing
+                    .get(&m.turn)
+                    .map(|s| s.as_str())
+                    .unwrap_or("(unknown)");
+                out.push_str(&format!("turn {} [{}]: {}\n", m.turn, channel, m.summary));
+            }
+            Ok(out)
+        })
+    }
+}
+
+/// Path of the cross-session handoff file. Written by `compact`,
+/// consumed by the next session's startup (turn loop construction).
+pub fn handoff_path(workspace: &Path) -> PathBuf {
+    workspace.join("handoff.md")
+}
+
+/// `compact` (wall ch. 03): force a compaction at the next turn start
+/// and leave a handoff message that the next session will see as the
+/// first system-role record line after the restart.
+struct CompactTool;
+impl Tool for CompactTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "compact".into(),
+            description: "Force a compaction at the start of the next turn and leave a handoff note for the next session. The summary lands as a system-role line at the head of the next session's hot — your voice to your future self. Call this when winding down or stepping away.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "what to tell the next session — open questions, where you left off, anything that should ride in"
+                    }
+                },
+                "required": ["summary"]
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let summary = required_str(&args, "summary")?;
+            if summary.trim().is_empty() {
+                anyhow::bail!("summary must be non-empty");
+            }
+            let path = handoff_path(&ctx.workspace);
+            // Atomic write so a kill mid-write doesn't leave a torn
+            // handoff lying around for the next session.
+            use std::io::Write as _;
+            let tmp = path.with_extension("md.tmp");
+            {
+                let mut file = std::fs::File::create(&tmp)
+                    .map_err(|e| anyhow::anyhow!("creating {}: {e}", tmp.display()))?;
+                file.write_all(summary.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("writing {}: {e}", tmp.display()))?;
+                file.sync_all()
+                    .map_err(|e| anyhow::anyhow!("fsyncing {}: {e}", tmp.display()))?;
+            }
+            std::fs::rename(&tmp, &path)
+                .map_err(|e| anyhow::anyhow!("renaming {}: {e}", tmp.display()))?;
+            ctx.compact_requested.store(true, Ordering::Relaxed);
+            Ok(format!(
+                "handoff saved ({} bytes); compaction will run at the next turn start",
+                summary.len()
+            ))
+        })
+    }
+}
+
+fn parse_string_list(args: &Value, key: &str) -> anyhow::Result<Vec<String>> {
+    match args.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("{key} entries must be strings"))
+            })
+            .collect(),
+        Some(Value::Null) | None => Ok(Vec::new()),
+        Some(_) => anyhow::bail!("{key} must be a list of strings"),
     }
 }
 
@@ -813,11 +1100,14 @@ mod tests {
             channels,
             outbound,
             current_channel: "local_main".into(),
+            current_turn: 100,
             scrub: vec!["SECRET_KEY".into()],
             memory: None,
             reindex: None,
             discord: None,
             digestion: None,
+            compact_requested: Arc::new(AtomicBool::new(false)),
+            arc_dirty: Arc::new(AtomicBool::new(false)),
         };
         (ctx, dir, outbound_rx)
     }
@@ -828,11 +1118,23 @@ mod tests {
             name: name.into(),
             arguments: args.to_string(),
         };
-        let profile: Vec<String> =
-            ["read", "write", "edit", "glob", "grep", "bash", "speak", "channel_read", "reject_candidate"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+        let profile: Vec<String> = [
+            "read",
+            "write",
+            "edit",
+            "glob",
+            "grep",
+            "bash",
+            "speak",
+            "channel_read",
+            "reject_candidate",
+            "create_moment",
+            "read_moves",
+            "compact",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         registry.execute(&call, &profile, ctx).await
     }
 
@@ -1117,6 +1419,190 @@ mod tests {
         assert_eq!(text.lines().count(), 2);
         assert!(text.contains("first reason"));
         assert!(text.contains("second reason"));
+    }
+
+    fn write_moves_file(workspace: &Path, moves: &[(u64, &str)]) {
+        let dir = workspace.join("record");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut text = String::new();
+        for (turn, summary) in moves {
+            text.push_str(&format!(
+                "{}\n",
+                json!({"id": ulid::Ulid::new().to_string(), "turn": turn, "summary": summary})
+            ));
+        }
+        std::fs::write(dir.join("moves.jsonl"), text).unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_moment_writes_file_and_returns_id() {
+        let (mut ctx, dir, _) = ctx();
+        ctx.current_turn = 600;
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "create_moment",
+            json!({
+                "turn_start": 571,
+                "turn_end": 575,
+                "body": "I read the stretch and what stayed was the labor question.",
+                "links": ["01JXP20260618164250197"],
+                "tags": ["labor"]
+            }),
+        )
+        .await;
+        assert!(out.starts_with("moment ") && out.contains("(571–575)"), "{out}");
+        let files: Vec<_> = std::fs::read_dir(dir.path().join("record/moments"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with(".md"));
+    }
+
+    #[tokio::test]
+    async fn create_moment_rejects_inverted_range() {
+        let (mut ctx, _dir, _) = ctx();
+        ctx.current_turn = 100;
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "create_moment",
+            json!({"turn_start": 10, "turn_end": 5, "body": "x"}),
+        )
+        .await;
+        assert!(out.contains("greater than turn_start"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn create_moment_rejects_single_turn_range() {
+        let (mut ctx, _dir, _) = ctx();
+        ctx.current_turn = 100;
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "create_moment",
+            json!({"turn_start": 7, "turn_end": 7, "body": "x"}),
+        )
+        .await;
+        assert!(out.contains("at least two turns"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn create_moment_rejects_future_dated_range() {
+        let (mut ctx, _dir, _) = ctx();
+        ctx.current_turn = 20;
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "create_moment",
+            json!({"turn_start": 18, "turn_end": 25, "body": "x"}),
+        )
+        .await;
+        assert!(out.contains("in the future"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn create_moment_rejects_empty_body() {
+        let (mut ctx, _dir, _) = ctx();
+        ctx.current_turn = 100;
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "create_moment",
+            json!({"turn_start": 1, "turn_end": 5, "body": "   \n  "}),
+        )
+        .await;
+        assert!(out.contains("body must be non-empty"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn read_moves_returns_range_sorted_with_channel() {
+        let (ctx, dir, _) = ctx();
+        write_moves_file(
+            dir.path(),
+            &[(1, "first"), (2, "second"), (3, "third"), (4, "fourth")],
+        );
+        // Seed turns.jsonl so channel attribution works.
+        let mut rec = crate::record::TurnRecord::open(dir.path()).unwrap();
+        for turn in 1..=4u64 {
+            rec.append(turn, "discord_general", crate::record::RecordRole::User, Some("q"))
+                .unwrap();
+            rec.append(turn, "discord_general", crate::record::RecordRole::Assistant, Some("a"))
+                .unwrap();
+        }
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "read_moves",
+            json!({"turn_start": 2, "turn_end": 3}),
+        )
+        .await;
+        assert!(out.contains("turn 2 [discord_general]: second"), "{out}");
+        assert!(out.contains("turn 3 [discord_general]: third"), "{out}");
+        assert!(!out.contains("turn 1"), "{out}");
+        assert!(!out.contains("turn 4"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn read_moves_caps_at_200_turns() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "read_moves",
+            json!({"turn_start": 1, "turn_end": 500}),
+        )
+        .await;
+        assert!(out.contains("range too wide"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn read_moves_empty_range_is_empty_string() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "read_moves",
+            json!({"turn_start": 1, "turn_end": 5}),
+        )
+        .await;
+        assert_eq!(out, "");
+    }
+
+    #[tokio::test]
+    async fn compact_writes_handoff_and_raises_flag() {
+        let (ctx, dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "compact",
+            json!({"summary": "left off mid-thread on the labor question; resume there."}),
+        )
+        .await;
+        assert!(out.contains("handoff saved"), "{out}");
+        assert!(ctx.compact_requested.load(Ordering::Relaxed));
+        let text = std::fs::read_to_string(dir.path().join("handoff.md")).unwrap();
+        assert!(text.contains("labor question"));
+    }
+
+    #[tokio::test]
+    async fn compact_rejects_empty_summary() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "compact", json!({"summary": "  \n  "})).await;
+        assert!(out.contains("summary must be non-empty"), "{out}");
+        assert!(!ctx.compact_requested.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

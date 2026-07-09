@@ -230,12 +230,19 @@ it — reading is remembering.
 
 ## The vector index
 
-A sync service watches `knowledge/` (and any other workspace directories
-the config names) continuously: hash each file, embed new or changed
-content in segments, remove vectors for deleted files. Embeddings come
-from a configured embedding endpoint. Search is cosine similarity over
-the stored vectors, exposed to the agent as the `search` tool (ch. 07)
-and to context assembly as the retrieval source for the memory slot.
+A sync service watches `knowledge/`, `loom/`, and `record/moments/`
+(and any other workspace directories the config names) continuously:
+hash each file, embed new or changed content in segments, remove
+vectors for deleted files. Embeddings come from a configured embedding
+endpoint. Search is cosine similarity over the stored vectors, exposed
+to the agent as the `search` tool (ch. 07) and to context assembly as
+the retrieval source for the memory slot.
+
+`record/moments/` is the agent's own compression layer (ch. 03): the
+moment files there carry frontmatter and a body, both indexed like
+atomic notes. A `links: [...]` list of atomic ULIDs in a moment's
+frontmatter is a `cites` edge from the moment to each note — a typed
+link parallel to `extends` and `wiki` in the graph.
 
 The index is derived, always. Delete it and the sync service rebuilds it
 from the workspace. It is never the source of anything.

@@ -52,6 +52,14 @@ kanban-plugin: board
 
 ## in progress
 
+- [ ] witness σ — phase 1: similar-rejection retrieval — embed rejections at write time into a `rejection_vectors` SQLite table; before each glean, semantically retrieve top-K past rejections and render into a new `{similar_rejections}` prompt slot. No prompt revision, no auto-skip. Spec: `docs/superpowers/specs/2026-07-07-witness-similar-rejection-retrieval-design.md`.
+
+
+## backlog
+
+- [ ] witness σ — phase 2: rejection-rate instrumentation — track rejection rate over a rolling window as the `P̂` analog for glean productivity. Read-only telemetry (surface via `/health` and log); no action taken on it. Gates the phase 3 go/no-go decision. Follow-up in phase 1 spec.
+- [ ] witness σ — phase 3: gated on-glean revision loop — only if phase 2 shows signal worth acting on. A slow loop drafts revisions to `witness/on-glean.md`; drafts land in a review path, ground approves before deploy. External-judge invariant preserved. Bonus: silence gate (cosine > 0.95 within last N turns → skip glean), thresholds picked from phase-2 data. Follow-up in phase 1 spec.
+
 
 ## barebones harness
 
@@ -60,6 +68,7 @@ kanban-plugin: board
 ## river-engine unique features
 
 - [ ] adapter trait with feature declaration folded into the system prompt
+- [ ] claude -p adapter — **PARKED 2026-06-16, see `docs/explorations/2026-06-16-claude-p-adapter.md`.** Brainstormed four integration shapes (A: stateless thin loop; B: MCP-only with claude-code as inference endpoint; C: don't graft, bridge instead; D: half-graft with coarser-grained agent slot). Cass parked it because she prefers claude-code's tool safeguards (sandboxed Bash, file-edit safety, web-fetch via Anthropic proxy) to river-engine's looser surface. Closing the substrate asymmetry by tool-substitution would trade safeguards for unified continuity; trade isn't obviously worth it. Original motivation (eliot's boat — iris-loom/20260615224528447-moment.md) stays, the asymmetry stays asymmetric.
 - [ ] /listen + /unlisten slash commands — runtime listen-set management, persisted in the data dir
 
 

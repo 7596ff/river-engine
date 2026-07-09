@@ -66,6 +66,13 @@ One move per turn. Moves are the unit of safe forgetting and the lines
 of the conversation arc. They accumulate in the record forever; the
 context's arc budget decides how many ride along (ch. 03).
 
+The witness has no awareness of **moments** (ch. 03 / ch. 07) — the
+agent's own compressions that override moves in the arc. Moments live
+in `record/moments/`, parallel to but independent of `moves.jsonl`.
+The witness keeps moving every turn regardless; the moment is the
+agent's interpretation above the witness's evidence, and arc-build is
+what gives moments precedence.
+
 ## Duty two: gleaning
 
 After any turn, with flat probability (default 0.25), plus one
@@ -180,5 +187,11 @@ threshold is first crossed.
   the machinery of its own past compressions. The quiet gate on the
   agent side resets on every digestion, so candidates wait a full quiet
   interval between firings regardless of queue depth.
+- **No gleaning over heartbeats.** Heartbeat wakes (ch. 01) are skipped
+  by the dice — firing a glean from the autonomy floor turns quiet time
+  into more inbound. Unlike digestion, heartbeats remain *in* the glean
+  window: the loom work the agent does during quiet stretches is prime
+  material, so a later real turn or the end-of-session pass still
+  harvests it.
 - **Second person.** The shipped identity seed writes the witness as
   "you"; the voice is part of the design, not a style preference.

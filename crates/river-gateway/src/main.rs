@@ -5,6 +5,7 @@ mod discord;
 mod identity;
 mod memory;
 mod model;
+mod moments;
 mod record;
 mod session;
 mod surface;
@@ -164,6 +165,20 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         }
     };
 
+    // Bring rejection_vectors back in sync with rejections.jsonl before
+    // the witness starts gleaning. Best-effort: retrieval degrades to
+    // empty on any failure here; the jsonl remains authoritative.
+    if let Some(mem) = &mem {
+        let rejections_path = agent.workspace.join("witness").join("rejections.jsonl");
+        if let Err(e) = mem.ensure_rejection_vectors_ready(&rejections_path).await {
+            tracing::warn!(error = %e, "rejection vector rebuild failed at startup");
+        }
+    }
+
+    // Connect duty pair (spec 2026-07-07): witness posts frames, turn
+    // loop lands them. Both sides created together so the sender is
+    // available for `with_connect` and the receiver for `TurnLoop::new`.
+    let (connect_tx, connect_rx) = tokio::sync::mpsc::channel(32);
     let witness = witness::Witness::load(
         &agent.workspace,
         witness_client,
@@ -172,7 +187,17 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         agent.witness.glean_min_new_turns,
         agent.witness.max_queue_depth,
         agent.witness.recent_rejections_window,
-    )?;
+    )?
+    .with_similar_rejections(
+        agent.witness.similar_rejections_top_k,
+        agent.witness.similar_rejections_threshold,
+    )
+    .with_connect(
+        Some(connect_tx),
+        agent.witness.connect_threshold,
+        agent.witness.connect_min_new_turns,
+        agent.witness.connect_self_write_window,
+    );
 
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
@@ -250,6 +275,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         discord_tx,
         working_tx,
         resume,
+        Some(connect_rx),
     )?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

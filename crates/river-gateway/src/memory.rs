@@ -143,6 +143,30 @@ pub struct SearchHit {
     pub score: f32,
 }
 
+/// One retrieved past rejection: what the agent turned away and how
+/// close it lands to the current glean window.
+#[derive(Debug, Clone)]
+pub struct SimilarRejection {
+    pub candidate_id: String,
+    pub turn: u64,
+    pub candidate: String,
+    pub reason: Option<String>,
+    pub score: f32,
+}
+
+/// Mirror of one `rejections.jsonl` line, used only for the startup
+/// rebuild path. The tool writes this shape; the witness reads it into
+/// its own `RejectionEntry` for prompt rendering.
+#[derive(serde::Deserialize)]
+struct RejectionJsonl {
+    candidate_id: String,
+    candidate: String,
+    #[serde(default)]
+    reason: Option<String>,
+    turn: u64,
+    at: String,
+}
+
 /// The agent's memory store: database + embedder, shared by the sync
 /// task, the search tool, and the capture seam.
 #[derive(Clone)]
@@ -222,15 +246,26 @@ impl Memory {
                  file_path   TEXT PRIMARY KEY,
                  hash        TEXT NOT NULL,
                  indexed_at  INTEGER NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS rejection_vectors (
+                 candidate_id TEXT PRIMARY KEY,
+                 turn         INTEGER NOT NULL,
+                 candidate    TEXT NOT NULL,
+                 reason       TEXT,
+                 at           TEXT NOT NULL,
+                 embedding    BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_rejection_vectors_turn
+               ON rejection_vectors (turn);",
         )?;
 
-        // knowledge/ and loom/ are always watched (wall chs. 02, 08);
-        // config adds more. Paths are normalized (`.` components
-        // dropped) and deduplicated so `index_dirs: ["."]` cannot
-        // index the same file twice under two spellings.
+        // knowledge/, loom/, and record/moments/ are always watched
+        // (wall chs. 02, 03, 08); config adds more. Paths are
+        // normalized (`.` components dropped) and deduplicated so
+        // `index_dirs: ["."]` cannot index the same file twice under
+        // two spellings.
         let mut watched: Vec<PathBuf> = Vec::new();
-        for dir in ["knowledge", "loom"]
+        for dir in ["knowledge", "loom", "record/moments"]
             .iter()
             .map(|d| workspace.join(d))
             .chain(index_dirs.iter().map(|d| workspace.join(d)))
@@ -360,6 +395,53 @@ impl Memory {
             rusqlite::params![path, hash, now()],
         )?;
         Ok(())
+    }
+
+    /// Same top-K cosine scan as [`Memory::search`] but without the
+    /// ambient bumps. The witness's connect duty uses this at every
+    /// settled turn; the agent's `search` tool uses `search` proper.
+    /// Firing an ambient bump per settled turn would pump warmth into
+    /// notes the agent never saw.
+    pub async fn search_no_bump(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<SearchHit>> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        let query_vec = self
+            .embedder
+            .embed(&[query.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+
+        let rows: Vec<(String, String, Vec<u8>)> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare("SELECT file_path, text, embedding FROM segments")?;
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<_, _>>()?
+        };
+
+        let mut hits: Vec<SearchHit> = rows
+            .into_iter()
+            .map(|(file_path, text, blob)| {
+                let vector: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                SearchHit {
+                    file_path,
+                    text,
+                    score: cosine(&query_vec, &vector),
+                }
+            })
+            .collect();
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+        hits.truncate(top_k);
+        Ok(hits)
     }
 
     /// Top-k cosine over the stored vectors. Every hit is an ambient
@@ -844,6 +926,207 @@ impl Memory {
         Ok(db.query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| row.get(0))?)
     }
 
+    /// Embed a rejection's candidate text and store its vector.
+    /// Best-effort: called by the reject_candidate tool after the jsonl
+    /// append succeeds, so failure here never blocks the rejection
+    /// itself. Duplicate candidate_ids are ignored (the startup rebuild
+    /// races with a live write in exactly this way).
+    pub async fn insert_rejection_vector(
+        &self,
+        candidate_id: &str,
+        candidate: &str,
+        reason: Option<&str>,
+        turn: u64,
+        at: &str,
+    ) -> anyhow::Result<()> {
+        let vector = self
+            .embedder
+            .embed(&[candidate.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            "INSERT OR IGNORE INTO rejection_vectors
+               (candidate_id, turn, candidate, reason, at, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![candidate_id, turn as i64, candidate, reason, at, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Rows returned by [`Memory::top_similar_rejections`].
+    /// `score` is cosine similarity in [-1, 1] but in practice ≥ 0 for
+    /// the OpenAI-family embeddings we ship against.
+    pub fn rejection_vector_count(&self) -> anyhow::Result<u64> {
+        let db = self.db.lock().expect("db lock");
+        Ok(db.query_row("SELECT COUNT(*) FROM rejection_vectors", [], |row| row.get(0))?)
+    }
+
+    /// Semantic retrieval over past rejections. Full-table cosine scan
+    /// (rejection volume is bounded; revisit if evidence forces it).
+    /// Rows whose stored vector length does not match the query vector
+    /// (embedding-model dim change) are silently skipped — the startup
+    /// rebuild pass rewrites them from the jsonl.
+    pub async fn top_similar_rejections(
+        &self,
+        query: &str,
+        top_k: usize,
+        threshold: f32,
+    ) -> anyhow::Result<Vec<SimilarRejection>> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        let query_vec = self
+            .embedder
+            .embed(&[query.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+
+        let rows: Vec<(String, i64, String, Option<String>, Vec<u8>)> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare(
+                "SELECT candidate_id, turn, candidate, reason, embedding
+                 FROM rejection_vectors",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+
+        let expected_bytes = query_vec.len() * 4;
+        let mut hits: Vec<SimilarRejection> = rows
+            .into_iter()
+            .filter_map(|(candidate_id, turn, candidate, reason, blob)| {
+                if blob.len() != expected_bytes {
+                    return None;
+                }
+                let vector: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                let score = cosine(&query_vec, &vector);
+                if score < threshold {
+                    return None;
+                }
+                Some(SimilarRejection {
+                    candidate_id,
+                    turn: turn as u64,
+                    candidate,
+                    reason,
+                    score,
+                })
+            })
+            .collect();
+        // Score first, newer turn as tiebreaker.
+        hits.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then(b.turn.cmp(&a.turn))
+        });
+        hits.truncate(top_k);
+        Ok(hits)
+    }
+
+    /// Startup: bring `rejection_vectors` back into sync with
+    /// `witness/rejections.jsonl`. Missing entries are embedded and
+    /// inserted; a stored vector whose length disagrees with a fresh
+    /// probe (embedding-model dim change) wipes the table before the
+    /// jsonl walk. Torn jsonl lines are skipped with a warning.
+    pub async fn ensure_rejection_vectors_ready(
+        &self,
+        rejections_path: &Path,
+    ) -> anyhow::Result<()> {
+        let text = match std::fs::read_to_string(rejections_path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", rejections_path.display())),
+        };
+        let mut entries: Vec<RejectionJsonl> = Vec::new();
+        for (line_no, raw) in text.lines().enumerate() {
+            if raw.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<RejectionJsonl>(raw) {
+                Ok(e) => entries.push(e),
+                Err(e) => tracing::warn!(
+                    path = %rejections_path.display(),
+                    line = line_no + 1,
+                    error = %e,
+                    "skipping torn rejection line during rebuild"
+                ),
+            }
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        // Check for embedding-dim drift against a fresh probe.
+        let stored_len: Option<usize> = {
+            let db = self.db.lock().expect("db lock");
+            db.query_row(
+                "SELECT LENGTH(embedding) FROM rejection_vectors LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+            .map(|n| n as usize)
+        };
+        if let Some(existing) = stored_len {
+            let probe = self
+                .embedder
+                .embed(&[entries[0].candidate.clone()])
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+            if probe.len() * 4 != existing {
+                tracing::warn!(
+                    stored_bytes = existing,
+                    probe_bytes = probe.len() * 4,
+                    "rejection_vectors dim mismatch; wiping and rebuilding"
+                );
+                let db = self.db.lock().expect("db lock");
+                db.execute("DELETE FROM rejection_vectors", [])?;
+            }
+        }
+
+        let known: std::collections::HashSet<String> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare("SELECT candidate_id FROM rejection_vectors")?;
+            stmt.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<_, _>>()?
+        };
+
+        for entry in entries {
+            if known.contains(&entry.candidate_id) {
+                continue;
+            }
+            if let Err(e) = self
+                .insert_rejection_vector(
+                    &entry.candidate_id,
+                    &entry.candidate,
+                    entry.reason.as_deref(),
+                    entry.turn,
+                    &entry.at,
+                )
+                .await
+            {
+                tracing::warn!(
+                    candidate_id = %entry.candidate_id,
+                    error = %e,
+                    "rejection rebuild insert failed; will retry next startup"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn activation(&self, note_id: &str) -> anyhow::Result<Option<f64>> {
         let db = self.db.lock().expect("db lock");
         let mut stmt = db.prepare("SELECT score FROM activation WHERE note_id = ?1")?;
@@ -1095,6 +1378,18 @@ impl Resolver {
 }
 
 /// The `id:` from a leading `---` frontmatter block, if any.
+/// The wikilink target this note is addressable by: frontmatter id
+/// when present, else the filename stem (`.md` stripped). Mirrors the
+/// resolution the memory system does at link-graph build time.
+pub fn target_ref_for_path(path: &Path) -> String {
+    frontmatter_id(path).unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string()
+    })
+}
+
 fn frontmatter_id(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut lines = text.lines();
@@ -1877,5 +2172,164 @@ pub mod tests {
         let (indexed, _) = mem.sweep().await.unwrap();
         assert_eq!(indexed, 1, "hash recorded");
         assert_eq!(mem.sweep().await.unwrap(), (0, 0), "not retried");
+    }
+
+    #[tokio::test]
+    async fn rejection_vector_insert_and_top_k() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.insert_rejection_vector("01A", "warm goodnight", Some("not a claim"), 5, "t1")
+            .await
+            .unwrap();
+        mem.insert_rejection_vector(
+            "01B",
+            "the pattern of enqueue-before-log",
+            Some("meta-mining"),
+            8,
+            "t2",
+        )
+        .await
+        .unwrap();
+        mem.insert_rejection_vector("01C", "eliot's boat", None, 12, "t3")
+            .await
+            .unwrap();
+        assert_eq!(mem.rejection_vector_count().unwrap(), 3);
+
+        // FakeEmbedder is a letter histogram; goodnight ↔ goodbye
+        // share most letters so cosine is high.
+        let hits = mem
+            .top_similar_rejections("warm goodbye", 2, 0.0)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "top_k respected");
+        assert_eq!(hits[0].candidate_id, "01A", "closest by letter overlap");
+        assert!(hits[0].score > hits[1].score, "sorted by score desc");
+    }
+
+    #[tokio::test]
+    async fn top_k_zero_returns_empty_without_embedding() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.insert_rejection_vector("01A", "anything", None, 1, "t")
+            .await
+            .unwrap();
+        let hits = mem
+            .top_similar_rejections("anything", 0, 0.0)
+            .await
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn threshold_filters_hits_below_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // Two rejections with disjoint letters — low cosine to each other.
+        mem.insert_rejection_vector("01A", "aaa", None, 1, "t")
+            .await
+            .unwrap();
+        mem.insert_rejection_vector("01B", "zzz", None, 2, "t")
+            .await
+            .unwrap();
+        // Query is exactly "aaa" (score 1.0 for A, 0.0 for B). Threshold
+        // 0.5 keeps A, drops B.
+        let hits = mem
+            .top_similar_rejections("aaa", 10, 0.5)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].candidate_id, "01A");
+    }
+
+    #[tokio::test]
+    async fn duplicate_candidate_id_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.insert_rejection_vector("01A", "first text", None, 1, "t")
+            .await
+            .unwrap();
+        // Second call with the same id — the INSERT OR IGNORE holds.
+        mem.insert_rejection_vector("01A", "second text ignored", None, 2, "t2")
+            .await
+            .unwrap();
+        assert_eq!(mem.rejection_vector_count().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn dim_mismatch_rows_are_skipped_by_retrieval() {
+        // Simulate a row from a different embedding model by writing a
+        // wrong-length blob directly. Retrieval must skip it, not panic.
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.insert_rejection_vector("01A", "aaa", None, 1, "t")
+            .await
+            .unwrap();
+        {
+            let db = mem.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO rejection_vectors
+                   (candidate_id, turn, candidate, reason, at, embedding)
+                 VALUES ('01B', 2, 'stale', NULL, 't', ?1)",
+                [vec![0u8; 3]], // wrong length
+            )
+            .unwrap();
+        }
+        let hits = mem
+            .top_similar_rejections("aaa", 10, 0.0)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "stale-dim row skipped");
+        assert_eq!(hits[0].candidate_id, "01A");
+    }
+
+    #[tokio::test]
+    async fn startup_rebuild_populates_missing_from_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let rejections = dir.path().join("ws/witness/rejections.jsonl");
+        std::fs::create_dir_all(rejections.parent().unwrap()).unwrap();
+        std::fs::write(
+            &rejections,
+            "{\"candidate_id\":\"01A\",\"candidate\":\"aaa\",\"turn\":1,\"at\":\"t\"}\n\
+             {\"candidate_id\":\"01B\",\"candi\n\
+             {\"candidate_id\":\"01C\",\"candidate\":\"ccc\",\"reason\":\"why\",\"turn\":3,\"at\":\"t\"}\n",
+        )
+        .unwrap();
+        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        // Torn line skipped; two rows inserted.
+        assert_eq!(mem.rejection_vector_count().unwrap(), 2);
+        // Idempotent: second call is a no-op.
+        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        assert_eq!(mem.rejection_vector_count().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn startup_rebuild_wipes_on_dim_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // Plant a stale-dim row.
+        {
+            let db = mem.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO rejection_vectors
+                   (candidate_id, turn, candidate, reason, at, embedding)
+                 VALUES ('stale', 1, 'stale', NULL, 't', ?1)",
+                [vec![0u8; 3]],
+            )
+            .unwrap();
+        }
+        let rejections = dir.path().join("ws/witness/rejections.jsonl");
+        std::fs::create_dir_all(rejections.parent().unwrap()).unwrap();
+        std::fs::write(
+            &rejections,
+            "{\"candidate_id\":\"01A\",\"candidate\":\"aaa\",\"turn\":1,\"at\":\"t\"}\n",
+        )
+        .unwrap();
+        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        assert_eq!(mem.rejection_vector_count().unwrap(), 1);
+        // The stale row is gone; the fresh one from jsonl is in.
+        let hits = mem.top_similar_rejections("aaa", 10, 0.0).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].candidate_id, "01A");
     }
 }

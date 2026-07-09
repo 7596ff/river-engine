@@ -8,7 +8,9 @@
 //! Turns are serial; numbers are monotonic for life; every turn
 //! settles; shutdown is observed only between turns.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, watch};
@@ -26,6 +28,32 @@ use crate::tools::{Registry, ToolContext};
 pub const HEARTBEAT_MARKER: &str = "Read HEARTBEAT.md.";
 pub const DEFAULT_CHANNEL: &str = "local_main";
 pub const LOCAL_ADAPTER: &str = "local";
+/// Marker prefix for the system frame the connect duty appends when
+/// it surfaces a workspace-note connection on a settled turn. Stable
+/// so tests, transcript formatting, and any future arc-layer reader
+/// can key on it (wall ch. 04 + the connect-duty spec).
+pub const CONNECT_MARKER: &str = "[connect]";
+/// Word cap for the non-atomic body policy of a [connect] frame.
+pub(crate) const CONNECT_BODY_WORD_CAP: usize = 200;
+
+/// A connection the witness noticed on a settled turn. Posted from
+/// the witness's connect duty to the turn loop via mpsc; the turn
+/// loop writes a `RecordRole::System` line to turn N's record and (if
+/// N is still in HOT) synthesises the same line into the live window.
+#[derive(Debug, Clone)]
+pub struct ConnectFrame {
+    /// The settled turn the connection is about.
+    pub turn: u64,
+    /// The channel of turn N (mirrors the record line's channel field).
+    pub channel: String,
+    /// Wikilink target: frontmatter id if present, else filename stem.
+    pub target_ref: String,
+    /// Workspace-absolute path of the target file — the turn loop
+    /// reads it to render the frame body.
+    pub target_path: PathBuf,
+    /// The witness's one-sentence why.
+    pub why: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
@@ -113,6 +141,24 @@ pub struct TurnLoop<C: Chat> {
     /// Flashes currently riding the memory slot, each with its
     /// remaining visible turns.
     active_flashes: Vec<(crate::memory::Flash, u8)>,
+    /// Raised by the `compact` tool; honored at the next turn start as
+    /// a force-compaction (in addition to the threshold-based trigger).
+    compact_requested: Arc<AtomicBool>,
+    /// Raised by `create_moment`; checked after every tool round to
+    /// refresh the arc so a just-written moment is visible in the
+    /// next model call instead of waiting on compaction.
+    arc_dirty: Arc<AtomicBool>,
+    /// One-shot high-water warning state. True between the moment the
+    /// estimate first crosses 0.9 × compaction_threshold and the moment
+    /// it dips below again. Without the latch the warning would fire
+    /// every turn while the witness is at all behind.
+    warned_high: bool,
+    /// Inbound queue of connect frames from the witness's connect duty.
+    /// Drained at each wake; each frame appends a `[connect]` system
+    /// line to the referenced turn's record and (if the turn is still
+    /// in HOT) synthesises the same line into the live window.
+    /// `None` when no witness/memory is configured.
+    connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
 }
 
 impl<C: Chat> TurnLoop<C> {
@@ -138,10 +184,11 @@ impl<C: Chat> TurnLoop<C> {
         discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
         working: watch::Sender<Option<String>>,
         resume: Option<crate::session::SessionSnapshot>,
+        connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
     ) -> anyhow::Result<Self> {
-        let record = TurnRecord::open(&workspace)?;
+        let mut record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
-        let turn_number = last_turn(record.path())?;
+        let mut turn_number = last_turn(record.path())?;
         let system_prompt = fresh_system_prompt(&workspace, &tz)?;
 
         // Pick the resume channel: session.json wins, then the
@@ -152,6 +199,39 @@ impl<C: Chat> TurnLoop<C> {
             None => crate::session::channel_from_record_tail(&workspace)
                 .unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
         };
+
+        // Cross-session handoff (wall ch. 03): the previous session's
+        // `compact` tool left a message in `workspace/handoff.md`.
+        // Consume it once — append as a system-role record line under
+        // the next turn number, then delete the file so it doesn't
+        // surface again. The line becomes a permanent part of the
+        // record; the next live turn will see it in hot.
+        let handoff = crate::tools::handoff_path(&workspace);
+        if handoff.is_file() {
+            match std::fs::read_to_string(&handoff) {
+                Ok(text) if !text.trim().is_empty() => {
+                    let handoff_turn = turn_number.saturating_add(1);
+                    let body = format!(
+                        "[handoff from previous session]\n{}",
+                        text.trim_end()
+                    );
+                    record.append(handoff_turn, &channel, RecordRole::System, Some(&body))?;
+                    turn_number = handoff_turn;
+                    if let Err(e) = std::fs::remove_file(&handoff) {
+                        tracing::warn!(path = %handoff.display(), error = %e, "removing consumed handoff");
+                    }
+                    tracing::info!(turn = handoff_turn, channel = %channel, "handoff appended");
+                }
+                Ok(_) => {
+                    tracing::warn!(path = %handoff.display(), "empty handoff; discarding");
+                    let _ = std::fs::remove_file(&handoff);
+                }
+                Err(e) => {
+                    tracing::warn!(path = %handoff.display(), error = %e, "reading handoff");
+                }
+            }
+        }
+
         let mut context =
             PersistentContext::build(&workspace, &channel, system_prompt, knobs.clone())?;
 
@@ -197,6 +277,10 @@ impl<C: Chat> TurnLoop<C> {
             last_significant_at,
             positions: HashMap::new(),
             active_flashes,
+            compact_requested: Arc::new(AtomicBool::new(false)),
+            arc_dirty: Arc::new(AtomicBool::new(false)),
+            warned_high: false,
+            connect_frames,
         })
     }
 
@@ -292,6 +376,13 @@ impl<C: Chat> TurnLoop<C> {
     }
 
     async fn turn(&mut self, wake: Wake) -> anyhow::Result<()> {
+        // Drain any pending connect frames from the witness before the
+        // context assembly for this turn. Each frame appends a
+        // [connect] system line to the referenced turn's record and
+        // (if the turn is still in HOT) synthesises the same line into
+        // the live window so the model sees it on the very next call.
+        self.drain_connect_frames();
+
         self.turn_number += 1;
         let n = self.turn_number;
         // Channels read this turn, with the last entry id consumed —
@@ -407,7 +498,8 @@ impl<C: Chat> TurnLoop<C> {
             Wake::Shutdown | Wake::Recheck => unreachable!("handled by run"),
         }
 
-        if self.context.needs_compaction() {
+        let forced = self.compact_requested.swap(false, Ordering::Relaxed);
+        if self.context.needs_compaction() || forced {
             let system_prompt = fresh_system_prompt(&self.workspace, &self.tz)?;
             let lag_warning = self
                 .context
@@ -415,6 +507,31 @@ impl<C: Chat> TurnLoop<C> {
             if let Some(warning) = lag_warning {
                 self.append(n, RecordRole::System, &warning)?;
             }
+            if forced {
+                tracing::info!(turn = n, "compaction forced by compact tool");
+            }
+        }
+
+        // High-water nudge: if the estimate is past 0.9 × the
+        // compaction threshold without having tripped it (or
+        // compaction couldn't free much because the witness is
+        // behind), tell the agent once per crossing so it can wind
+        // down on its own terms with `compact` instead of being
+        // surprised by a forced compaction.
+        let high_water = self.knobs.compaction_threshold * 0.9 * self.knobs.limit as f64;
+        let total = self.context.estimate_total();
+        if total < high_water {
+            self.warned_high = false;
+        } else if !self.warned_high {
+            let pct = (total / self.knobs.limit as f64 * 100.0).round() as u64;
+            let notice = format!(
+                "[system] Context is at {pct}% of the limit and approaching compaction. \
+                 If you want to wind down on your own terms, the `compact` tool takes a \
+                 handoff summary; otherwise compaction will run automatically when the \
+                 threshold trips."
+            );
+            self.append(n, RecordRole::System, &notice)?;
+            self.warned_high = true;
         }
 
         // Presence: the agent is doing something on this channel.
@@ -427,11 +544,14 @@ impl<C: Chat> TurnLoop<C> {
             channels: self.channels.clone(),
             outbound: self.outbound.clone(),
             current_channel: self.context.channel().to_string(),
+            current_turn: n,
             scrub: self.scrub.clone(),
             memory: self.memory.clone(),
             reindex: self.reindex.clone(),
             discord: self.discord.clone(),
             digestion,
+            compact_requested: self.compact_requested.clone(),
+            arc_dirty: self.arc_dirty.clone(),
         };
 
         // Budget warning fires in the last 20% of the turn's tool
@@ -451,6 +571,22 @@ impl<C: Chat> TurnLoop<C> {
                 self.append(n, RecordRole::System, &notice)?;
             }
             let (system, messages) = self.context.messages();
+            // Debug: dump the exact prompt about to go up the wire.
+            // Overwritten each call; the last live prompt is always at
+            // `workspace/last_prompt.txt` for inspection.
+            {
+                let path = self.workspace.join("last_prompt.txt");
+                let mut dump = String::new();
+                dump.push_str("=== SYSTEM ===\n");
+                dump.push_str(&system);
+                dump.push_str("\n\n=== MESSAGES ===\n");
+                for m in &messages {
+                    dump.push_str(&format!("[{:?}] {}\n", m.role, m.content));
+                }
+                if let Err(e) = std::fs::write(&path, dump) {
+                    tracing::debug!(error = %e, "last_prompt dump failed");
+                }
+            }
             let response = match self.client.chat(&system, &messages, &schemas).await {
                 Ok(response) => response,
                 Err(e) => {
@@ -482,6 +618,15 @@ impl<C: Chat> TurnLoop<C> {
                             tracing::debug!(error = %e, "tool resonance failed");
                         }
                     });
+                }
+            }
+
+            // A `create_moment` call raises arc_dirty; refresh the arc
+            // before the next model call so the just-written moment is
+            // visible without waiting on compaction.
+            if self.arc_dirty.swap(false, Ordering::Relaxed) {
+                if let Err(e) = self.context.refresh_arc(&self.workspace) {
+                    tracing::warn!(error = %e, "arc refresh after moment write failed");
                 }
             }
 
@@ -646,6 +791,125 @@ impl<C: Chat> TurnLoop<C> {
         )?;
         Ok(())
     }
+
+    /// Non-blocking drain of the connect-frame receiver. For each
+    /// frame, compose the body per policy, append a `[connect]` system
+    /// line to the referenced turn's record, and (when the referenced
+    /// turn is still in HOT) synthesise the same line into the live
+    /// window so it is visible on the very next model call.
+    fn drain_connect_frames(&mut self) {
+        let Some(rx) = self.connect_frames.as_mut() else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(frame) => {
+                    let body = match build_connect_frame_body(&frame, &self.workspace) {
+                        Ok(body) => body,
+                        Err(e) => {
+                            tracing::warn!(
+                                turn = frame.turn,
+                                target = %frame.target_ref,
+                                error = %e,
+                                "connect body build failed; dropping frame"
+                            );
+                            continue;
+                        }
+                    };
+                    let content = format!(
+                        "{CONNECT_MARKER} turn {} connects to [[{}]]: {}\n\n{}",
+                        frame.turn, frame.target_ref, frame.why, body,
+                    );
+                    if let Err(e) = self.record.append_full(
+                        frame.turn,
+                        &frame.channel,
+                        RecordRole::System,
+                        Some(&content),
+                        None,
+                        None,
+                    ) {
+                        tracing::warn!(
+                            turn = frame.turn,
+                            error = %e,
+                            "connect frame record-append failed"
+                        );
+                        continue;
+                    }
+                    if self.context.contains_turn(frame.turn) {
+                        self.context.append(frame.turn, RecordRole::System, content);
+                    }
+                    tracing::info!(
+                        turn = frame.turn,
+                        target = %frame.target_ref,
+                        "connect frame landed"
+                    );
+                }
+                Err(mpsc::error::TryRecvError::Empty) => return,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    self.connect_frames = None;
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Compose the body portion of a `[connect]` frame. If the target is
+/// an *atomic* note — path under `knowledge/` **and** YAML
+/// frontmatter with an `id` — return the file's full text.
+/// Otherwise return the first `CONNECT_BODY_WORD_CAP` whitespace-
+/// separated words, appending `…` when truncation happens.
+pub(crate) fn build_connect_frame_body(
+    frame: &ConnectFrame,
+    workspace: &Path,
+) -> anyhow::Result<String> {
+    let text = std::fs::read_to_string(&frame.target_path)?;
+    if is_atomic_note(&frame.target_path, workspace, &text) {
+        return Ok(text.trim_end().to_string());
+    }
+    let mut words = text.split_whitespace();
+    let mut taken: Vec<&str> = Vec::with_capacity(CONNECT_BODY_WORD_CAP);
+    for _ in 0..CONNECT_BODY_WORD_CAP {
+        match words.next() {
+            Some(w) => taken.push(w),
+            None => break,
+        }
+    }
+    let truncated = words.next().is_some();
+    let mut out = taken.join(" ");
+    if truncated {
+        out.push('…');
+    }
+    Ok(out)
+}
+
+/// A note is *atomic* iff it lives under `knowledge/` in the workspace
+/// **and** its file starts with YAML frontmatter carrying an `id`.
+/// The connect duty renders atomic bodies in full and truncates the
+/// rest.
+fn is_atomic_note(path: &Path, workspace: &Path, text: &str) -> bool {
+    let Ok(rel) = path.strip_prefix(workspace) else {
+        return false;
+    };
+    if rel.components().next().and_then(|c| c.as_os_str().to_str()) != Some("knowledge") {
+        return false;
+    }
+    // Mirror memory::frontmatter_id: `---` opener, `id:` before the
+    // matching closer.
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return false;
+    }
+    for line in lines {
+        let line = line.trim();
+        if line == "---" {
+            return false;
+        }
+        if line.starts_with("id:") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Render an inbound channel entry for the model: the text, then a
@@ -743,6 +1007,27 @@ mod tests {
         })
     }
 
+    fn create_moment(
+        turn_start: u64,
+        turn_end: u64,
+        body: &str,
+    ) -> anyhow::Result<ChatResponse> {
+        Ok(ChatResponse {
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: "call_moment".into(),
+                name: "create_moment".into(),
+                arguments: serde_json::json!({
+                    "turn_start": turn_start,
+                    "turn_end": turn_end,
+                    "body": body
+                })
+                .to_string(),
+            }],
+            prompt_tokens: Some(50),
+        })
+    }
+
     fn speak(content: &str) -> anyhow::Result<ChatResponse> {
         Ok(ChatResponse {
             content: String::new(),
@@ -771,13 +1056,22 @@ mod tests {
     }
 
     fn harness(dir: &Path, model: Arc<FakeModel>) -> Harness {
-        harness_with_resume(dir, model, None)
+        harness_with(dir, model, None, ContextConfig::default())
     }
 
     fn harness_with_resume(
         dir: &Path,
         model: Arc<FakeModel>,
         resume: Option<crate::session::SessionSnapshot>,
+    ) -> Harness {
+        harness_with(dir, model, resume, ContextConfig::default())
+    }
+
+    fn harness_with(
+        dir: &Path,
+        model: Arc<FakeModel>,
+        resume: Option<crate::session::SessionSnapshot>,
+        knobs: ContextConfig,
     ) -> Harness {
         write_identity(dir);
         let (notify_tx, notify_rx) = mpsc::channel(256);
@@ -790,7 +1084,7 @@ mod tests {
         let turn_loop = TurnLoop::new(
             dir.to_path_buf(),
             jiff::tz::TimeZone::UTC,
-            ContextConfig::default(),
+            knobs,
             model,
             channels.clone(),
             notify_rx,
@@ -808,6 +1102,7 @@ mod tests {
             None,
             watch::channel(None).0,
             resume,
+            None,
         )
         .unwrap();
         Harness {
@@ -1182,6 +1477,183 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_moment_refreshes_arc_before_next_model_call() {
+        let dir = tempfile::tempdir().unwrap();
+        // Seed moves for turns 1-3 so the witness has compressed them.
+        // Cursor will be 3; turns 1-3 are out of hot and a moment over
+        // [1, 2] is eligible to appear in arc.
+        let moves_dir = dir.path().join("record");
+        std::fs::create_dir_all(&moves_dir).unwrap();
+        let moves: String = (1..=3u64)
+            .map(|t| {
+                serde_json::json!({
+                    "id": ulid::Ulid::new().to_string(),
+                    "turn": t,
+                    "summary": format!("witness move {t}")
+                })
+                .to_string()
+                    + "\n"
+            })
+            .collect();
+        std::fs::write(moves_dir.join("moves.jsonl"), moves).unwrap();
+        // Seed user turns for those numbers so turn numbering picks up
+        // at 4 next.
+        {
+            let mut rec = crate::record::TurnRecord::open(dir.path()).unwrap();
+            for t in 1..=3u64 {
+                rec.append(t, DEFAULT_CHANNEL, RecordRole::User, Some("seed"))
+                    .unwrap();
+            }
+        }
+
+        // Two model rounds: first call returns create_moment, second
+        // ends the turn. After the moment is written the turn loop
+        // should refresh the arc, so the second model call sees a
+        // system string that contains the moment block.
+        let model = FakeModel::replying(vec![
+            create_moment(1, 2, "what I made of the first stretch"),
+            done(""),
+        ]);
+        let mut h = harness(dir.path(), model.clone());
+
+        let note = say(&mut h, DEFAULT_CHANNEL, "another one").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+
+        let seen = model.seen.lock().unwrap();
+        let second_system = &seen[1].0;
+        assert!(
+            second_system.contains("what I made of the first stretch"),
+            "arc should include the just-written moment by the next \
+             model call, not wait on compaction. Got system:\n{second_system}"
+        );
+        assert!(
+            second_system.contains("[turns 1–2,"),
+            "moment header present: {second_system}"
+        );
+    }
+
+    #[tokio::test]
+    async fn high_water_warning_fires_once_per_crossing() {
+        let dir = tempfile::tempdir().unwrap();
+        // Small limit + heavy message so the first turn's estimate
+        // lands above 0.9 × threshold (0.9 × 0.8 = 0.72 of limit).
+        let knobs = ContextConfig {
+            limit: 400,
+            compaction_threshold: 0.80,
+            fill_target: 0.40,
+            min_messages: 1,
+        };
+        let model = FakeModel::replying(vec![done("first"), done("second")]);
+        let mut h = harness_with(dir.path(), model, None, knobs);
+
+        // ~1000 chars × ratio 1.0 → ~250+ tokens, comfortably above
+        // 0.72 × 400 = 288 once the system prompt rides too.
+        let heavy = "x".repeat(1100);
+        let note = say(&mut h, DEFAULT_CHANNEL, &heavy).await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+
+        let count_warnings = |path: &Path| -> usize {
+            scan(path)
+                .unwrap()
+                .iter()
+                .filter(|l| {
+                    l.role == RecordRole::System
+                        && l.content
+                            .as_deref()
+                            .map(|c| c.contains("approaching compaction"))
+                            .unwrap_or(false)
+                })
+                .count()
+        };
+        let record_path = dir.path().join("record/turns.jsonl");
+        assert_eq!(
+            count_warnings(&record_path),
+            1,
+            "warning fires once on first crossing"
+        );
+
+        // Second turn while still above the line: latched, silent.
+        let note = say(&mut h, DEFAULT_CHANNEL, "more").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        assert_eq!(
+            count_warnings(&record_path),
+            1,
+            "latched: no repeat while still high"
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_file_lands_as_first_system_line_then_is_consumed() {
+        let dir = tempfile::tempdir().unwrap();
+        // Seed a prior turn so turn numbering has a real tail.
+        {
+            let model = FakeModel::replying(vec![done("earlier life")]);
+            let mut h = harness(dir.path(), model);
+            let note = say(&mut h, DEFAULT_CHANNEL, "earlier").await;
+            h.turn_loop
+                .turn(Wake::Notifications(vec![note]))
+                .await
+                .unwrap();
+        }
+
+        // The previous session's `compact` tool wrote a handoff.
+        std::fs::write(
+            dir.path().join("handoff.md"),
+            "left off mid-thread on the labor question",
+        )
+        .unwrap();
+
+        // Next session boots; the handoff appears as a system record
+        // line under the next turn number, and the file is consumed.
+        let model = FakeModel::replying(vec![done("morning")]);
+        let mut h = harness(dir.path(), model.clone());
+        assert!(
+            !dir.path().join("handoff.md").exists(),
+            "handoff should be deleted on consumption"
+        );
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
+        let handoff = lines
+            .iter()
+            .find(|l| {
+                l.role == RecordRole::System
+                    && l.content
+                        .as_deref()
+                        .map(|c| c.contains("handoff from previous session"))
+                        .unwrap_or(false)
+            })
+            .expect("handoff record line present");
+        assert_eq!(handoff.turn, 2, "handoff sits at last_turn + 1");
+        assert!(handoff.content.as_deref().unwrap().contains("labor question"));
+
+        // The next live turn picks up *after* the handoff (turn 3) and
+        // the handoff rode into hot for the new session.
+        let note = say(&mut h, DEFAULT_CHANNEL, "morning").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
+        assert_eq!(lines.last().unwrap().turn, 3, "live turn is handoff + 1");
+        let seen = model.seen.lock().unwrap();
+        let hot = &seen[0].1;
+        assert!(
+            hot.iter().any(|m| m
+                .content
+                .contains("left off mid-thread on the labor question")),
+            "handoff visible in next session's hot"
+        );
+    }
+
+    #[tokio::test]
     async fn channel_switch_rebuilds_at_turn_start() {
         let dir = tempfile::tempdir().unwrap();
         let model = FakeModel::replying(vec![
@@ -1328,5 +1800,95 @@ mod tests {
             elapsed >= 200 && elapsed < 210,
             "elapsed = {elapsed}, expected ~200"
         );
+    }
+
+    #[test]
+    fn connect_frame_body_renders_atomic_note_in_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let target = ws.join("knowledge/teal.md");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let full = "---\nid: NTEAL\n---\n\nteal is a shade between blue and green.\n";
+        std::fs::write(&target, full).unwrap();
+        let frame = ConnectFrame {
+            turn: 1,
+            channel: "local_main".into(),
+            target_ref: "NTEAL".into(),
+            target_path: target,
+            why: "same colour".into(),
+        };
+        let body = build_connect_frame_body(&frame, ws).unwrap();
+        assert!(body.contains("teal is a shade"), "full text preserved");
+        assert!(body.contains("---"), "frontmatter preserved for atomics");
+        assert!(!body.ends_with('…'), "no truncation ellipsis on atomics");
+    }
+
+    #[test]
+    fn connect_frame_body_truncates_non_atomic_at_word_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let target = ws.join("loom/20260707-note.md");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        // 250 words — 50 past the cap.
+        let long = (0..250)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        std::fs::write(&target, &long).unwrap();
+        let frame = ConnectFrame {
+            turn: 1,
+            channel: "local_main".into(),
+            target_ref: "20260707-note".into(),
+            target_path: target,
+            why: "the loom chain".into(),
+        };
+        let body = build_connect_frame_body(&frame, ws).unwrap();
+        assert!(body.ends_with('…'), "truncation ellipsis appended");
+        assert!(body.contains("w0"), "starts at the beginning");
+        assert!(body.contains("w199"), "reaches the cap");
+        assert!(!body.contains("w200"), "cap is exclusive of the 201st word");
+    }
+
+    #[test]
+    fn connect_frame_body_non_atomic_short_file_is_not_ellipsised() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let target = ws.join("loom/tiny.md");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "just a few words here.").unwrap();
+        let frame = ConnectFrame {
+            turn: 1,
+            channel: "local_main".into(),
+            target_ref: "tiny".into(),
+            target_path: target,
+            why: "resonance".into(),
+        };
+        let body = build_connect_frame_body(&frame, ws).unwrap();
+        assert!(!body.ends_with('…'), "short files skip the ellipsis");
+        assert_eq!(body, "just a few words here.");
+    }
+
+    #[test]
+    fn connect_frame_body_knowledge_without_id_is_not_atomic() {
+        // Only frontmatter-id notes under knowledge/ count as atomic.
+        // A knowledge/ file without frontmatter still gets truncated.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let target = ws.join("knowledge/no-id.md");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let long = (0..250)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        std::fs::write(&target, &long).unwrap();
+        let frame = ConnectFrame {
+            turn: 1,
+            channel: "local_main".into(),
+            target_ref: "no-id".into(),
+            target_path: target,
+            why: "resonance".into(),
+        };
+        let body = build_connect_frame_body(&frame, ws).unwrap();
+        assert!(body.ends_with('…'), "no frontmatter id → not atomic → truncate");
     }
 }
