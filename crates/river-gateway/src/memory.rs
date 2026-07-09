@@ -397,6 +397,33 @@ impl Memory {
         Ok(())
     }
 
+    /// Embed a single query text with the same shrinking-cap retry
+    /// discipline `index_file` uses for segments: start at
+    /// `SEGMENT_HARD_CAP`, halve on failure down to `SEGMENT_MIN_CAP`.
+    /// Truncation is by character count so multibyte glyphs stay
+    /// intact. Used by witness-side retrieval (connect duty and σ)
+    /// where the query is the current window's transcript and can
+    /// legitimately exceed the embedding model's context.
+    async fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let mut cap = SEGMENT_HARD_CAP;
+        loop {
+            let capped = cap_chars(text, cap);
+            match self.embedder.embed(&[capped]).await {
+                Ok(mut vs) => {
+                    return vs
+                        .drain(..)
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"));
+                }
+                Err(e) if cap / 2 >= SEGMENT_MIN_CAP => {
+                    cap /= 2;
+                    tracing::debug!(cap, error = %e, "query embed failed; halving");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Same top-K cosine scan as [`Memory::search`] but without the
     /// ambient bumps. The witness's connect duty uses this at every
     /// settled turn; the agent's `search` tool uses `search` proper.
@@ -410,13 +437,7 @@ impl Memory {
         if top_k == 0 {
             return Ok(Vec::new());
         }
-        let query_vec = self
-            .embedder
-            .embed(&[query.to_string()])
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let query_vec = self.embed_query(query).await?;
 
         let rows: Vec<(String, String, Vec<u8>)> = {
             let db = self.db.lock().expect("db lock");
@@ -979,13 +1000,7 @@ impl Memory {
         if top_k == 0 {
             return Ok(Vec::new());
         }
-        let query_vec = self
-            .embedder
-            .embed(&[query.to_string()])
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let query_vec = self.embed_query(query).await?;
 
         let rows: Vec<(String, i64, String, Option<String>, Vec<u8>)> = {
             let db = self.db.lock().expect("db lock");
@@ -2329,6 +2344,34 @@ pub mod tests {
         assert_eq!(mem.rejection_vector_count().unwrap(), 1);
         // The stale row is gone; the fresh one from jsonl is in.
         let hits = mem.top_similar_rejections("aaa", 10, 0.0).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].candidate_id, "01A");
+    }
+
+    #[tokio::test]
+    async fn oversize_query_shrinks_and_succeeds_via_embed_query() {
+        // Reproduces the ollama 400 iris hit: `{recent_record}` grew
+        // past the embedding model's context. embed_query must halve
+        // the input until the strict embedder accepts it, so retrieval
+        // degrades to a truncated query rather than failing the glean.
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        let mem = Memory::open(
+            &dir.path().join("data"),
+            &workspace,
+            &[],
+            Arc::new(StrictEmbedder(700)),
+        )
+        .unwrap();
+        mem.insert_rejection_vector("01A", "warm goodnight", None, 1, "t")
+            .await
+            .unwrap();
+        let long = "warm ".repeat(2000); // ~10 KB, far past 700
+        let hits = mem
+            .top_similar_rejections(&long, 3, 0.0)
+            .await
+            .expect("shrinking-cap retry succeeds instead of 400ing");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].candidate_id, "01A");
     }
