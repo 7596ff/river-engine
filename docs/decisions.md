@@ -593,3 +593,25 @@ orderly turn stop. Signal-listener failures follow the same path.
 The gateway deliberately has no internal shutdown timeout: its duties
 are allowed to finish, while the existing outer CLI runner retains the
 bounded grace period and eventual process kill for operational safety.
+
+## 2026-07-10 — witness duty scheduling is independent of move repair
+
+The witness used the set of missing moves as the scheduler for all
+three duties. Consequently, removing `on-turn.md` disabled gleaning
+and connecting despite their prompts being present, while deleting an
+old move could replay probabilistic and connective work for a
+historical turn during repair.
+
+Decision: move catch-up and live settled-turn scheduling have separate
+frontiers. At startup the witness repairs every missing move through
+the record tail, including hand-deleted holes, but does not replay
+glean or connect duties. Thereafter every newly settled turn runs
+connect and the glean probability independently of whether
+`on-turn.md` exists; each duty's own method remains gated by its own
+optional prompt and other configured prerequisites. Coalesced watch
+updates are expanded into their intervening turn numbers.
+
+The gateway passes the startup record tail as the initial live-duty
+frontier. On shutdown the witness first processes any settled turns
+announced since that frontier, then performs the separate guaranteed
+end-of-session glean pass.

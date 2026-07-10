@@ -336,7 +336,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     let shutdown = background_shutdown_rx.clone();
-    background_tasks.spawn(async move { ("witness", witness.run(settled_rx, shutdown).await) });
+    background_tasks.spawn(async move {
+        (
+            "witness",
+            witness.run(settled_rx, shutdown, last_settled).await,
+        )
+    });
     if let (Some(mem), Some(reindex_rx)) = (mem, reindex_rx) {
         let shutdown = background_shutdown_rx.clone();
         background_tasks.spawn(async move {

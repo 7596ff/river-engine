@@ -453,40 +453,56 @@ impl<C: Chat> Witness<C> {
         self
     }
 
-    /// Run until shutdown: on every settled-turn signal, catch up
-    /// from cursor + 1 to the latest turn, in order.
+    /// Run until shutdown. Move repair scans the record independently
+    /// of the live settled-turn frontier; connect and probabilistic
+    /// glean duties run once for each newly settled turn.
     pub async fn run(
         mut self,
         mut latest_turn: watch::Receiver<u64>,
         mut shutdown: watch::Receiver<bool>,
+        mut duties_through: u64,
     ) -> anyhow::Result<()> {
-        loop {
-            if self.on_turn.is_some() {
-                let target = *latest_turn.borrow();
-                for turn in self.missing_moves(target)? {
-                    self.move_for(turn).await?;
-                    // Connect duty (spec 2026-07-07): threshold-gated,
-                    // per settled turn. Runs before the glean dice so a
-                    // fired connect and a fired glean can coexist on the
-                    // same turn without either blocking the other.
-                    self.connect_for(turn).await?;
-                    // Flat-probability gleaning (wall ch. 04): the
-                    // agent cannot predict which turns get gleaned.
-                    if rand::random::<f64>() < self.glean_probability {
-                        self.glean(turn).await?;
-                    }
-                }
+        // Startup repairs missing moves, including holes left by hand
+        // edits, without replaying probabilistic or connective duties
+        // for historical turns.
+        if self.on_turn.is_some() {
+            let target = *latest_turn.borrow();
+            for turn in self.missing_moves(target)? {
+                self.move_for(turn).await?;
             }
+        }
+
+        loop {
             let stopping = tokio::select! {
                 biased;
                 _ = shutdown.wait_for(|&stop| stop) => true,
                 changed = latest_turn.changed() => changed.is_err(),
             };
+
+            let target = *latest_turn.borrow();
+            if self.on_turn.is_some() {
+                for turn in self.missing_moves(target)? {
+                    self.move_for(turn).await?;
+                }
+            }
+            if target > duties_through {
+                for turn in duties_through + 1..=target {
+                    // Connect is threshold-gated per settled turn. It
+                    // runs before glean so both may fire independently.
+                    self.connect_for(turn).await?;
+                    // Flat-probability gleaning: the agent cannot
+                    // predict which turns get gleaned.
+                    if rand::random::<f64>() < self.glean_probability {
+                        self.glean(turn).await?;
+                    }
+                }
+                duties_through = target;
+            }
+
             if stopping {
                 // The guaranteed end-of-session pass.
-                let turn = *latest_turn.borrow();
-                if turn > 0 {
-                    self.glean(turn).await?;
+                if target > 0 {
+                    self.glean(target).await?;
                 }
                 return Ok(());
             }
@@ -1254,7 +1270,7 @@ mod tests {
 
         let (latest_tx, latest_rx) = watch::channel(1u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 0));
         for _ in 0..100 {
             if memory.queue_depth().unwrap() >= 1 {
                 break;
@@ -1269,6 +1285,109 @@ mod tests {
         assert_eq!(memory.queue_depth().unwrap(), 1);
         let (_, candidate) = memory.pop_candidate().unwrap().unwrap();
         assert!(candidate.contains("teal"), "{candidate}");
+    }
+
+    #[tokio::test]
+    async fn run_schedules_glean_and_connect_without_move_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let witness_dir = dir.path().join("witness");
+        std::fs::create_dir_all(&witness_dir).unwrap();
+        std::fs::write(witness_dir.join("identity.md"), "You are the witness.").unwrap();
+        std::fs::write(
+            witness_dir.join("on-glean.md"),
+            "Recent:\n{recent_record}\nGlean.",
+        )
+        .unwrap();
+        std::fs::write(
+            witness_dir.join("on-connect.md"),
+            "Transcript:\n{transcript}\nTarget: {target_path}\n\
+             Excerpt: {target_excerpt}\nCompose the connection.",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(
+            dir.path().join("knowledge/teal.md"),
+            "---\nid: NTEAL\n---\n\nteal is a blue-green shade.\n",
+        )
+        .unwrap();
+        record_turn(dir.path(), 1, "teal", Some("blue-green"));
+
+        let memory = fresh_memory(dir.path());
+        memory.sweep().await.unwrap();
+        let model = FakeModel::replying(vec![
+            ok("the turn and note share the same colour."),
+            ok("Teal matters to Cass — worth remembering."),
+        ]);
+        let (connect_tx, mut connect_rx) = tokio::sync::mpsc::channel(4);
+        let witness = Witness::load(
+            dir.path(),
+            model.clone(),
+            Some(memory.clone()),
+            1.0,
+            12,
+            5,
+            0,
+        )
+        .unwrap()
+        .with_connect(Some(connect_tx), 0.001, 0, 0);
+
+        let (latest_tx, latest_rx) = watch::channel(0u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 0));
+        latest_tx.send(1).unwrap();
+
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if memory.queue_depth().unwrap() == 1
+                    && let Ok(frame) = connect_rx.try_recv()
+                {
+                    break frame;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+
+        let frame = observed.expect("glean and connect must run without on-turn.md");
+        assert_eq!(frame.target_ref, "NTEAL");
+        assert!(
+            read_moves(&record::moves_path(dir.path()))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(model.prompts.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn startup_move_repair_does_not_replay_settled_duties() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_glean(dir.path());
+        record_turn(dir.path(), 1, "teal", Some("noted"));
+        let memory = fresh_memory(dir.path());
+        let model = FakeModel::replying(vec![ok("move one"), ok("nothing to glean")]);
+        let witness = Witness::load(dir.path(), model.clone(), Some(memory), 1.0, 0, 0, 0).unwrap();
+        let moves_path = witness.moves.path().to_path_buf();
+
+        let (latest_tx, latest_rx) = watch::channel(1u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 1));
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while read_moves(&moves_path).unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("startup move repair completes");
+        shutdown_tx.send(true).unwrap();
+        drop(latest_tx);
+        handle.await.unwrap().unwrap();
+
+        let prompts = model.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2, "one repaired move plus final glean only");
+        assert!(prompts[0].1.contains("Write the move."));
+        assert!(prompts[1].1.contains("Glean."));
     }
 
     #[tokio::test]
@@ -1525,7 +1644,7 @@ mod tests {
         let moves_path = witness.moves.path().to_path_buf();
         let (latest_tx, latest_rx) = watch::channel(3u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 3));
         for _ in 0..100 {
             if read_moves(&moves_path).unwrap().len() == 3 {
                 break;
@@ -1553,7 +1672,7 @@ mod tests {
         let witness = Witness::load(dir.path(), model, None, 0.0, 0, 0, 0).unwrap();
         let (latest_tx, latest_rx) = watch::channel(4u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 4));
         for _ in 0..100 {
             if read_moves(&moves_path).unwrap().len() == 4 {
                 break;
@@ -1587,7 +1706,7 @@ mod tests {
 
         let (latest_tx, latest_rx) = watch::channel(3u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx));
+        let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 3));
 
         // Wait for catch-up, then stop.
         for _ in 0..100 {
