@@ -9,10 +9,13 @@ and what little schema the database holds.
 Every engine-generated identifier is a **ULID**: 48 bits of millisecond
 timestamp + 80 bits of randomness, lexically sortable, collision-safe
 under concurrency, generated anywhere without coordination, via a
-standard crate. ULIDs order everything: channel entries, record lines,
-queue items. There is no custom ID scheme, no ID service, and no
-meaning packed into ID bits — provenance facts (like birth) are
-records, not encodings.
+standard crate. ULIDs identify channel entries, record lines, and queue
+items. Their lexical order is chronological across milliseconds but is
+not an insertion order for items generated within the same millisecond;
+structures requiring strict FIFO use an explicit local sequence and
+retain the ULID as identity. There is no custom ID scheme, no ID
+service, and no meaning packed into ID bits — provenance facts (like
+birth) are records, not encodings.
 
 ## The truth hierarchy
 
@@ -212,7 +215,8 @@ migrations. It holds only the derived and ephemeral tiers:
 ```sql
 -- digestion queue (ch. 02); ephemeral
 CREATE TABLE extraction_queue (
-    id          TEXT PRIMARY KEY,          -- ULID; FIFO by ULID order
+    enqueue_seq INTEGER PRIMARY KEY AUTOINCREMENT, -- strict FIFO order
+    id          TEXT NOT NULL UNIQUE,       -- ULID identity
     candidate   TEXT NOT NULL,             -- the witness's prose
     created_at  INTEGER NOT NULL
 );
@@ -252,6 +256,12 @@ CREATE TABLE file_hashes (
     indexed_at  INTEGER NOT NULL
 );
 ```
+
+Queue reads order by `(enqueue_seq, id)`. The sequence is local SQLite
+mechanics, never an external identifier or provenance field. Opening a
+database with the original id-ordered queue schema transactionally
+rebuilds that ephemeral table and copies pending rows in legacy `rowid`
+insertion order; deleting the database instead remains equally safe.
 
 `rejection_vectors` is rebuilt at startup from
 `witness/rejections.jsonl` if the table is empty (or a dim probe

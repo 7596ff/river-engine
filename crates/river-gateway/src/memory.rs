@@ -193,6 +193,48 @@ struct NoteInfo {
     links: Vec<(String, String)>, // (type, target)
 }
 
+/// The queue is ephemeral, but preserve pending candidates when
+/// upgrading from the original ULID-ordered schema. A normal SQLite
+/// rowid table assigns rowids in insertion order, so copying those
+/// values into the explicit sequence recovers the intended FIFO even
+/// when two ULIDs share a timestamp and their random suffixes invert.
+fn migrate_extraction_queue(conn: &mut Connection) -> anyhow::Result<()> {
+    let has_enqueue_seq = {
+        let mut statement = conn.prepare("PRAGMA table_info(extraction_queue)")?;
+        let mut rows = statement.query([])?;
+        let mut found = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "enqueue_seq" {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if has_enqueue_seq {
+        return Ok(());
+    }
+
+    let transaction = conn.transaction()?;
+    transaction.execute_batch(
+        "ALTER TABLE extraction_queue RENAME TO extraction_queue_legacy;
+         CREATE TABLE extraction_queue (
+             enqueue_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+             id          TEXT NOT NULL UNIQUE,
+             candidate   TEXT NOT NULL,
+             created_at  INTEGER NOT NULL
+         );
+         INSERT INTO extraction_queue (enqueue_seq, id, candidate, created_at)
+             SELECT rowid, id, candidate, created_at
+             FROM extraction_queue_legacy
+             ORDER BY rowid;
+         DROP TABLE extraction_queue_legacy;",
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 impl Memory {
     pub fn open(
         data_dir: &Path,
@@ -220,12 +262,13 @@ impl Memory {
         knobs: river_core::config::ActivationConfig,
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir)?;
-        let conn = Connection::open(data_dir.join("river.db"))
+        let mut conn = Connection::open(data_dir.join("river.db"))
             .with_context(|| format!("opening {}", data_dir.join("river.db").display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS extraction_queue (
-                 id          TEXT PRIMARY KEY,
+                 enqueue_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 id          TEXT NOT NULL UNIQUE,
                  candidate   TEXT NOT NULL,
                  created_at  INTEGER NOT NULL
              );
@@ -258,6 +301,7 @@ impl Memory {
              CREATE INDEX IF NOT EXISTS idx_rejection_vectors_turn
                ON rejection_vectors (turn);",
         )?;
+        migrate_extraction_queue(&mut conn)?;
 
         // knowledge/, loom/, and record/moments/ are always watched
         // (wall chs. 02, 03, 08); config adds more. Paths are
@@ -930,7 +974,8 @@ impl Memory {
         let db = self.db.lock().expect("db lock");
         let front: Option<(String, String)> = db
             .query_row(
-                "SELECT id, candidate FROM extraction_queue ORDER BY id LIMIT 1",
+                "SELECT id, candidate FROM extraction_queue
+                 ORDER BY enqueue_seq, id LIMIT 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -1759,6 +1804,74 @@ pub mod tests {
             Some("second")
         );
         assert!(mem.pop_candidate().unwrap().is_none());
+    }
+
+    #[test]
+    fn extraction_queue_fifo_does_not_depend_on_ulid_randomness() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let first_id = "01J0000000ZZZZZZZZZZZZZZZZ";
+        let second_id = "01J00000000000000000000000";
+        {
+            let db = mem.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO extraction_queue (id, candidate, created_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![first_id, "first", 1],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO extraction_queue (id, candidate, created_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![second_id, "second", 1],
+            )
+            .unwrap();
+        }
+
+        assert!(second_id < first_id, "the later ULID sorts first");
+        assert_eq!(mem.pop_candidate().unwrap().unwrap().0, first_id);
+        assert_eq!(mem.pop_candidate().unwrap().unwrap().0, second_id);
+    }
+
+    #[test]
+    fn legacy_extraction_queue_migrates_in_insertion_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        let first_id = "01J0000000ZZZZZZZZZZZZZZZZ";
+        let second_id = "01J00000000000000000000000";
+        {
+            let legacy = Connection::open(data_dir.join("river.db")).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE extraction_queue (
+                         id TEXT PRIMARY KEY,
+                         candidate TEXT NOT NULL,
+                         created_at INTEGER NOT NULL
+                     );",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO extraction_queue (id, candidate, created_at)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![first_id, "first", 1],
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO extraction_queue (id, candidate, created_at)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![second_id, "second", 1],
+                )
+                .unwrap();
+        }
+
+        let mem = Memory::open(&data_dir, &workspace, &[], Arc::new(FakeEmbedder)).unwrap();
+        let third_id = mem.enqueue_candidate("third").unwrap();
+        assert_eq!(mem.pop_candidate().unwrap().unwrap().0, first_id);
+        assert_eq!(mem.pop_candidate().unwrap().unwrap().0, second_id);
+        assert_eq!(mem.pop_candidate().unwrap().unwrap().0, third_id);
     }
 
     #[tokio::test]

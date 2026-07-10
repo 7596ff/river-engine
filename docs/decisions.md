@@ -615,3 +615,23 @@ The gateway passes the startup record tail as the initial live-duty
 frontier. On shutdown the witness first processes any settled turns
 announced since that frontier, then performs the separate guaranteed
 end-of-session glean pass.
+
+## 2026-07-10 — extraction FIFO is explicit, not inferred from ULIDs
+
+The extraction queue previously used `ORDER BY id`, relying on ULID
+lexical order as FIFO. ULIDs generated in different milliseconds sort
+chronologically, but their suffix is random: two candidates enqueued in
+the same millisecond can sort opposite their insertion order.
+
+Decision: `extraction_queue.enqueue_seq` is an integer primary key with
+SQLite autoincrement semantics. Queue reads order by
+`(enqueue_seq, id)`; the ULID remains the stable candidate identity used
+by the witness receipt log and rejection flow. The sequence has no
+meaning outside this disposable queue and is not a replacement ID.
+
+On open, a database with the original queue schema is migrated in one
+transaction. Pending rows are copied using the legacy table's `rowid`
+as their sequence, preserving actual insertion order even for inverted
+same-millisecond ULIDs, and the old table is dropped. Fresh databases
+create the sequenced schema directly; deleting the database remains a
+valid alternative because queue state is explicitly ephemeral.

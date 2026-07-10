@@ -52,6 +52,7 @@ kanban-plugin: board
 - [ ] bash timeout owns its process tree — each command runs in a fresh process group; timeout sends SIGTERM, waits two seconds, escalates to SIGKILL, reaps Bash, and cannot be pinned by inherited output pipes
 - [ ] coordinated gateway shutdown — process signals stop the turn loop first; after its final settle, a supervisor releases and awaits the witness, memory sync, local surface, and adapters; early background exits fail the gateway
 - [ ] independent witness duty gates — move repair follows `on-turn.md`; newly settled turns schedule connect and glean through their own prompts, even when moves are disabled, without replaying historical duties during startup repair
+- [ ] extraction queue has explicit FIFO order — candidate ULIDs remain identities while an auto-incrementing enqueue sequence orders digestion; legacy queues migrate transactionally in SQLite insertion order
 
 
 ## in progress
@@ -60,7 +61,6 @@ kanban-plugin: board
 
 ## backlog
 
-- [ ] **P2 — make extraction-queue FIFO independent of random ULID ordering** — `Ulid::new()` values created in the same millisecond can sort opposite insertion order, making `ORDER BY id` violate the FIFO contract. Order by an explicit monotonic enqueue coordinate (with a deterministic tiebreaker), migrate/rebuild disposable queue state safely, and keep ULIDs as identity rather than sequence numbers.
 - [ ] **P2 — incremental indexes for editable life records** — stop reparsing all of `turns.jsonl`, `moves.jsonl`, and channel logs on routine turns without assuming file order equals turn order. Maintain file offsets plus turn-keyed/cursor indexes; stream ordinary appends (including regenerated entries appended out of chronological order), and invalidate + fully rebuild when file identity/size/mtime or a watcher indicates destructive hand edits. Preserve torn-line tolerance, deleted-entry detection, move-gap regeneration, duplicate resolution, and contiguous-frontier semantics.
 - [ ] **P2 — cache the parsed memory graph and file vectors** — keep note metadata, resolver, adjacency, and mean file embeddings in a generation-stamped cache invalidated by sync/write events. A bump should traverse cached structures and commit its activation wave in one SQLite transaction, not reread the workspace and vectors once per hit.
 - [ ] **P2 — cache `/graph` topology and semantic edges** — compute nodes/typed edges/semantic edges when the memory generation changes; serve five-second UI polls by overlaying current activation scores. Use set-based edge deduplication and prevent concurrent viewers from launching duplicate rebuilds.
