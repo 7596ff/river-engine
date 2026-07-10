@@ -48,17 +48,17 @@ kanban-plugin: board
 - [ ] GET /graph/view — single self-contained HTML page (vendored d3-force, no build step): color = warmth, size = score, halo near flash threshold, typed solid / semantic dashed, 5s poll, flashes pop-then-dim, click for node detail; strictly a window, never a hand
 - [ ] GET /context — read-only JSON of the live context assembly: per-layer token estimates (system/arc/memory/hot), hot turn range, arc move count, memory slot contents, estimate vs limit, calibration ratio; published at settle
 - [ ] GET /context/view — self-contained HTML page drawing the window as a stacked bar (layers colored, compaction line, fill animates, snaps back on compaction); a window, never a hand
+- [ ] witness σ — phase 1: similar-rejection retrieval — embed rejections at write time into a `rejection_vectors` SQLite table; before each glean, semantically retrieve top-K past rejections and render into a new `{similar_rejections}` prompt slot. No prompt revision, no auto-skip. Spec: `docs/superpowers/specs/2026-07-07-witness-similar-rejection-retrieval-design.md`.
 - [ ] bash timeout owns its process tree — each command runs in a fresh process group; timeout sends SIGTERM, waits two seconds, escalates to SIGKILL, reaps Bash, and cannot be pinned by inherited output pipes
+- [ ] coordinated gateway shutdown — process signals stop the turn loop first; after its final settle, a supervisor releases and awaits the witness, memory sync, local surface, and adapters; early background exits fail the gateway
 
 
 ## in progress
 
-- [ ] witness σ — phase 1: similar-rejection retrieval — embed rejections at write time into a `rejection_vectors` SQLite table; before each glean, semantically retrieve top-K past rejections and render into a new `{similar_rejections}` prompt slot. No prompt revision, no auto-skip. Spec: `docs/superpowers/specs/2026-07-07-witness-similar-rejection-retrieval-design.md`.
 
 
 ## backlog
 
-- [ ] **P1 — coordinated gateway shutdown** — retain task handles for witness, memory sync, local surface, and adapters; signal shutdown, let the current turn settle, await the witness's guaranteed end-of-session glean and each task's cleanup, then exit. Bound the outer runner grace period, not the gateway's internal duties.
 - [ ] **P1 — make witness duties independently prompt-gated** — a missing `on-turn.md` disables moves only; `on-glean.md` and `on-connect.md` continue their own duties for every eligible settled turn. Add mixed-prompt tests and remove connect/glean scheduling from the move-catch-up conditional.
 - [ ] **P2 — make extraction-queue FIFO independent of random ULID ordering** — `Ulid::new()` values created in the same millisecond can sort opposite insertion order, making `ORDER BY id` violate the FIFO contract. Order by an explicit monotonic enqueue coordinate (with a deterministic tiebreaker), migrate/rebuild disposable queue state safely, and keep ULIDs as identity rather than sequence numbers.
 - [ ] **P2 — incremental indexes for editable life records** — stop reparsing all of `turns.jsonl`, `moves.jsonl`, and channel logs on routine turns without assuming file order equals turn order. Maintain file offsets plus turn-keyed/cursor indexes; stream ordinary appends (including regenerated entries appended out of chronological order), and invalidate + fully rebuild when file identity/size/mtime or a watcher indicates destructive hand edits. Preserve torn-line tolerance, deleted-entry detection, move-gap regeneration, duplicate resolution, and contiguous-frontier semantics.

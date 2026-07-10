@@ -572,3 +572,24 @@ stderr drain concurrently to avoid pipe-buffer deadlock and share the
 same absolute deadline; their tasks are aborted after timeout cleanup
 so an intentionally detached descendant retaining a pipe cannot pin
 the turn forever. Secret-environment scrubbing is unchanged.
+
+## 2026-07-10 — gateway shutdown has two supervised phases
+
+The gateway previously broadcast one shutdown watch value to the turn
+loop and every background task at the same time. That allowed the
+witness to begin its guaranteed end-of-session glean before the active
+turn had finished settling, and all background task handles were
+discarded, so runtime teardown could cancel cleanup still in flight.
+
+Decision: process signals first stop only the turn loop. The loop
+finishes its active turn and publishes the final settle; only after it
+returns does the gateway broadcast background shutdown. A supervisor
+owns a `JoinSet` containing the witness, memory sync, local surface,
+and configured adapters, and waits for every task before returning.
+Any background task that fails, panics, is cancelled, or exits cleanly
+before phase two is treated as a gateway failure and also requests an
+orderly turn stop. Signal-listener failures follow the same path.
+
+The gateway deliberately has no internal shutdown timeout: its duties
+are allowed to finish, while the existing outer CLI runner retains the
+bounded grace period and eventual process kill for operational safety.

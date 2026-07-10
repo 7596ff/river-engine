@@ -13,11 +13,13 @@ mod tools;
 mod turn;
 mod witness;
 
+use std::future::Future;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, bail};
 use clap::{Args, Parser, Subcommand};
 use river_core::{config, env_file};
+use tokio::task::JoinSet;
 
 #[derive(Parser)]
 #[command(
@@ -278,18 +280,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         Some(connect_rx),
     )?;
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("installing SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = sigterm.recv() => {}
-        }
-        tracing::info!("signal received; finishing the current turn");
-        let _ = shutdown_tx.send(true);
-    });
+    // Two phases: a process signal asks only the turn loop to stop. It
+    // finishes the active turn and publishes its final settle before the
+    // supervisor releases the witness and other background tasks. This
+    // keeps the witness's guaranteed session-end pass on the true tail.
+    let (turn_stop_tx, turn_stop_rx) = tokio::sync::watch::channel(false);
+    let (background_shutdown_tx, background_shutdown_rx) = tokio::sync::watch::channel(false);
 
     tracing::info!(
         agent = %args.agent,
@@ -304,38 +300,153 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         config::AdapterConfig::Local { port } => Some(*port),
         _ => None,
     });
+    let mut background_tasks = JoinSet::new();
     if let Some((settings, _tx, speak_rx)) = discord_setup {
-        tokio::spawn(discord::run_supervised(
-            settings,
-            channels.clone(),
-            speak_rx,
-            shutdown_rx.clone(),
-            working_rx,
-        ));
+        let shutdown = background_shutdown_rx.clone();
+        let channels = channels.clone();
+        background_tasks.spawn(async move {
+            discord::run_supervised(settings, channels, speak_rx, shutdown, working_rx).await;
+            ("discord adapter", anyhow::Ok(()))
+        });
     }
     match local_port {
         Some(port) => {
-            tokio::spawn(surface::serve(
-                port,
-                channels.clone(),
-                outbound_tx,
-                health_rx,
-                mem.clone(),
-                snapshot_rx,
-                shutdown_rx.clone(),
-            ));
+            let shutdown = background_shutdown_rx.clone();
+            let channels = channels.clone();
+            let memory = mem.clone();
+            background_tasks.spawn(async move {
+                (
+                    "local surface",
+                    surface::serve(
+                        port,
+                        channels,
+                        outbound_tx,
+                        health_rx,
+                        memory,
+                        snapshot_rx,
+                        shutdown,
+                    )
+                    .await,
+                )
+            });
         }
         None => {
             tracing::warn!("no local adapter configured; the agent wakes only by heartbeat");
         }
     }
 
-    tokio::spawn(witness.run(settled_rx, shutdown_rx.clone()));
+    let shutdown = background_shutdown_rx.clone();
+    background_tasks.spawn(async move { ("witness", witness.run(settled_rx, shutdown).await) });
     if let (Some(mem), Some(reindex_rx)) = (mem, reindex_rx) {
-        tokio::spawn(mem.run_sync(reindex_rx, shutdown_rx.clone()));
+        let shutdown = background_shutdown_rx.clone();
+        background_tasks.spawn(async move {
+            mem.run_sync(reindex_rx, shutdown).await;
+            ("memory sync", anyhow::Ok(()))
+        });
+    }
+    drop(background_shutdown_rx);
+
+    supervise_gateway(
+        turn_loop.run(turn_stop_rx),
+        wait_for_shutdown_signal(),
+        turn_stop_tx,
+        background_shutdown_tx,
+        background_tasks,
+    )
+    .await
+}
+
+type BackgroundTaskResult = (&'static str, anyhow::Result<()>);
+
+async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("installing SIGTERM handler")?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result.context("listening for Ctrl-C"),
+        signal = sigterm.recv() => match signal {
+            Some(()) => Ok(()),
+            None => Err(anyhow::anyhow!("SIGTERM signal stream closed")),
+        },
+    }
+}
+
+async fn supervise_gateway<F, S>(
+    turn_loop: F,
+    stop_signal: S,
+    turn_stop: tokio::sync::watch::Sender<bool>,
+    background_shutdown: tokio::sync::watch::Sender<bool>,
+    mut background_tasks: JoinSet<BackgroundTaskResult>,
+) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>>,
+    S: Future<Output = anyhow::Result<()>>,
+{
+    tokio::pin!(turn_loop);
+    tokio::pin!(stop_signal);
+    let mut stop_signal_finished = false;
+    let mut errors = Vec::new();
+
+    let turn_result = loop {
+        tokio::select! {
+            result = &mut turn_loop => break result,
+            result = &mut stop_signal, if !stop_signal_finished => {
+                stop_signal_finished = true;
+                match result {
+                    Ok(()) => tracing::info!("signal received; finishing the current turn"),
+                    Err(e) => {
+                        tracing::error!(error = %e, "shutdown signal listener failed");
+                        errors.push(format!("shutdown signal listener: {e:#}"));
+                    }
+                }
+                let _ = turn_stop.send(true);
+            }
+            joined = background_tasks.join_next(), if !background_tasks.is_empty() => {
+                if let Some(joined) = joined
+                    && let Some(error) = background_task_error(joined, false)
+                {
+                    tracing::error!(error = %error, "background task exited; stopping gateway");
+                    errors.push(error);
+                    let _ = turn_stop.send(true);
+                }
+            }
+        }
+    };
+
+    // The turn loop has settled and published the latest turn. Only now
+    // may the witness run its guaranteed final pass and adapters stop.
+    let _ = background_shutdown.send(true);
+    while let Some(joined) = background_tasks.join_next().await {
+        if let Some(error) = background_task_error(joined, true) {
+            tracing::error!(error = %error, "background task failed during shutdown");
+            errors.push(error);
+        }
+    }
+    if let Err(e) = turn_result {
+        errors.push(format!("turn loop: {e:#}"));
     }
 
-    turn_loop.run(shutdown_rx).await
+    if errors.is_empty() {
+        tracing::info!("shutdown complete: all gateway tasks stopped");
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(format!(
+            "gateway stopped with errors:\n  - {}",
+            errors.join("\n  - ")
+        )))
+    }
+}
+
+fn background_task_error(
+    joined: Result<BackgroundTaskResult, tokio::task::JoinError>,
+    shutdown_expected: bool,
+) -> Option<String> {
+    match joined {
+        Ok((_, Ok(()))) if shutdown_expected => None,
+        Ok((name, Ok(()))) => Some(format!("{name} exited unexpectedly")),
+        Ok((name, Err(e))) => Some(format!("{name}: {e:#}")),
+        Err(e) if e.is_panic() => Some(format!("background task panicked: {e}")),
+        Err(e) => Some(format!("background task was cancelled: {e}")),
+    }
 }
 
 #[cfg(test)]
@@ -364,5 +475,91 @@ mod tests {
         assert_eq!(args.agent, "ada");
         assert_eq!(args.config, PathBuf::from("river.json"));
         assert!(args.env_file.is_none());
+    }
+
+    #[tokio::test]
+    async fn supervisor_settles_before_background_shutdown_and_awaits_cleanup() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (turn_stop_tx, mut turn_stop_rx) = tokio::sync::watch::channel(false);
+        let (background_shutdown_tx, mut background_shutdown_rx) =
+            tokio::sync::watch::channel(false);
+
+        let turn_events = events.clone();
+        let turn_loop = async move {
+            turn_stop_rx.wait_for(|&stop| stop).await?;
+            turn_events.lock().unwrap().push("turn settled");
+            anyhow::Ok(())
+        };
+
+        let witness_events = events.clone();
+        let mut background_tasks = JoinSet::new();
+        background_tasks.spawn(async move {
+            background_shutdown_rx.wait_for(|&stop| stop).await.unwrap();
+            assert_eq!(
+                witness_events.lock().unwrap().as_slice(),
+                ["turn settled"],
+                "background shutdown must not begin before settle"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            witness_events.lock().unwrap().push("witness finalized");
+            ("witness", anyhow::Ok(()))
+        });
+
+        let stop_signal = async move {
+            tokio::task::yield_now().await;
+            anyhow::Ok(())
+        };
+
+        supervise_gateway(
+            turn_loop,
+            stop_signal,
+            turn_stop_tx,
+            background_shutdown_tx,
+            background_tasks,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["turn settled", "witness finalized"],
+            "supervisor must await background cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn supervisor_stops_turn_and_reports_early_background_failure() {
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (turn_stop_tx, mut turn_stop_rx) = tokio::sync::watch::channel(false);
+        let (background_shutdown_tx, _background_shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let turn_settled = settled.clone();
+        let turn_loop = async move {
+            turn_stop_rx.wait_for(|&stop| stop).await?;
+            turn_settled.store(true, std::sync::atomic::Ordering::SeqCst);
+            anyhow::Ok(())
+        };
+        let mut background_tasks = JoinSet::new();
+        background_tasks.spawn(async {
+            (
+                "memory sync",
+                Err(anyhow::anyhow!("synthetic task failure")),
+            )
+        });
+
+        let error = supervise_gateway(
+            turn_loop,
+            std::future::pending::<anyhow::Result<()>>(),
+            turn_stop_tx,
+            background_shutdown_tx,
+            background_tasks,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(settled.load(std::sync::atomic::Ordering::SeqCst));
+        let message = error.to_string();
+        assert!(message.contains("memory sync"), "{message}");
+        assert!(message.contains("synthetic task failure"), "{message}");
     }
 }
