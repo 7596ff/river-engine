@@ -555,3 +555,20 @@ record + moves once the channel is right. Wall chs. 03/10 amended.
 Spec:
 `docs/superpowers/specs/2026-06-17-context-resume-design.md` (none
 yet — we went straight from brainstorm to code).
+
+## 2026-07-09 — bash timeouts own the process group
+
+The bash tool previously wrapped `Command::output()` in a Tokio
+timeout. Dropping that future returned an error to the agent but left
+the child process running, so a timed-out command could continue
+consuming resources or mutating the workspace invisibly.
+
+Decision: every bash tool invocation starts in a fresh Unix process
+group and the engine owns the child lifecycle. The existing 300-second
+command budget remains. At timeout the engine sends SIGTERM to the
+group, allows a two-second grace period, escalates to SIGKILL, and
+reaps the direct Bash child before returning error text. Stdout and
+stderr drain concurrently to avoid pipe-buffer deadlock and share the
+same absolute deadline; their tasks are aborted after timeout cleanup
+so an intentionally detached descendant retaining a pipe cannot pin
+the turn forever. Secret-environment scrubbing is unchanged.

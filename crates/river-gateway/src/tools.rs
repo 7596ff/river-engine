@@ -9,11 +9,13 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
 use tokio::sync::broadcast;
 
 use crate::channels::Channels;
@@ -22,6 +24,7 @@ use crate::model::{ToolCall, ToolSchema};
 use crate::turn::{LOCAL_ADAPTER, OutboundMessage};
 
 const BASH_TIMEOUT: Duration = Duration::from_secs(300);
+const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_READ_LIMIT: usize = 500;
 const DEFAULT_CHANNEL_READ_LIMIT: usize = 50;
@@ -379,6 +382,192 @@ fn grep_walk(path: &Path, re: &regex::Regex, hits: &mut Vec<String>) -> anyhow::
 }
 
 struct BashTool;
+
+async fn run_bash(
+    command: &str,
+    workspace: &Path,
+    scrub: &[String],
+    timeout: Duration,
+    term_grace: Duration,
+) -> anyhow::Result<std::process::Output> {
+    use std::os::unix::process::CommandExt as _;
+
+    let mut cmd = tokio::process::Command::new("bash");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(workspace)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // A fresh process group gives timeout cleanup one address for Bash
+    // and every ordinary descendant it spawns. Without this, dropping
+    // the wait future leaves those processes running invisibly.
+    cmd.as_std_mut().process_group(0);
+    // Last-resort protection for the direct Bash child if group-level
+    // signalling itself fails. Normal timeout cleanup still owns and
+    // reaps the child explicitly below.
+    cmd.kill_on_drop(true);
+    for var in scrub {
+        cmd.env_remove(var);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("spawning bash: {e}"))?;
+    let process_group = child
+        .id()
+        .ok_or_else(|| anyhow::anyhow!("spawned bash has no process id"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("capturing bash stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("capturing bash stderr"))?;
+    let stdout_task = tokio::spawn(read_all(stdout));
+    let stderr_task = tokio::spawn(read_all(stderr));
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut stdout_task = stdout_task;
+    let mut stderr_task = stderr_task;
+
+    let status = match tokio::time::timeout_at(deadline, child.wait()).await {
+        Ok(status) => status.map_err(|e| anyhow::anyhow!("waiting for bash: {e}"))?,
+        Err(_) => {
+            return Err(
+                bash_timeout_error(
+                    &mut child,
+                    process_group,
+                    term_grace,
+                    timeout,
+                    &mut stdout_task,
+                    &mut stderr_task,
+                )
+                .await,
+            );
+        }
+    };
+    let streams = tokio::time::timeout_at(deadline, async {
+        let stdout = join_output(&mut stdout_task, "stdout").await?;
+        let stderr = join_output(&mut stderr_task, "stderr").await?;
+        anyhow::Ok((stdout, stderr))
+    })
+    .await;
+    let (stdout, stderr) = match streams {
+        Ok(streams) => streams?,
+        Err(_) => {
+            return Err(
+                bash_timeout_error(
+                    &mut child,
+                    process_group,
+                    term_grace,
+                    timeout,
+                    &mut stdout_task,
+                    &mut stderr_task,
+                )
+                .await,
+            );
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn read_all<R>(mut reader: R) -> std::io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).await?;
+    Ok(bytes)
+}
+
+async fn join_output(
+    task: &mut tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+    stream: &str,
+) -> anyhow::Result<Vec<u8>> {
+    task.await
+        .map_err(|e| anyhow::anyhow!("joining bash {stream} reader: {e}"))?
+        .map_err(|e| anyhow::anyhow!("reading bash {stream}: {e}"))
+}
+
+async fn bash_timeout_error(
+    child: &mut tokio::process::Child,
+    process_group: u32,
+    term_grace: Duration,
+    timeout: Duration,
+    stdout_task: &mut tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_task: &mut tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> anyhow::Error {
+    let cleanup = terminate_process_group(child, process_group, term_grace).await;
+    // A deliberately detached descendant can leave the process group
+    // and retain an inherited pipe. Stop our drain tasks after group
+    // cleanup so such a writer cannot pin the timed-out tool forever.
+    stdout_task.abort();
+    stderr_task.abort();
+    match cleanup {
+        Ok(()) => anyhow::anyhow!("command timed out after {timeout:?}"),
+        Err(e) => anyhow::anyhow!(
+            "command timed out after {timeout:?}; process cleanup failed: {e:#}"
+        ),
+    }
+}
+
+async fn terminate_process_group(
+    child: &mut tokio::process::Child,
+    process_group: u32,
+    term_grace: Duration,
+) -> anyhow::Result<()> {
+    let mut errors = Vec::new();
+    if let Err(e) = signal_process_group(process_group, libc::SIGTERM) {
+        errors.push(format!("sending SIGTERM: {e}"));
+    }
+    tokio::time::sleep(term_grace).await;
+    if let Err(e) = signal_process_group(process_group, libc::SIGKILL) {
+        errors.push(format!("sending SIGKILL: {e}"));
+    }
+
+    match child.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(e) = child.start_kill() {
+                errors.push(format!("killing direct bash child: {e}"));
+            }
+            match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => errors.push(format!("reaping bash: {e}")),
+                Err(_) => errors.push("reaping bash timed out".to_string()),
+            }
+        }
+        Err(e) => errors.push(format!("checking bash status: {e}")),
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
+}
+
+fn signal_process_group(process_group: u32, signal: libc::c_int) -> std::io::Result<()> {
+    let process_group: libc::pid_t = process_group
+        .try_into()
+        .map_err(|_| std::io::Error::other("bash process id does not fit pid_t"))?;
+    // SAFETY: a negative pid addresses the Unix process group whose id
+    // is the spawned Bash pid; `signal` is one of SIGTERM/SIGKILL.
+    let result = unsafe { libc::kill(-process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(()) // the whole group exited before this phase
+    } else {
+        Err(error)
+    }
+}
+
 impl Tool for BashTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
@@ -394,16 +583,14 @@ impl Tool for BashTool {
     fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
         Box::pin(async move {
             let command = required_str(&args, "command")?;
-            let mut cmd = tokio::process::Command::new("bash");
-            cmd.arg("-c").arg(command).current_dir(&ctx.workspace);
-            // The scrub: secrets never reach tool children.
-            for var in &ctx.scrub {
-                cmd.env_remove(var);
-            }
-            let output = tokio::time::timeout(BASH_TIMEOUT, cmd.output())
-                .await
-                .map_err(|_| anyhow::anyhow!("command timed out after {BASH_TIMEOUT:?}"))?
-                .map_err(|e| anyhow::anyhow!("spawning bash: {e}"))?;
+            let output = run_bash(
+                command,
+                &ctx.workspace,
+                &ctx.scrub,
+                BASH_TIMEOUT,
+                BASH_TERM_GRACE,
+            )
+            .await?;
             let mut result = String::new();
             result.push_str(&String::from_utf8_lossy(&output.stdout));
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1191,6 +1378,33 @@ mod tests {
         let registry = Registry::core();
         let out = run(&registry, &ctx, "bash", json!({"command":"exit 3"})).await;
         assert!(out.contains("exit status"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn bash_timeout_terminates_stubborn_process_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived-timeout");
+        let command = format!(
+            "trap '' TERM; (trap '' TERM; sleep 0.5; printf survived > '{}') & wait",
+            marker.display()
+        );
+
+        let error = run_bash(
+            &command,
+            dir.path(),
+            &[],
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:#}");
+
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(
+            !marker.exists(),
+            "a descendant survived after the bash tool reported a timeout"
+        );
     }
 
     #[tokio::test]

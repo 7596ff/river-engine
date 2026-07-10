@@ -48,6 +48,7 @@ kanban-plugin: board
 - [ ] GET /graph/view — single self-contained HTML page (vendored d3-force, no build step): color = warmth, size = score, halo near flash threshold, typed solid / semantic dashed, 5s poll, flashes pop-then-dim, click for node detail; strictly a window, never a hand
 - [ ] GET /context — read-only JSON of the live context assembly: per-layer token estimates (system/arc/memory/hot), hot turn range, arc move count, memory slot contents, estimate vs limit, calibration ratio; published at settle
 - [ ] GET /context/view — self-contained HTML page drawing the window as a stacked bar (layers colored, compaction line, fill animates, snaps back on compaction); a window, never a hand
+- [ ] bash timeout owns its process tree — each command runs in a fresh process group; timeout sends SIGTERM, waits two seconds, escalates to SIGKILL, reaps Bash, and cannot be pinned by inherited output pipes
 
 
 ## in progress
@@ -57,6 +58,14 @@ kanban-plugin: board
 
 ## backlog
 
+- [ ] **P1 — coordinated gateway shutdown** — retain task handles for witness, memory sync, local surface, and adapters; signal shutdown, let the current turn settle, await the witness's guaranteed end-of-session glean and each task's cleanup, then exit. Bound the outer runner grace period, not the gateway's internal duties.
+- [ ] **P1 — make witness duties independently prompt-gated** — a missing `on-turn.md` disables moves only; `on-glean.md` and `on-connect.md` continue their own duties for every eligible settled turn. Add mixed-prompt tests and remove connect/glean scheduling from the move-catch-up conditional.
+- [ ] **P2 — make extraction-queue FIFO independent of random ULID ordering** — `Ulid::new()` values created in the same millisecond can sort opposite insertion order, making `ORDER BY id` violate the FIFO contract. Order by an explicit monotonic enqueue coordinate (with a deterministic tiebreaker), migrate/rebuild disposable queue state safely, and keep ULIDs as identity rather than sequence numbers.
+- [ ] **P2 — incremental indexes for editable life records** — stop reparsing all of `turns.jsonl`, `moves.jsonl`, and channel logs on routine turns without assuming file order equals turn order. Maintain file offsets plus turn-keyed/cursor indexes; stream ordinary appends (including regenerated entries appended out of chronological order), and invalidate + fully rebuild when file identity/size/mtime or a watcher indicates destructive hand edits. Preserve torn-line tolerance, deleted-entry detection, move-gap regeneration, duplicate resolution, and contiguous-frontier semantics.
+- [ ] **P2 — cache the parsed memory graph and file vectors** — keep note metadata, resolver, adjacency, and mean file embeddings in a generation-stamped cache invalidated by sync/write events. A bump should traverse cached structures and commit its activation wave in one SQLite transaction, not reread the workspace and vectors once per hit.
+- [ ] **P2 — cache `/graph` topology and semantic edges** — compute nodes/typed edges/semantic edges when the memory generation changes; serve five-second UI polls by overlaying current activation scores. Use set-based edge deduplication and prevent concurrent viewers from launching duplicate rebuilds.
+- [ ] **P2 — bounded, lifecycle-owned resonance worker** — replace detached per-tool/per-turn `tokio::spawn` calls with a bounded queue and supervised worker. Preserve one resonance event per tool result, define overload behavior explicitly, expose queue health, and drain or deliberately checkpoint the queue during shutdown.
+- [ ] **P3 — make `last_prompt.txt` diagnostics opt-in** — disable full-prompt reconstruction and synchronous writes by default; gate behind explicit config/debug mode, write atomically off the async turn path, document sensitive-data retention, and cap or rotate if history is retained.
 - [ ] witness σ — phase 2: rejection-rate instrumentation — track rejection rate over a rolling window as the `P̂` analog for glean productivity. Read-only telemetry (surface via `/health` and log); no action taken on it. Gates the phase 3 go/no-go decision. Follow-up in phase 1 spec.
 - [ ] witness σ — phase 3: gated on-glean revision loop — only if phase 2 shows signal worth acting on. A slow loop drafts revisions to `witness/on-glean.md`; drafts land in a review path, ground approves before deploy. External-judge invariant preserved. Bonus: silence gate (cosine > 0.95 within last N turns → skip glean), thresholds picked from phase-2 data. Follow-up in phase 1 spec.
 - [ ] quarry: `embeddings/atomic` as read-only corpus — 345 pi-era atomics with richer link vocabulary (48 types vs. 4). Per wall ch. 02 ("no bootstrap import"), these do NOT migrate into `knowledge/`. Instead: indexed as a `quarry` namespace (read-only, no warmth, no propagation, no flashes). Acquisition is re-digestion: read the original, write fresh with current language and links, provenance via `responds-to: quarry/<path>`. Exposed through `search` with a namespace argument or a dedicated `search_quarry` tool. See `docs/explorations/2026-07-10-weaving-shape-typed-flashes.md` §5.
@@ -108,6 +117,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,false,true,false,false]}
+{"kanban-plugin":"board","list-collapse":[false,false,false,false,false]}
 ```
 %%
