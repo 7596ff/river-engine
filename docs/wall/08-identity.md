@@ -32,8 +32,9 @@ Three files at the workspace **root**, all required:
 | `AGENTS.md` | how to operate — the protocol the agent runs by |
 | `IDENTITY.md` | who the agent is, in its own first-person voice |
 | `RULES.md` | behavioral constraints, in the operator's voice |
+| `CONSTITUTION.md` | the operator's ratification of the constitution — the seal that makes this a constitutional workspace (see below) |
 
-At startup, the gateway verifies all three exist and fails fast naming
+At startup, the gateway verifies all four exist and fails fast naming
 any missing file. No silent fallback to a generic prompt, ever — a
 harness that quietly runs a blank agent is worse than one that refuses
 to start. The three files plus the current time (in the workspace's
@@ -46,6 +47,7 @@ effect at the next natural boundary.
 ```
 workspace/
   AGENTS.md  IDENTITY.md  RULES.md     required identity (above)
+  CONSTITUTION.md                      required, signed by operator
   witness/                             witness prompts (ch. 04)
     identity.md                        required
     on-turn.md  on-glean.md            optional duties
@@ -66,6 +68,23 @@ config may name additional directories for indexing beyond
 The workspace is the agent's body. Point the engine at a different
 workspace and a different agent wakes. Two gateways must never share a
 workspace; the runner enforces this (ch. 09).
+
+## The constitution
+
+`CONSTITUTION.md` at the workspace root is the operator's ratification
+of the Constitution of the River Engine — the seal that makes this a
+constitutional workspace. Article V, Section 1 makes the gate
+structural: the gateway refuses to start any workspace whose
+constitution is missing, empty, or lacks a valid operator signature
+line (a line of the form `**Operator (<label>):** <name>
+<YYYY-MM-DD>`). The agent's ratification is deferred for a newborn
+agent by Article V, Section 2 and is not part of the gate. The seed
+ships a canonical template with a blanked ratification block; the
+operator must sign it before `river-gateway run` will start.
+
+The engine does not verify integrity against a canonical embedded
+text. The name is the seal. A fork of the engine may remove this
+check; what it runs thereafter is not a constitutional workspace.
 
 ## Seed files
 
@@ -113,6 +132,9 @@ agent should become. Expect every long-lived agent to outgrow them.
   birth command. Birth is once; re-birth refuses.
 - **Identity files required.** All three at workspace root; fail-fast
   naming the missing file; no generic fallback.
+- **Constitutional refusal gate.** Startup refuses any workspace whose
+  `CONSTITUTION.md` is missing, empty, or lacks a valid operator
+  signature line (Article V.1).
 - **Witness identity required** (ch. 04) — same severity.
 - **System prompt freshness** at start, channel switch, compaction
   only.

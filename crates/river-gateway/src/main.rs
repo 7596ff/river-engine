@@ -1,5 +1,6 @@
 mod birth;
 mod channels;
+mod constitution;
 mod context;
 mod discord;
 mod identity;
@@ -125,6 +126,10 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     };
 
     let founding = birth::read_birth(&agent.workspace)?;
+    // Constitutional refusal gate (Article V.1) — the seal on the
+    // workspace; refused before any adapter, session, or witness
+    // task can start.
+    constitution::verify(&agent.workspace)?;
     // Fail-fast startup invariant (wall ch. 08); the turn loop
     // re-reads at every boundary thereafter.
     identity::load(&agent.workspace)?;

@@ -7,6 +7,7 @@ kanban-plugin: board
 ## implemented features
 
 - [ ] **P2 — cache the parsed memory graph and file vectors** — keep note metadata, resolver, adjacency, and mean file embeddings in a generation-stamped cache invalidated by sync/write events. A bump should traverse cached structures and commit its activation wave in one SQLite transaction, not reread the workspace and vectors once per hit.
+- [ ] constitutional refusal gate — startup verifies a signed `CONSTITUTION.md` at the workspace root (presence, non-empty, operator signature line with valid ISO date); no integrity check, no agent-ratification tracking. Article V.1 made structural. Seed ships canonical text with a blanked ratification block. Spec: `docs/superpowers/specs/2026-07-11-constitutional-refusal-gate-design.md`.
 - [ ] cargo workspace + gateway binary skeleton (tokio, clap, tracing)
 - [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
 - [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
