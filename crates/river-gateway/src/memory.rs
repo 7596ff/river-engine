@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
@@ -42,6 +43,13 @@ pub enum Carrier {
     Cognitive,
     Ambient,
     Propagated,
+}
+
+#[derive(Debug)]
+struct BumpOp {
+    note_id: String,
+    amount: f64,
+    carrier: Carrier,
 }
 
 /// A pending flash: surfaced into the next context's memory slot.
@@ -98,7 +106,9 @@ impl EmbeddingClient {
     pub fn new(config: &ModelConfig) -> anyhow::Result<Self> {
         Ok(Self {
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(config.request_timeout_seconds))
+                .timeout(std::time::Duration::from_secs(
+                    config.request_timeout_seconds,
+                ))
                 .build()?,
             endpoint: config.endpoint.trim_end_matches('/').to_string(),
             model_name: config.name.clone(),
@@ -129,7 +139,12 @@ impl Embed for EmbeddingClient {
                     item["embedding"]
                         .as_array()
                         .ok_or_else(|| anyhow::anyhow!("missing embedding"))
-                        .map(|v| v.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect())
+                        .map(|v| {
+                            v.iter()
+                                .filter_map(|x| x.as_f64())
+                                .map(|x| x as f32)
+                                .collect()
+                        })
                 })
                 .collect()
         })
@@ -178,10 +193,12 @@ pub struct Memory {
     knobs: Arc<river_core::config::ActivationConfig>,
     pending_flashes: Arc<Mutex<Vec<Flash>>>,
     queue_notify: Arc<tokio::sync::Notify>,
+    graph_generation: Arc<AtomicU64>,
+    graph_cache: Arc<Mutex<Option<CachedGraph>>>,
 }
 
-/// One indexed file's graph identity and links, parsed live from the
-/// workspace — links are ground truth, never cached. Files with
+/// One indexed file's graph identity and links, derived from the
+/// workspace into a disposable process-local snapshot. Files with
 /// frontmatter are keyed by id; files without are keyed by path
 /// (board card: wikilinks join the graph). Links carry frontmatter
 /// typed links plus body wikilinks as type "wiki".
@@ -191,6 +208,30 @@ struct NoteInfo {
     path: PathBuf,
     body: String,
     links: Vec<(String, String)>, // (type, target)
+}
+
+struct CachedGraph {
+    generation: u64,
+    snapshot: Arc<GraphSnapshot>,
+}
+
+/// One immutable view of the authored graph and its derived vectors.
+/// A generation is published atomically: topology and semantic
+/// identities therefore never come from different sync generations.
+struct GraphSnapshot {
+    notes: Vec<NoteInfo>,
+    note_by_id: std::collections::HashMap<String, usize>,
+    id_by_path: std::collections::HashMap<String, String>,
+    resolver: Resolver,
+    adjacency: std::collections::HashMap<String, Vec<String>>,
+    resolved_links: Vec<ResolvedLink>,
+    file_vectors: Vec<(String, Vec<f32>)>,
+}
+
+struct ResolvedLink {
+    source: String,
+    target: String,
+    link_type: String,
 }
 
 /// The queue is ephemeral, but preserve pending candidates when
@@ -327,6 +368,8 @@ impl Memory {
             knobs: Arc::new(knobs),
             pending_flashes: Arc::new(Mutex::new(Vec::new())),
             queue_notify: Arc::new(tokio::sync::Notify::new()),
+            graph_generation: Arc::new(AtomicU64::new(0)),
+            graph_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -353,6 +396,92 @@ impl Memory {
             .into_iter()
             .map(|(path, _, text)| parse_note(Path::new(&path), &text))
             .collect()
+    }
+
+    fn graph_snapshot(&self) -> anyhow::Result<Arc<GraphSnapshot>> {
+        loop {
+            let generation = self.graph_generation.load(Ordering::Acquire);
+            if let Some(snapshot) = self
+                .graph_cache
+                .lock()
+                .expect("graph cache lock")
+                .as_ref()
+                .filter(|cached| cached.generation == generation)
+                .map(|cached| Arc::clone(&cached.snapshot))
+            {
+                return Ok(snapshot);
+            }
+
+            let snapshot = Arc::new(self.build_graph_snapshot()?);
+            if self.graph_generation.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            let mut cache = self.graph_cache.lock().expect("graph cache lock");
+            if let Some(cached) = cache
+                .as_ref()
+                .filter(|cached| cached.generation == generation)
+            {
+                return Ok(Arc::clone(&cached.snapshot));
+            }
+            *cache = Some(CachedGraph {
+                generation,
+                snapshot: Arc::clone(&snapshot),
+            });
+            return Ok(snapshot);
+        }
+    }
+
+    /// Retire the current disposable graph/vector snapshot. Existing
+    /// callers may finish against their immutable `Arc`; subsequent
+    /// callers rebuild from the new workspace/database generation.
+    fn invalidate_graph(&self) {
+        self.graph_generation.fetch_add(1, Ordering::AcqRel);
+        *self.graph_cache.lock().expect("graph cache lock") = None;
+    }
+
+    fn build_graph_snapshot(&self) -> anyhow::Result<GraphSnapshot> {
+        let notes = self.notes();
+        let resolver = Resolver::build(&notes);
+        let note_by_id = notes
+            .iter()
+            .enumerate()
+            .map(|(index, note)| (note.id.clone(), index))
+            .collect();
+        let id_by_path = notes
+            .iter()
+            .map(|note| (note.path.display().to_string(), note.id.clone()))
+            .collect();
+        let mut adjacency: std::collections::HashMap<String, Vec<String>> = Default::default();
+        let mut resolved_links = Vec::new();
+        for note in &notes {
+            for (link_type, target) in &note.links {
+                let Some(target) = resolver.resolve(target) else {
+                    continue;
+                };
+                adjacency
+                    .entry(note.id.clone())
+                    .or_default()
+                    .push(target.clone());
+                adjacency
+                    .entry(target.clone())
+                    .or_default()
+                    .push(note.id.clone());
+                resolved_links.push(ResolvedLink {
+                    source: note.id.clone(),
+                    target,
+                    link_type: link_type.clone(),
+                });
+            }
+        }
+        Ok(GraphSnapshot {
+            notes,
+            note_by_id,
+            id_by_path,
+            resolver,
+            adjacency,
+            resolved_links,
+            file_vectors: self.file_vectors_uncached()?,
+        })
     }
 
     /// One sweep: hash every watched file, (re)index changes, remove
@@ -382,15 +511,35 @@ impl Memory {
         }
 
         let mut removed = 0;
-        for (path, _) in &known {
-            if !on_disk.iter().any(|(p, _, _)| p == path) {
-                let db = self.db.lock().expect("db lock");
-                db.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
-                db.execute("DELETE FROM file_hashes WHERE file_path = ?1", [path])?;
-                removed += 1;
+        {
+            let removed_paths: Vec<&str> = known
+                .iter()
+                .filter(|(path, _)| !on_disk.iter().any(|(p, _, _)| p == path))
+                .map(|(path, _)| path.as_str())
+                .collect();
+            if !removed_paths.is_empty() {
+                let removal_result = (|| -> anyhow::Result<()> {
+                    let mut db = self.db.lock().expect("db lock");
+                    let transaction = db.transaction()?;
+                    for path in &removed_paths {
+                        transaction.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
+                        transaction
+                            .execute("DELETE FROM file_hashes WHERE file_path = ?1", [path])?;
+                    }
+                    transaction.commit()?;
+                    Ok(())
+                })();
+                if let Err(error) = removal_result {
+                    if indexed > 0 {
+                        self.invalidate_graph();
+                    }
+                    return Err(error);
+                }
+                removed = removed_paths.len();
             }
         }
         if indexed + removed > 0 {
+            self.invalidate_graph();
             tracing::info!(indexed, removed, "sync sweep");
         }
         Ok((indexed, removed))
@@ -417,11 +566,12 @@ impl Memory {
                 Err(e) => return Err(e),
             }
         };
-        let db = self.db.lock().expect("db lock");
-        db.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
+        let mut db = self.db.lock().expect("db lock");
+        let transaction = db.transaction()?;
+        transaction.execute("DELETE FROM segments WHERE file_path = ?1", [path])?;
         for (seq, (seg_text, vector)) in segments.iter().zip(vectors.iter()).enumerate() {
             let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-            db.execute(
+            transaction.execute(
                 "INSERT INTO segments (id, file_path, seq, text, embedding)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![
@@ -433,11 +583,12 @@ impl Memory {
                 ],
             )?;
         }
-        db.execute(
+        transaction.execute(
             "INSERT INTO file_hashes (file_path, hash, indexed_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(file_path) DO UPDATE SET hash = ?2, indexed_at = ?3",
             rusqlite::params![path, hash, now()],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -578,6 +729,7 @@ impl Memory {
     /// A watched write: bump now; the next sweep re-indexes.
     pub fn on_write(&self, path: &Path) -> anyhow::Result<bool> {
         if self.is_watched(path) && indexable(path) {
+            self.invalidate_graph();
             let bump = self.knobs.cognitive_bump;
             self.bump_path(&path.display().to_string(), bump, Carrier::Cognitive)?;
             return Ok(true);
@@ -586,28 +738,32 @@ impl Memory {
     }
 
     fn bump_path(&self, path: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
-        let note_id =
-            frontmatter_id(Path::new(path)).unwrap_or_else(|| path.to_string());
-        self.bump(&note_id, amount, carrier)
+        let graph = self.graph_snapshot()?;
+        let note_id = graph
+            .id_by_path
+            .get(path)
+            .cloned()
+            .or_else(|| frontmatter_id(Path::new(path)))
+            .unwrap_or_else(|| path.to_string());
+        self.bump_with_graph(&note_id, amount, carrier, &graph)
     }
 
     /// Apply a bump and its single-pass wave (wall ch. 02): ×0.5 per
     /// hop, 3 hops deep, one wave outward — propagated bumps trigger
     /// no further waves. Energy ignores link direction and type.
     pub fn bump(&self, origin: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
-        let notes = self.notes();
-        let resolver = Resolver::build(&notes);
-        let mut adjacency: std::collections::HashMap<String, Vec<String>> = Default::default();
-        for note in &notes {
-            for (_, target) in &note.links {
-                let Some(target) = resolver.resolve(target) else {
-                    continue; // dangling: no edge, no energy lost
-                };
-                adjacency.entry(note.id.clone()).or_default().push(target.clone());
-                adjacency.entry(target).or_default().push(note.id.clone());
-            }
-        }
+        let graph = self.graph_snapshot()?;
+        self.bump_with_graph(origin, amount, carrier, &graph)
+    }
 
+    fn bump_with_graph(
+        &self,
+        origin: &str,
+        amount: f64,
+        carrier: Carrier,
+        graph: &GraphSnapshot,
+    ) -> anyhow::Result<()> {
+        let mut operations = Vec::new();
         let mut visited: std::collections::HashSet<String> = Default::default();
         let mut frontier = vec![origin.to_string()];
         visited.insert(origin.to_string());
@@ -616,9 +772,17 @@ impl Memory {
         for hop in 0..=self.knobs.propagation_hops {
             let mut next: Vec<String> = Vec::new();
             for id in &frontier {
-                let hop_carrier = if hop == 0 { carrier } else { Carrier::Propagated };
-                self.apply_bump(id, wave_amount, hop_carrier, &notes)?;
-                if let Some(neighbors) = adjacency.get(id.as_str()) {
+                let hop_carrier = if hop == 0 {
+                    carrier
+                } else {
+                    Carrier::Propagated
+                };
+                operations.push(BumpOp {
+                    note_id: id.clone(),
+                    amount: wave_amount,
+                    carrier: hop_carrier,
+                });
+                if let Some(neighbors) = graph.adjacency.get(id.as_str()) {
                     for n in neighbors {
                         if visited.insert(n.to_string()) {
                             next.push(n.to_string());
@@ -635,17 +799,18 @@ impl Memory {
 
         // Implicit warmth: semantic neighbors of the origin, one hop,
         // skipping anything the typed-link wave already reached.
-        let origin_path = notes
-            .iter()
-            .find(|n| n.id == origin)
+        let origin_path = graph
+            .note_by_id
+            .get(origin)
+            .map(|&index| &graph.notes[index])
             .map(|n| n.path.display().to_string())
             .unwrap_or_else(|| origin.to_string());
-        self.semantic_spread(&origin_path, amount, &notes, &visited)?;
-        Ok(())
+        self.plan_semantic_spread(&origin_path, amount, graph, &visited, &mut operations);
+        self.apply_wave(&operations, graph)
     }
 
     /// Mean stored vector per indexed file.
-    fn file_vectors(&self) -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+    fn file_vectors_uncached(&self) -> anyhow::Result<Vec<(String, Vec<f32>)>> {
         let rows: Vec<(String, Vec<u8>)> = {
             let db = self.db.lock().expect("db lock");
             let mut stmt = db.prepare("SELECT file_path, embedding FROM segments")?;
@@ -658,7 +823,9 @@ impl Memory {
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            let entry = sums.entry(path).or_insert_with(|| (vec![0.0; vector.len()], 0));
+            let entry = sums
+                .entry(path)
+                .or_insert_with(|| (vec![0.0; vector.len()], 0));
             for (s, v) in entry.0.iter_mut().zip(&vector) {
                 *s += v;
             }
@@ -666,26 +833,26 @@ impl Memory {
         }
         Ok(sums
             .into_iter()
-            .map(|(path, (sum, n))| {
-                (path, sum.into_iter().map(|x| x / n as f32).collect())
-            })
+            .map(|(path, (sum, n))| (path, sum.into_iter().map(|x| x / n as f32).collect()))
             .collect())
     }
 
     /// Semantic propagation (wall ch. 02, implicit warmth): the bump
     /// origin's embedding neighbors warm at ×0.25, one hop, no chain.
-    fn semantic_spread(
+    fn plan_semantic_spread(
         &self,
         origin_path: &str,
         amount: f64,
-        notes: &[NoteInfo],
+        graph: &GraphSnapshot,
         already: &std::collections::HashSet<String>,
-    ) -> anyhow::Result<()> {
-        let vectors = self.file_vectors()?;
-        let Some((_, origin_vec)) = vectors.iter().find(|(p, _)| p == origin_path) else {
-            return Ok(());
+        operations: &mut Vec<BumpOp>,
+    ) {
+        let Some((_, origin_vec)) = graph.file_vectors.iter().find(|(p, _)| p == origin_path)
+        else {
+            return;
         };
-        let mut scored: Vec<(&String, f32)> = vectors
+        let mut scored: Vec<(&String, f32)> = graph
+            .file_vectors
             .iter()
             .filter(|(p, _)| p != origin_path)
             .map(|(p, v)| (p, cosine(origin_vec, v)))
@@ -693,26 +860,35 @@ impl Memory {
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         for (path, _) in scored.into_iter().take(self.knobs.semantic_top_k) {
-            let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
+            let id = graph
+                .id_by_path
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| path.clone());
             if already.contains(&id) {
                 continue; // the typed-link wave already reached it
             }
-            self.apply_bump(&id, amount * self.knobs.semantic_factor, Carrier::Propagated, notes)?;
+            operations.push(BumpOp {
+                note_id: id,
+                amount: amount * self.knobs.semantic_factor,
+                carrier: Carrier::Propagated,
+            });
         }
-        Ok(())
     }
 
     /// Conversation resonance (wall ch. 02, implicit warmth): the
     /// turn's own text warms the nearest notes ambiently, no waves.
     pub async fn resonate(&self, turn_text: &str) -> anyhow::Result<()> {
-        self.resonate_with(turn_text, self.knobs.resonance_factor).await
+        self.resonate_with(turn_text, self.knobs.resonance_factor)
+            .await
     }
 
     /// Tool resonance (wall ch. 02, implicit warmth): each tool
     /// result's text warms the nearest notes at 0.8 × similarity —
     /// what passes through the agent's hands warms what it resembles.
     pub async fn resonate_tool(&self, result_text: &str) -> anyhow::Result<()> {
-        self.resonate_with(result_text, self.knobs.tool_resonance_factor).await
+        self.resonate_with(result_text, self.knobs.tool_resonance_factor)
+            .await
     }
 
     async fn resonate_with(&self, text: &str, factor: f64) -> anyhow::Result<()> {
@@ -741,83 +917,129 @@ impl Memory {
                 Err(e) => return Err(e),
             }
         };
-        let vectors = self.file_vectors()?;
-        let notes = self.notes();
-        let mut scored: Vec<(&String, f32)> = vectors
+        let graph = self.graph_snapshot()?;
+        let mut scored: Vec<(&String, f32)> = graph
+            .file_vectors
             .iter()
             .map(|(p, v)| (p, cosine(&query, v)))
             .filter(|(_, s)| *s >= self.knobs.resonance_threshold)
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (path, similarity) in scored.into_iter().take(self.knobs.resonance_top_k) {
-            let id = frontmatter_id(Path::new(path)).unwrap_or_else(|| path.clone());
-            self.apply_bump(&id, factor * similarity as f64, Carrier::Ambient, &notes)?;
+        let operations: Vec<BumpOp> = scored
+            .into_iter()
+            .take(self.knobs.resonance_top_k)
+            .map(|(path, similarity)| {
+                let id = graph
+                    .id_by_path
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| path.clone());
+                BumpOp {
+                    note_id: id,
+                    amount: factor * similarity as f64,
+                    carrier: Carrier::Ambient,
+                }
+            })
+            .collect();
+        self.apply_wave(&operations, &graph)
+    }
+
+    /// Commit one complete logical activation wave atomically. Flash
+    /// publication follows the commit so a rolled-back wave cannot
+    /// become visible in the next context slot.
+    fn apply_wave(&self, operations: &[BumpOp], graph: &GraphSnapshot) -> anyhow::Result<()> {
+        if operations.is_empty() {
+            return Ok(());
+        }
+        let mut db = self.db.lock().expect("db lock");
+        let transaction = db.transaction()?;
+        let mut flashes = Vec::new();
+        let bumped_at = now();
+        for operation in operations {
+            if let Some(flash) = self.apply_bump_tx(&transaction, operation, graph, bumped_at)? {
+                flashes.push(flash);
+            }
+        }
+        transaction.commit()?;
+        if !flashes.is_empty() {
+            let mut pending = self.pending_flashes.lock().expect("flash lock");
+            for flash in flashes {
+                tracing::info!(note = %flash.note_id, "flash: crossed the threshold");
+                pending.push(flash);
+            }
         }
         Ok(())
     }
 
-    /// One note's bump, with the flash carrier rule: only ambient or
-    /// propagated warmth crossing the threshold from below fires a
-    /// flash (halve + pend); a cognitive crossing stands silently.
-    fn apply_bump(
+    /// Apply one operation inside its wave's transaction. Operations
+    /// remain sequential: a later operation observes any score and
+    /// flash halving produced by an earlier operation in the wave.
+    fn apply_bump_tx(
         &self,
-        note_id: &str,
-        amount: f64,
-        carrier: Carrier,
-        notes: &[NoteInfo],
-    ) -> anyhow::Result<()> {
-        let old: f64 = {
-            let db = self.db.lock().expect("db lock");
-            db.query_row(
-                "SELECT score FROM activation WHERE note_id = ?1",
-                [note_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(0.0)
+        transaction: &rusqlite::Transaction<'_>,
+        operation: &BumpOp,
+        graph: &GraphSnapshot,
+        bumped_at: i64,
+    ) -> anyhow::Result<Option<Flash>> {
+        let old: f64 = match transaction.query_row(
+            "SELECT score FROM activation WHERE note_id = ?1",
+            [&operation.note_id],
+            |row| row.get(0),
+        ) {
+            Ok(score) => score,
+            Err(rusqlite::Error::QueryReturnedNoRows) => 0.0,
+            Err(error) => return Err(error.into()),
         };
-        let mut new = old + amount;
+        let mut new = old + operation.amount;
         let threshold = self.knobs.flash_threshold;
         let crossed = old < threshold && new >= threshold;
 
-        if crossed && carrier != Carrier::Cognitive && self.may_flash(note_id, notes) {
+        let flash = if crossed
+            && operation.carrier != Carrier::Cognitive
+            && self.may_flash(&operation.note_id, &graph.notes)
+        {
             new /= 2.0;
-            let resolver = Resolver::build(notes);
-            let flash = match notes.iter().find(|n| n.id == note_id) {
+            let flash = match graph
+                .note_by_id
+                .get(&operation.note_id)
+                .map(|&index| &graph.notes[index])
+            {
                 Some(note) => Flash {
-                    note_id: note_id.to_string(),
+                    note_id: operation.note_id.clone(),
                     text: cap_chars(&note.body, FLASH_TEXT_CAP),
                     neighbors: note
                         .links
                         .iter()
                         .filter_map(|(link_type, target)| {
-                            let target = resolver.resolve(target)?;
-                            notes
-                                .iter()
-                                .find(|n| n.id == target)
+                            let target = graph.resolver.resolve(target)?;
+                            graph
+                                .note_by_id
+                                .get(&target)
+                                .map(|&index| &graph.notes[index])
                                 .map(|n| (link_type.clone(), cap_chars(&n.body, FLASH_TEXT_CAP)))
                         })
                         .take(FLASH_NEIGHBOR_CAP)
                         .collect(),
                 },
                 None => Flash {
-                    note_id: note_id.to_string(),
-                    text: std::fs::read_to_string(note_id)
+                    note_id: operation.note_id.clone(),
+                    text: std::fs::read_to_string(&operation.note_id)
                         .map(|t| cap_chars(&t, FLASH_TEXT_CAP))
                         .unwrap_or_default(),
                     neighbors: Vec::new(),
                 },
             };
-            tracing::info!(note = %flash.note_id, "flash: crossed the threshold");
-            self.pending_flashes.lock().expect("flash lock").push(flash);
-        }
+            Some(flash)
+        } else {
+            None
+        };
 
-        let db = self.db.lock().expect("db lock");
-        db.execute(
+        transaction.execute(
             "INSERT INTO activation (note_id, score, bumped_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(note_id) DO UPDATE SET score = ?2, bumped_at = ?3",
-            rusqlite::params![note_id, new, now()],
+            rusqlite::params![operation.note_id, new, bumped_at],
         )?;
-        Ok(())
+        Ok(flash)
     }
 
     /// The whole graph, made visible (board card: GET /graph): every
@@ -825,8 +1047,7 @@ impl Memory {
     /// dangling targets dropped, semantic edges above the configured
     /// threshold. Read-only — a window, never a hand.
     pub fn graph(&self) -> anyhow::Result<GraphPayload> {
-        let notes = self.notes();
-        let resolver = Resolver::build(&notes);
+        let graph = self.graph_snapshot()?;
         let scores: std::collections::HashMap<String, f64> = {
             let db = self.db.lock().expect("db lock");
             let mut stmt = db.prepare("SELECT note_id, score FROM activation")?;
@@ -840,7 +1061,8 @@ impl Memory {
                 .display()
                 .to_string()
         };
-        let nodes: Vec<GraphNode> = notes
+        let nodes: Vec<GraphNode> = graph
+            .notes
             .iter()
             .map(|n| GraphNode {
                 id: n.id.clone(),
@@ -850,37 +1072,35 @@ impl Memory {
             .collect();
 
         let mut links: Vec<GraphLink> = Vec::new();
-        for note in &notes {
-            for (link_type, target) in &note.links {
-                let Some(target) = resolver.resolve(target) else {
-                    continue;
-                };
-                if target == note.id {
-                    continue;
-                }
-                let link = GraphLink {
-                    source: note.id.clone(),
-                    target,
-                    link_type: link_type.clone(),
-                    similarity: None,
-                };
-                if !links.iter().any(|l| {
-                    l.source == link.source && l.target == link.target && l.link_type == link.link_type
-                }) {
-                    links.push(link);
-                }
+        for resolved in &graph.resolved_links {
+            if resolved.target == resolved.source {
+                continue;
+            }
+            let link = GraphLink {
+                source: resolved.source.clone(),
+                target: resolved.target.clone(),
+                link_type: resolved.link_type.clone(),
+                similarity: None,
+            };
+            if !links.iter().any(|l| {
+                l.source == link.source && l.target == link.target && l.link_type == link.link_type
+            }) {
+                links.push(link);
             }
         }
 
         // Semantic edges: per node, its top-k embedding neighbors
         // above the threshold, deduped by unordered pair.
-        let vectors = self.file_vectors()?;
-        let id_of_path: std::collections::HashMap<String, &str> = notes
+        let vectors = &graph.file_vectors;
+        let id_of_path: std::collections::HashMap<String, &str> = graph
+            .notes
             .iter()
             .map(|n| (n.path.display().to_string(), n.id.as_str()))
             .collect();
-        for (path, vec) in &vectors {
-            let Some(&source) = id_of_path.get(path) else { continue };
+        for (path, vec) in vectors {
+            let Some(&source) = id_of_path.get(path) else {
+                continue;
+            };
             let mut scored: Vec<(&str, f32)> = vectors
                 .iter()
                 .filter(|(p, _)| p != path)
@@ -889,10 +1109,15 @@ impl Memory {
                 .collect();
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
             for (target, similarity) in scored.into_iter().take(self.knobs.semantic_top_k) {
-                let (a, b) = if source <= target { (source, target) } else { (target, source) };
-                if !links.iter().any(|l| {
-                    l.link_type == "semantic" && l.source == a && l.target == b
-                }) {
+                let (a, b) = if source <= target {
+                    (source, target)
+                } else {
+                    (target, source)
+                };
+                if !links
+                    .iter()
+                    .any(|l| l.link_type == "semantic" && l.source == a && l.target == b)
+                {
                     links.push(GraphLink {
                         source: a.to_string(),
                         target: b.to_string(),
@@ -989,7 +1214,11 @@ impl Memory {
 
     pub fn queue_depth(&self) -> anyhow::Result<u64> {
         let db = self.db.lock().expect("db lock");
-        Ok(db.query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| row.get(0))?)
+        Ok(
+            db.query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| {
+                row.get(0)
+            })?,
+        )
     }
 
     /// Embed a rejection's candidate text and store its vector.
@@ -1028,7 +1257,11 @@ impl Memory {
     /// the OpenAI-family embeddings we ship against.
     pub fn rejection_vector_count(&self) -> anyhow::Result<u64> {
         let db = self.db.lock().expect("db lock");
-        Ok(db.query_row("SELECT COUNT(*) FROM rejection_vectors", [], |row| row.get(0))?)
+        Ok(
+            db.query_row("SELECT COUNT(*) FROM rejection_vectors", [], |row| {
+                row.get(0)
+            })?,
+        )
     }
 
     /// Semantic retrieval over past rejections. Full-table cosine scan
@@ -1054,7 +1287,13 @@ impl Memory {
                  FROM rejection_vectors",
             )?;
             stmt.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })?
             .collect::<Result<_, _>>()?
         };
@@ -1084,11 +1323,7 @@ impl Memory {
             })
             .collect();
         // Score first, newer turn as tiebreaker.
-        hits.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then(b.turn.cmp(&a.turn))
-        });
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(b.turn.cmp(&a.turn)));
         hits.truncate(top_k);
         Ok(hits)
     }
@@ -1105,7 +1340,9 @@ impl Memory {
         let text = match std::fs::read_to_string(rejections_path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", rejections_path.display())),
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading {}", rejections_path.display()));
+            }
         };
         let mut entries: Vec<RejectionJsonl> = Vec::new();
         for (line_no, raw) in text.lines().enumerate() {
@@ -1206,6 +1443,7 @@ impl Memory {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
         let mut last_decay = std::time::Instant::now();
+        let mut reindex_open = true;
         loop {
             if let Err(e) = self.sweep().await {
                 tracing::warn!(error = %e, "sync sweep failed");
@@ -1219,7 +1457,11 @@ impl Memory {
             tokio::select! {
                 biased;
                 _ = shutdown.wait_for(|&s| s) => return,
-                _ = reindex.recv() => {}
+                message = reindex.recv(), if reindex_open => {
+                    if message.is_none() {
+                        reindex_open = false;
+                    }
+                }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
             }
         }
@@ -1247,7 +1489,11 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
 }
 
 /// Paragraph-accumulating segmentation, ~1200 bytes per segment.
@@ -1453,7 +1699,7 @@ pub fn target_ref_for_path(path: &Path) -> String {
 fn frontmatter_id(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut lines = text.lines();
-    if lines.next()? .trim() != "---" {
+    if lines.next()?.trim() != "---" {
         return None;
     }
     for line in lines {
@@ -1523,14 +1769,59 @@ pub mod tests {
         std::fs::write(&note, "the heron waits in shallow water").unwrap();
 
         assert_eq!(mem.sweep().await.unwrap(), (1, 0));
+        let first = mem.graph_snapshot().unwrap();
         assert_eq!(mem.sweep().await.unwrap(), (0, 0), "unchanged: skipped");
+        let unchanged = mem.graph_snapshot().unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &unchanged),
+            "unchanged sweep reuses cache"
+        );
 
         std::fs::write(&note, "the heron strikes quickly").unwrap();
         assert_eq!(mem.sweep().await.unwrap(), (1, 0), "changed: re-indexed");
+        let changed = mem.graph_snapshot().unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &changed),
+            "vector change retires cache"
+        );
 
         std::fs::remove_file(&note).unwrap();
         assert_eq!(mem.sweep().await.unwrap(), (0, 1), "deleted: removed");
+        let deleted = mem.graph_snapshot().unwrap();
+        assert!(deleted.notes.is_empty());
+        assert!(deleted.file_vectors.is_empty());
         assert!(mem.search("heron").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn watched_write_bump_uses_fresh_link_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        let a = k.join("a.md");
+        write_note(&k, "a.md", "NA", &[("extends", "NB")], "claim a");
+        write_note(&k, "b.md", "NB", &[], "claim b");
+        write_note(&k, "c.md", "NC", &[], "claim c");
+
+        let stale = mem.graph_snapshot().unwrap();
+        assert!(
+            stale
+                .adjacency
+                .get("NA")
+                .unwrap()
+                .iter()
+                .any(|id| id == "NB")
+        );
+        write_note(&k, "a.md", "NA", &[("extends", "NC")], "claim a revised");
+
+        assert!(mem.on_write(&a).unwrap());
+        assert_eq!(mem.activation("NA").unwrap(), Some(1.0));
+        assert_eq!(mem.activation("NB").unwrap(), None, "old edge retired");
+        assert_eq!(
+            mem.activation("NC").unwrap(),
+            Some(0.5),
+            "new edge conducts immediately"
+        );
     }
 
     #[tokio::test]
@@ -1548,7 +1839,11 @@ pub mod tests {
 
         // Every result is an ambient access.
         let b_id = k.join("b.md").display().to_string();
-        assert_eq!(mem.activation(&b_id).unwrap(), Some(0.5), "default ambient bump");
+        assert_eq!(
+            mem.activation(&b_id).unwrap(),
+            Some(0.5),
+            "default ambient bump"
+        );
     }
 
     #[tokio::test]
@@ -1561,13 +1856,20 @@ pub mod tests {
 
         mem.on_read(&note).unwrap();
         let id = note.display().to_string();
-        assert_eq!(mem.activation(&id).unwrap(), Some(1.0), "default cognitive bump");
+        assert_eq!(
+            mem.activation(&id).unwrap(),
+            Some(1.0),
+            "default cognitive bump"
+        );
 
         // Unwatched reads do not bump.
         let elsewhere = dir.path().join("ws/draft.md");
         std::fs::write(&elsewhere, "x").unwrap();
         mem.on_read(&elsewhere).unwrap();
-        assert_eq!(mem.activation(&elsewhere.display().to_string()).unwrap(), None);
+        assert_eq!(
+            mem.activation(&elsewhere.display().to_string()).unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1631,12 +1933,97 @@ pub mod tests {
         assert_eq!(mem.activation("NE").unwrap(), None, "3 hops only");
     }
 
+    #[test]
+    fn activation_wave_operations_observe_prior_scores_and_halving() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[], "claim a");
+        let graph = mem.graph_snapshot().unwrap();
+
+        mem.apply_wave(
+            &[
+                BumpOp {
+                    note_id: "NA".to_string(),
+                    amount: 0.6,
+                    carrier: Carrier::Ambient,
+                },
+                BumpOp {
+                    note_id: "NA".to_string(),
+                    amount: 0.6,
+                    carrier: Carrier::Ambient,
+                },
+            ],
+            &graph,
+        )
+        .unwrap();
+
+        assert_eq!(mem.activation("NA").unwrap(), Some(0.6));
+        assert_eq!(mem.take_flashes().len(), 1);
+    }
+
+    #[test]
+    fn failed_activation_wave_rolls_back_scores_and_publishes_no_flash() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "NA", &[], "claim a");
+        write_note(&k, "b.md", "NB", &[], "claim b");
+        let graph = mem.graph_snapshot().unwrap();
+        {
+            let db = mem.db.lock().expect("db lock");
+            db.execute_batch(
+                "CREATE TRIGGER fail_second_activation
+                 BEFORE INSERT ON activation
+                 WHEN NEW.note_id = 'NB'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'injected activation failure');
+                 END;",
+            )
+            .unwrap();
+        }
+
+        let result = mem.apply_wave(
+            &[
+                BumpOp {
+                    note_id: "NA".to_string(),
+                    amount: 0.4,
+                    carrier: Carrier::Ambient,
+                },
+                BumpOp {
+                    note_id: "NB".to_string(),
+                    amount: 1.2,
+                    carrier: Carrier::Ambient,
+                },
+            ],
+            &graph,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            mem.activation("NA").unwrap(),
+            None,
+            "first write rolled back"
+        );
+        assert_eq!(mem.activation("NB").unwrap(), None);
+        assert!(
+            mem.take_flashes().is_empty(),
+            "rolled-back flash stayed private"
+        );
+    }
+
     #[tokio::test]
     async fn flash_carrier_rule_holds() {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "h.md", "NH", &[("same-pattern-as", "NO")], "the heron waits");
+        write_note(
+            &k,
+            "h.md",
+            "NH",
+            &[("same-pattern-as", "NO")],
+            "the heron waits",
+        );
         write_note(&k, "o.md", "NO", &[], "the owl is silent");
 
         // Two direct reads: NH crosses 1.0 cognitively — never
@@ -1668,7 +2055,13 @@ pub mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "h.md", "NH", &[("same-pattern-as", "NO")], "the heron waits");
+        write_note(
+            &k,
+            "h.md",
+            "NH",
+            &[("same-pattern-as", "NO")],
+            "the heron waits",
+        );
         write_note(&k, "o.md", "NO", &[], "the owl is silent");
 
         mem.bump("NH", 1.2, Carrier::Ambient).unwrap();
@@ -1687,15 +2080,21 @@ pub mod tests {
         let k = dir.path().join("ws/knowledge");
         // Similar bodies, NO typed links between them; one outlier
         // with an orthogonal letter histogram.
-        write_note(&k, "a.md", "NA", &[], "the heron waits in shallow water for fish");
-        write_note(&k, "b.md", "NB", &[], "the heron waited by the shallow water for a fish");
         write_note(
             &k,
-            "z.md",
-            "NZ",
+            "a.md",
+            "NA",
             &[],
-            &"zzzz qqqq xxxx jjjj ".repeat(30),
+            "the heron waits in shallow water for fish",
         );
+        write_note(
+            &k,
+            "b.md",
+            "NB",
+            &[],
+            "the heron waited by the shallow water for a fish",
+        );
+        write_note(&k, "z.md", "NZ", &[], &"zzzz qqqq xxxx jjjj ".repeat(30));
         mem.sweep().await.unwrap();
 
         mem.bump("NA", 1.0, Carrier::Cognitive).unwrap();
@@ -1713,7 +2112,13 @@ pub mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        write_note(
+            &k,
+            "h.md",
+            "NH",
+            &[],
+            "the heron waits in shallow water for fish",
+        );
         write_note(&k, "z.md", "NZ", &[], &"zzzz qqqq xxxx jjjj ".repeat(30));
         mem.sweep().await.unwrap();
 
@@ -1741,13 +2146,22 @@ pub mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        write_note(
+            &k,
+            "h.md",
+            "NH",
+            &[],
+            "the heron waits in shallow water for fish",
+        );
         write_note(&k, "z.md", "NZ", &[], &"zzzz qqqq xxxx jjjj ".repeat(30));
         mem.sweep().await.unwrap();
 
         let text = "a tool result mentioning the heron in the water and what it waits for";
         mem.resonate_tool(text).await.unwrap();
-        let tool_warmth = mem.activation("NH").unwrap().expect("tool resonance bumped");
+        let tool_warmth = mem
+            .activation("NH")
+            .unwrap()
+            .expect("tool resonance bumped");
         assert_eq!(mem.activation("NZ").unwrap(), None, "dissimilar: cold");
 
         // Same text through conversation resonance lands at 1/4 the
@@ -1755,7 +2169,13 @@ pub mod tests {
         let dir2 = tempfile::tempdir().unwrap();
         let mem2 = memory(dir2.path());
         let k2 = dir2.path().join("ws/knowledge");
-        write_note(&k2, "h.md", "NH", &[], "the heron waits in shallow water for fish");
+        write_note(
+            &k2,
+            "h.md",
+            "NH",
+            &[],
+            "the heron waits in shallow water for fish",
+        );
         mem2.sweep().await.unwrap();
         mem2.resonate(text).await.unwrap();
         let conv_warmth = mem2.activation("NH").unwrap().expect("resonance bumped");
@@ -1765,7 +2185,8 @@ pub mod tests {
         );
 
         // Ambient carrier: a tool-result crossing flashes.
-        mem.bump("NH", 0.95 - tool_warmth, Carrier::Ambient).unwrap();
+        mem.bump("NH", 0.95 - tool_warmth, Carrier::Ambient)
+            .unwrap();
         let _ = mem.take_flashes();
         mem.resonate_tool(text).await.unwrap();
         let flashes = mem.take_flashes();
@@ -1796,11 +2217,17 @@ pub mod tests {
         mem.enqueue_candidate("second").unwrap();
         assert_eq!(mem.queue_depth().unwrap(), 2);
         assert_eq!(
-            mem.pop_candidate().unwrap().map(|(_, text)| text).as_deref(),
+            mem.pop_candidate()
+                .unwrap()
+                .map(|(_, text)| text)
+                .as_deref(),
             Some("first")
         );
         assert_eq!(
-            mem.pop_candidate().unwrap().map(|(_, text)| text).as_deref(),
+            mem.pop_candidate()
+                .unwrap()
+                .map(|(_, text)| text)
+                .as_deref(),
             Some("second")
         );
         assert!(mem.pop_candidate().unwrap().is_none());
@@ -1921,7 +2348,12 @@ pub mod tests {
 
     #[test]
     fn segmentation_accumulates_paragraphs() {
-        let text = format!("{}\n\n{}\n\n{}", "a".repeat(800), "b".repeat(800), "c".repeat(100));
+        let text = format!(
+            "{}\n\n{}\n\n{}",
+            "a".repeat(800),
+            "b".repeat(800),
+            "c".repeat(100)
+        );
         let segments = segment(&text);
         assert_eq!(segments.len(), 2);
         assert!(segments[1].contains('c'));
@@ -1995,8 +2427,20 @@ pub mod tests {
             "the loom note",
         );
         write_note(&k, "a.md", "NA", &[("extends", "20260612012002756")], "a");
-        write_note(&k, "b.md", "NB", &[("extends", "loom/20260612012002756.md")], "b");
-        write_note(&k, "c.md", "NC", &[("extends", "../loom/20260612012002756.md")], "c");
+        write_note(
+            &k,
+            "b.md",
+            "NB",
+            &[("extends", "loom/20260612012002756.md")],
+            "b",
+        );
+        write_note(
+            &k,
+            "c.md",
+            "NC",
+            &[("extends", "../loom/20260612012002756.md")],
+            "c",
+        );
 
         // Small bumps so nothing crosses the flash threshold: each
         // origin sends 0.25 to the loom note via its resolved link.
@@ -2033,7 +2477,13 @@ pub mod tests {
             "---\nid: \"20260612231237474\"\ntags: [t]\n---\n\nthe older claim\n",
         )
         .unwrap();
-        write_note(&k, "new.md", "NEWID", &[("extends", "20260612231237474")], "the newer claim");
+        write_note(
+            &k,
+            "new.md",
+            "NEWID",
+            &[("extends", "20260612231237474")],
+            "the newer claim",
+        );
 
         mem.bump("NEWID", 1.0, Carrier::Cognitive).unwrap();
         assert_eq!(
@@ -2058,7 +2508,11 @@ pub mod tests {
         write_note(&k, "src.md", "SRC", &[("extends", "dup")], "the linker");
 
         mem.bump("SRC", 1.0, Carrier::Cognitive).unwrap();
-        assert_eq!(mem.activation("X1").unwrap(), None, "ambiguity conducts nothing");
+        assert_eq!(
+            mem.activation("X1").unwrap(),
+            None,
+            "ambiguity conducts nothing"
+        );
         assert_eq!(mem.activation("X2").unwrap(), None);
     }
 
@@ -2092,7 +2546,13 @@ pub mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "a.md", "NA", &[("extends", "NB")], "claim citing [[NC]] inline");
+        write_note(
+            &k,
+            "a.md",
+            "NA",
+            &[("extends", "NB")],
+            "claim citing [[NC]] inline",
+        );
         write_note(&k, "b.md", "NB", &[], "b");
         write_note(&k, "c.md", "NC", &[], "c");
 
@@ -2119,7 +2579,10 @@ pub mod tests {
         mem.bump(&cur, 1.2, Carrier::Ambient).unwrap();
         let flashes = mem.take_flashes();
         assert_eq!(flashes.len(), 1);
-        assert!(flashes[0].text.contains("the current note's telling"), "whole-body flash");
+        assert!(
+            flashes[0].text.contains("the current note's telling"),
+            "whole-body flash"
+        );
         assert!(
             flashes[0].text.chars().count() <= FLASH_TEXT_CAP + 1,
             "capped: {}",
@@ -2169,7 +2632,10 @@ pub mod tests {
         let (indexed, _) = mem2.sweep().await.unwrap();
         assert_eq!(indexed, 2, "each file indexed exactly once");
         let hits = mem2.search("heron claim").await.unwrap();
-        assert!(hits.iter().all(|h| !h.file_path.contains("/./")), "{hits:?}");
+        assert!(
+            hits.iter().all(|h| !h.file_path.contains("/./")),
+            "{hits:?}"
+        );
     }
 
     #[tokio::test]
@@ -2224,7 +2690,13 @@ pub mod tests {
             knobs,
         )
         .unwrap();
-        write_note(&workspace.join("knowledge"), "k.md", "NK", &[], "an atomic claim");
+        write_note(
+            &workspace.join("knowledge"),
+            "k.md",
+            "NK",
+            &[],
+            "an atomic claim",
+        );
         std::fs::write(workspace.join("loom/long.md"), "a loom telling").unwrap();
 
         // The atomic may flash.
@@ -2246,7 +2718,13 @@ pub mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mem = memory(dir.path());
         let k = dir.path().join("ws/knowledge");
-        write_note(&k, "a.md", "NA", &[("extends", "NB")], "the heron waits in shallow water");
+        write_note(
+            &k,
+            "a.md",
+            "NA",
+            &[("extends", "NB")],
+            "the heron waits in shallow water",
+        );
         write_note(&k, "b.md", "NB", &[], "claim citing [[NC]] in passing");
         write_note(&k, "c.md", "NC", &[], "the heron waited by shallow water");
         mem.sweep().await.unwrap();
@@ -2260,12 +2738,18 @@ pub mod tests {
         let na = graph.nodes.iter().find(|n| n.id == "NA").unwrap();
         assert!(na.score > 0.0);
 
-        assert!(graph.links.iter().any(|l| l.link_type == "extends"
-            && l.source == "NA"
-            && l.target == "NB"));
-        assert!(graph.links.iter().any(|l| l.link_type == "wiki"
-            && l.source == "NB"
-            && l.target == "NC"));
+        assert!(
+            graph
+                .links
+                .iter()
+                .any(|l| l.link_type == "extends" && l.source == "NA" && l.target == "NB")
+        );
+        assert!(
+            graph
+                .links
+                .iter()
+                .any(|l| l.link_type == "wiki" && l.source == "NB" && l.target == "NC")
+        );
         let semantic: Vec<_> = graph
             .links
             .iter()
@@ -2361,10 +2845,7 @@ pub mod tests {
             .unwrap();
         // Query is exactly "aaa" (score 1.0 for A, 0.0 for B). Threshold
         // 0.5 keeps A, drops B.
-        let hits = mem
-            .top_similar_rejections("aaa", 10, 0.5)
-            .await
-            .unwrap();
+        let hits = mem.top_similar_rejections("aaa", 10, 0.5).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].candidate_id, "01A");
     }
@@ -2402,10 +2883,7 @@ pub mod tests {
             )
             .unwrap();
         }
-        let hits = mem
-            .top_similar_rejections("aaa", 10, 0.0)
-            .await
-            .unwrap();
+        let hits = mem.top_similar_rejections("aaa", 10, 0.0).await.unwrap();
         assert_eq!(hits.len(), 1, "stale-dim row skipped");
         assert_eq!(hits[0].candidate_id, "01A");
     }
@@ -2423,11 +2901,15 @@ pub mod tests {
              {\"candidate_id\":\"01C\",\"candidate\":\"ccc\",\"reason\":\"why\",\"turn\":3,\"at\":\"t\"}\n",
         )
         .unwrap();
-        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        mem.ensure_rejection_vectors_ready(&rejections)
+            .await
+            .unwrap();
         // Torn line skipped; two rows inserted.
         assert_eq!(mem.rejection_vector_count().unwrap(), 2);
         // Idempotent: second call is a no-op.
-        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        mem.ensure_rejection_vectors_ready(&rejections)
+            .await
+            .unwrap();
         assert_eq!(mem.rejection_vector_count().unwrap(), 2);
     }
 
@@ -2453,7 +2935,9 @@ pub mod tests {
             "{\"candidate_id\":\"01A\",\"candidate\":\"aaa\",\"turn\":1,\"at\":\"t\"}\n",
         )
         .unwrap();
-        mem.ensure_rejection_vectors_ready(&rejections).await.unwrap();
+        mem.ensure_rejection_vectors_ready(&rejections)
+            .await
+            .unwrap();
         assert_eq!(mem.rejection_vector_count().unwrap(), 1);
         // The stale row is gone; the fresh one from jsonl is in.
         let hits = mem.top_similar_rejections("aaa", 10, 0.0).await.unwrap();

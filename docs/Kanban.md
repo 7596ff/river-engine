@@ -6,6 +6,7 @@ kanban-plugin: board
 
 ## implemented features
 
+- [ ] **P2 — cache the parsed memory graph and file vectors** — keep note metadata, resolver, adjacency, and mean file embeddings in a generation-stamped cache invalidated by sync/write events. A bump should traverse cached structures and commit its activation wave in one SQLite transaction, not reread the workspace and vectors once per hit.
 - [ ] cargo workspace + gateway binary skeleton (tokio, clap, tracing)
 - [ ] config — river.json parse/validate, .env loading, $VAR expansion (non-secrets)
 - [ ] model client — anthropic-native + openai-compatible, retries, timeouts, api_key_env indirection
@@ -59,10 +60,8 @@ kanban-plugin: board
 ## in progress
 
 
-
 ## backlog
 
-- [ ] **P2 — cache the parsed memory graph and file vectors** — keep note metadata, resolver, adjacency, and mean file embeddings in a generation-stamped cache invalidated by sync/write events. A bump should traverse cached structures and commit its activation wave in one SQLite transaction, not reread the workspace and vectors once per hit.
 - [ ] **P2 — cache `/graph` topology and semantic edges** — compute nodes/typed edges/semantic edges when the memory generation changes; serve five-second UI polls by overlaying current activation scores. Use set-based edge deduplication and prevent concurrent viewers from launching duplicate rebuilds.
 - [ ] **P2 — bounded, lifecycle-owned resonance worker** — replace detached per-tool/per-turn `tokio::spawn` calls with a bounded queue and supervised worker. Preserve one resonance event per tool result, define overload behavior explicitly, expose queue health, and drain or deliberately checkpoint the queue during shutdown.
 - [ ] **P3 — make `last_prompt.txt` diagnostics opt-in** — disable full-prompt reconstruction and synchronous writes by default; gate behind explicit config/debug mode, write atomically off the async turn path, document sensitive-data retention, and cap or rotate if history is retained.
