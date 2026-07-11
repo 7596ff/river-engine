@@ -514,18 +514,13 @@ impl<C: Chat> Witness<C> {
     /// the last move; after a hand edit of moves.jsonl it also holds
     /// the holes, which regenerate from the record.
     fn missing_moves(&self, target: u64) -> anyhow::Result<Vec<u64>> {
-        let have: std::collections::HashSet<u64> = record::read_moves(self.moves.path())?
-            .iter()
-            .map(|m| m.turn)
-            .collect();
-        let mut missing: Vec<u64> =
-            record::scan(&self.workspace.join("record").join("turns.jsonl"))?
-                .iter()
-                .map(|l| l.turn)
-                .filter(|t| *t <= target && !have.contains(t))
-                .collect();
-        missing.sort_unstable();
-        missing.dedup();
+        let have: std::collections::HashSet<u64> =
+            record::move_turns(self.moves.path())?.into_iter().collect();
+        let mut missing = record::turn_numbers_through(
+            &self.workspace.join("record").join("turns.jsonl"),
+            target,
+        )?;
+        missing.retain(|turn| !have.contains(turn));
         Ok(missing)
     }
 
@@ -538,11 +533,11 @@ impl<C: Chat> Witness<C> {
         };
 
         let from_turn = up_to_turn.saturating_sub(GLEAN_WINDOW_TURNS) + 1;
-        let all_lines: Vec<RecordLine> =
-            record::scan(&self.workspace.join("record").join("turns.jsonl"))?
-                .into_iter()
-                .filter(|l| l.turn >= from_turn && l.turn <= up_to_turn)
-                .collect();
+        let all_lines = record::scan_turn_range(
+            &self.workspace.join("record").join("turns.jsonl"),
+            from_turn,
+            up_to_turn,
+        )?;
         if all_lines.is_empty() {
             return Ok(());
         }
@@ -593,7 +588,7 @@ impl<C: Chat> Witness<C> {
         }
 
         let mut recent = format_transcript(&lines);
-        let moves = record::read_moves(self.moves.path())?;
+        let moves = record::read_moves_range(self.moves.path(), from_turn, up_to_turn)?;
         if !moves.is_empty() {
             recent.push_str("\n[your moves]\n");
             for m in moves.iter().rev().take(GLEAN_WINDOW_TURNS as usize).rev() {
@@ -698,11 +693,10 @@ impl<C: Chat> Witness<C> {
     /// Duty one for a single turn: read the record, compress, append.
     async fn move_for(&mut self, turn: u64) -> anyhow::Result<()> {
         let template = self.on_turn.as_ref().expect("move duty enabled");
-        let lines: Vec<RecordLine> =
-            record::scan(&self.workspace.join("record").join("turns.jsonl"))?
-                .into_iter()
-                .filter(|l| l.turn == turn)
-                .collect();
+        let lines = record::scan_turn(
+            &self.workspace.join("record").join("turns.jsonl"),
+            turn,
+        )?;
 
         let summary = if lines.is_empty() {
             tracing::warn!(turn, "no record lines for settled turn; mechanical move");
@@ -763,8 +757,11 @@ impl<C: Chat> Witness<C> {
             return Ok(());
         }
 
-        let all_lines: Vec<RecordLine> =
-            record::scan(&self.workspace.join("record").join("turns.jsonl"))?;
+        let all_lines = record::scan_turn_range(
+            &self.workspace.join("record").join("turns.jsonl"),
+            turn.saturating_sub(self.connect_self_write_window),
+            turn,
+        )?;
         let this_turn_lines: Vec<RecordLine> = all_lines
             .iter()
             .filter(|l| l.turn == turn)

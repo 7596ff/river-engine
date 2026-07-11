@@ -151,8 +151,7 @@ pub fn load(path: &Path) -> Option<SessionSnapshot> {
 /// Returns None when the record is empty.
 pub fn channel_from_record_tail(workspace: &Path) -> Option<String> {
     let path = workspace.join("record").join("turns.jsonl");
-    let lines = record::scan(&path).ok()?;
-    lines.last().map(|line| line.channel.clone())
+    record::tail(&path).ok().flatten().map(|line| line.channel)
 }
 
 #[cfg(test)]

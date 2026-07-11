@@ -1150,19 +1150,16 @@ impl Tool for ReadMovesTool {
                 );
             }
 
-            // Channel attribution: scan the turn record once and build
+            // Channel attribution: query the turn index and build
             // a turn → facing-channel index. The "facing" channel is
             // the channel assistant/tool lines were tagged with for
             // that turn (wall ch. 10); fall back to whatever the turn
             // touched if no assistant line exists.
             let record_path = ctx.workspace.join("record").join("turns.jsonl");
-            let lines = crate::record::scan(&record_path)?;
+            let lines = crate::record::scan_turn_range(&record_path, turn_start, turn_end)?;
             let mut facing: std::collections::HashMap<u64, String> =
                 std::collections::HashMap::new();
             for line in &lines {
-                if line.turn < turn_start || line.turn > turn_end {
-                    continue;
-                }
                 let prefer = matches!(
                     line.role,
                     crate::record::RecordRole::Assistant | crate::record::RecordRole::Tool
@@ -1178,13 +1175,9 @@ impl Tool for ReadMovesTool {
             }
 
             let moves_path = crate::record::moves_path(&ctx.workspace);
-            let mut moves = crate::record::read_moves(&moves_path)?;
-            moves.sort_by_key(|m| m.turn);
+            let moves = crate::record::read_moves_range(&moves_path, turn_start, turn_end)?;
             let mut out = String::new();
-            for m in moves
-                .into_iter()
-                .filter(|m| m.turn >= turn_start && m.turn <= turn_end)
-            {
+            for m in moves {
                 let channel = facing
                     .get(&m.turn)
                     .map(|s| s.as_str())

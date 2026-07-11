@@ -3,6 +3,7 @@ mod channels;
 mod context;
 mod discord;
 mod identity;
+mod jsonl_index;
 mod memory;
 mod model;
 mod moments;

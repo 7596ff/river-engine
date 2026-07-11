@@ -165,29 +165,24 @@ impl PersistentContext {
         };
 
         let cursor = record::witness_cursor(&record::moves_path(workspace))?;
-        let lines = record::scan(&workspace.join("record").join("turns.jsonl"))?;
+        let record_path = workspace.join("record").join("turns.jsonl");
 
         // Turns touching the channel, in order, split at the cursor.
         let mut above: Vec<HotEntry> = Vec::new();
         let mut below_turns: Vec<Vec<HotEntry>> = Vec::new();
-        let touching: std::collections::BTreeSet<u64> = lines
-            .iter()
-            .filter(|l| l.channel == channel)
-            .map(|l| l.turn)
-            .collect();
-        for turn in &touching {
+        let touching = record::scan_channel_turns(&record_path, channel)?;
+        for (turn, lines) in touching {
             let entries: Vec<HotEntry> = lines
-                .iter()
-                .filter(|l| l.turn == *turn)
+                .into_iter()
                 .map(|l| HotEntry {
                     turn: l.turn,
                     role: l.role,
-                    content: l.content.clone().unwrap_or_default(),
-                    tool_calls: l.tool_calls.clone().unwrap_or_default(),
-                    tool_call_id: l.tool_call_id.clone(),
+                    content: l.content.unwrap_or_default(),
+                    tool_calls: l.tool_calls.unwrap_or_default(),
+                    tool_call_id: l.tool_call_id,
                 })
                 .collect();
-            if *turn > cursor {
+            if turn > cursor {
                 above.extend(entries);
             } else {
                 below_turns.push(entries);
@@ -383,8 +378,7 @@ impl PersistentContext {
             .flat_map(|m| m.turn_start..=m.turn_end)
             .collect();
 
-        let mut moves = record::read_moves(&record::moves_path(workspace))?;
-        moves.sort_by_key(|m| m.turn);
+        let moves = record::read_moves_chronological(&record::moves_path(workspace))?;
 
         let mut candidates: Vec<ArcEntry> = Vec::new();
         for m in moves {

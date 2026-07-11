@@ -5,7 +5,8 @@
 //! queued, so the agent never wakes to find missing data.
 //!
 //! All writes go through one `Channels` handle (lock-serialized per
-//! the single-writer invariant, wall ch. 10); reads scan fresh.
+//! the single-writer invariant, wall ch. 10); reads use incremental
+//! per-file indexes and rebuild after hand edits.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -17,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+
+use crate::jsonl_index::{JsonlIndex, ensure_append_target};
 
 pub const NEVER_VISITED_TAIL: usize = 50;
 
@@ -115,6 +118,7 @@ struct Inner {
     workspace: PathBuf,
     dir: PathBuf,
     files: Mutex<HashMap<String, File>>,
+    indexes: Mutex<HashMap<String, JsonlIndex<ChannelEntry>>>,
     notify: mpsc::Sender<Notification>,
 }
 
@@ -127,6 +131,7 @@ impl Channels {
                 workspace: workspace.to_path_buf(),
                 dir,
                 files: Mutex::new(HashMap::new()),
+                indexes: Mutex::new(HashMap::new()),
                 notify,
             }),
         })
@@ -377,30 +382,16 @@ impl Channels {
         Ok(position >= entry_pos)
     }
 
-    /// Full log scan, torn lines skipped with a warning.
+    /// Full logical log read through the incremental per-file index.
+    /// Torn lines are skipped; destructive edits rebuild the index.
     pub fn scan(&self, channel: &str) -> anyhow::Result<Vec<ChannelEntry>> {
         let path = self.path(channel);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
-        let mut entries = Vec::new();
-        for (line_no, raw) in text.lines().enumerate() {
-            if raw.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<ChannelEntry>(raw) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => tracing::warn!(
-                    path = %path.display(),
-                    line = line_no + 1,
-                    error = %e,
-                    "skipping malformed channel entry"
-                ),
-            }
-        }
-        Ok(entries)
+        let mut indexes = self.inner.indexes.lock().expect("channel indexes lock");
+        let index = indexes
+            .entry(channel.to_string())
+            .or_insert_with(|| JsonlIndex::new(path, "channel entry"));
+        index.refresh()?;
+        Ok(index.items().to_vec())
     }
 
     pub fn path(&self, channel: &str) -> PathBuf {
@@ -411,10 +402,10 @@ impl Channels {
         let mut json = serde_json::to_string(entry)?;
         json.push('\n');
         let mut files = self.inner.files.lock().expect("channel files lock");
+        let path = self.inner.dir.join(format!("{}.jsonl", sanitize(channel)));
         let file = match files.entry(channel.to_string()) {
             std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => {
-                let path = self.inner.dir.join(format!("{}.jsonl", sanitize(channel)));
                 let file = OpenOptions::new()
                     .append(true)
                     .create(true)
@@ -423,10 +414,29 @@ impl Channels {
                 v.insert(file)
             }
         };
+        ensure_append_target(file, &path)?;
+        let before = file.metadata()?;
         file.write_all(json.as_bytes())
             .with_context(|| format!("appending to channel {channel}"))?;
         file.sync_data()
             .with_context(|| format!("fsyncing channel {channel}"))?;
+        let after = file.metadata()?;
+        drop(files);
+
+        let mut indexes = self.inner.indexes.lock().expect("channel indexes lock");
+        let Some(index) = indexes.get_mut(channel) else {
+            return Ok(());
+        };
+        let keep = match index.apply_known_append(entry.clone(), json.as_bytes(), &before, &after) {
+            Ok(advanced) => advanced,
+            Err(e) => {
+                tracing::warn!(channel, error = %e, "channel index append failed; invalidating");
+                false
+            }
+        };
+        if !keep {
+            indexes.remove(channel);
+        }
         Ok(())
     }
 }
@@ -771,5 +781,28 @@ mod tests {
             .inbound("c", "cass", None, "hello", "local", None)
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn channel_index_rebuilds_after_hand_deletion() {
+        let (channels, _rx, _dir) = layer().await;
+        let first = channels
+            .inbound("c", "cass", None, "one", "local", None)
+            .await
+            .unwrap();
+        channels
+            .inbound("c", "cass", None, "two", "local", None)
+            .await
+            .unwrap();
+        assert_eq!(channels.scan("c").unwrap().len(), 2, "index primed");
+
+        let path = channels.path("c");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept: Vec<_> = text.lines().filter(|line| !line.contains(&first)).collect();
+        std::fs::write(&path, format!("{}\n", kept.join("\n"))).unwrap();
+
+        let entries = channels.scan("c").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content.as_deref(), Some("two"));
     }
 }

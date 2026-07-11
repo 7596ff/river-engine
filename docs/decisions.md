@@ -635,3 +635,33 @@ as their sequence, preserving actual insertion order even for inverted
 same-millisecond ULIDs, and the old table is dropped. Fresh databases
 create the sequenced schema directly; deleting the database remains a
 valid alternative because queue state is explicitly ephemeral.
+
+## 2026-07-10 — editable life records use disposable in-process indexes
+
+Routine witness, context, tool, and channel operations repeatedly
+re-read and reparsed complete JSONL files. A simple append-offset cache
+would be faster but unsafe: moves may be deleted by hand and later
+regenerated at the physical tail, where file position no longer matches
+turn order.
+
+Decision: turn records, moves, and channel logs use a shared in-process
+JSONL index. The initial stable snapshot retains physical entries;
+record and move layers add turn-keyed maps, the record adds a
+channel-to-turn map, and channel handles retain one index per log.
+Witness windows, move ranges, context reconstruction, resume-tail reads,
+and `read_moves` queries use these secondary views.
+
+Only the file's engine-owned single writer may advance an index
+incrementally. It captures metadata before the append, writes one JSONL
+line, fsyncs, captures metadata afterward, and advances the cached entry
+only when identity and byte growth match exactly. Any unannounced
+metadata change — including growth — causes a complete rebuild from a
+stable snapshot. This conservative rule distinguishes ordinary engine
+appends from hand edits without relying on imperfect filesystem event
+classification. Long-lived append handles reopen when the visible path
+has been replaced, preventing writes to an unlinked old inode.
+
+The index is never truth. Rebuilds preserve malformed/torn-line
+tolerance, duplicate moves retain append order within their turn, turn
+keys restore regenerated moves to chronological reads, and the witness
+cursor remains the contiguous set of distinct move turns.

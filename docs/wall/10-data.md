@@ -37,6 +37,23 @@ object per line, written by exactly one writer, fsynced on append.
 Readers skip malformed lines with a logged warning (a crash mid-append
 must never poison a file).
 
+Readers maintain **process-local incremental indexes** over the turn
+record, moves, and channel logs. The files remain the only truth. A
+stable initial snapshot builds physical-order entries plus secondary
+turn/channel/cursor maps. After an engine writer fsyncs one complete
+line, it advances the corresponding index directly using before/after
+file metadata; ordinary turns do not re-read or reparse the life.
+
+Any file change not announced by its engine writer is treated as a
+hand edit and triggers a full rebuild: truncation, same-size rewrite,
+growth, deletion, or file-identity replacement. A long-lived writer
+whose path now names a replacement inode reopens the visible path
+before appending. Rebuilds read a stable metadata snapshot, preserve
+torn-line tolerance, and reconstruct logical order from turn keys —
+never from physical append position or ULID order. Thus deleting a move
+removes its turn from the cursor map, while the regenerated move may
+append at the tail and still return to its original logical turn.
+
 **`record/birth.json`** — the founding record (ch. 08). Not JSONL; one
 object, written once by the birth ritual:
 
@@ -292,7 +309,9 @@ These bind every component that touches the record or the database:
   consumer that drops or loads by turn does so for whole turns.
 - **The cursor is the contiguous frontier.** Derived from the moves
   file's turn numbers at need (the tail when gapless), never cached
-  elsewhere. Moves readers sort by turn, never trust file order.
+  as independent ground truth. The process-local move index may cache
+  the derived frontier inputs, but rebuilds them from the file after
+  every hand edit. Moves readers order by turn, never trust file order.
 - **Single writer per file.** The turn loop task writes the turn
   record; the agent task writes moment files (via the `create_moment`
   tool); the witness writes moves, its own receipt logs
@@ -303,6 +322,9 @@ These bind every component that touches the record or the database:
   turn loop via mpsc so the turn-record's single-writer invariant is
   preserved.
 - **Torn-line tolerance** everywhere a JSONL file is read.
+- **Indexes are disposable.** In-memory JSONL indexes are accelerators,
+  not records. Unannounced file mutation rebuilds them; ambiguity always
+  falls back to the files.
 - **Disposability.** The database must be safely deletable at rest;
   startup with a missing database rebuilds derived state and starts
   ephemeral state empty, with no other behavioral change.
