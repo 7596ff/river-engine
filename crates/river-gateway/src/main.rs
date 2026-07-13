@@ -184,10 +184,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         }
     }
 
-    // Connect duty pair (spec 2026-07-07): witness posts frames, turn
-    // loop lands them. Both sides created together so the sender is
-    // available for `with_connect` and the receiver for `TurnLoop::new`.
-    let (connect_tx, connect_rx) = tokio::sync::mpsc::channel(32);
+    // Flash duty pair (spec 2026-07-13): witness posts frames, turn
+    // loop lands them. Wired end-to-end when the flashes module
+    // lands in Phase C; for now the receiver stays hooked up so the
+    // turn loop keeps its receiver arg and no flashes fire until
+    // the pass exists.
+    let (_flash_tx, connect_rx) = tokio::sync::mpsc::channel(32);
     let witness = witness::Witness::load(
         &agent.workspace,
         witness_client,
@@ -200,12 +202,6 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     .with_similar_rejections(
         agent.witness.similar_rejections_top_k,
         agent.witness.similar_rejections_threshold,
-    )
-    .with_connect(
-        Some(connect_tx),
-        agent.witness.connect_threshold,
-        agent.witness.connect_min_new_turns,
-        agent.witness.connect_self_write_window,
     );
 
     // Shape subsystem: queue + worker. Created here so both the sync

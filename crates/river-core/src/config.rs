@@ -96,6 +96,151 @@ pub struct AgentConfig {
     /// bind here. Missing block disables the shape subsystem entirely.
     #[serde(default)]
     pub shape: ShapeConfig,
+    /// Flash subsystem knobs (spec
+    /// `docs/superpowers/specs/2026-07-13-flash-subsystem-design.md`).
+    /// `None` (missing block) disables the flash pass entirely, as a
+    /// fail-safe for un-migrated configs. `Some(default)` (empty block)
+    /// enables the subsystem with the wall's defaults.
+    #[serde(default)]
+    pub flash: Option<FlashConfig>,
+}
+
+/// Flash-pass knobs. Missing block (`AgentConfig.flash = None`)
+/// disables the subsystem. Empty block (`"flash": {}`) enables it
+/// with defaults for every field.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct FlashConfig {
+    pub top_k: usize,
+    pub types: FlashTypesConfig,
+}
+
+impl Default for FlashConfig {
+    fn default() -> Self {
+        Self {
+            top_k: 5,
+            types: FlashTypesConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct FlashTypesConfig {
+    pub connection: ConnectionConfig,
+    pub echo: EchoConfig,
+    #[serde(rename = "return")]
+    pub return_: ReturnConfig,
+    pub bridge: BridgeConfig,
+    pub correction: CorrectionConfig,
+}
+
+impl Default for FlashTypesConfig {
+    fn default() -> Self {
+        Self {
+            connection: ConnectionConfig::default(),
+            echo: EchoConfig::default(),
+            return_: ReturnConfig::default(),
+            bridge: BridgeConfig::default(),
+            correction: CorrectionConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConnectionConfig {
+    pub enabled: bool,
+    pub threshold: f32,
+    pub self_write_window: u64,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 0.65,
+            self_write_window: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EchoConfig {
+    pub enabled: bool,
+    pub threshold: f32,
+    pub warmth_min: f64,
+    pub min_new_turns_target: u64,
+}
+
+impl Default for EchoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 0.55,
+            warmth_min: 0.3,
+            min_new_turns_target: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReturnConfig {
+    pub enabled: bool,
+    pub threshold: f32,
+    pub gap_min_turns: u64,
+    pub min_new_turns_target: u64,
+}
+
+impl Default for ReturnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 0.55,
+            gap_min_turns: 200,
+            min_new_turns_target: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BridgeConfig {
+    pub enabled: bool,
+    pub shape_sim_min: f32,
+    pub text_sim_max: f32,
+    pub top_k: usize,
+    pub min_new_turns_target: u64,
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            shape_sim_min: 0.70,
+            text_sim_max: 0.40,
+            top_k: 5,
+            min_new_turns_target: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CorrectionConfig {
+    pub enabled: bool,
+    pub threshold: f32,
+}
+
+impl Default for CorrectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 0.60,
+        }
+    }
 }
 
 /// Shape-index knobs (see
@@ -161,23 +306,6 @@ pub struct WitnessConfig {
     /// Cosine similarity floor for similar-rejection retrieval; rows
     /// below this are not surfaced. Default 0.60.
     pub similar_rejections_threshold: f32,
-    /// Cosine similarity floor for the connect duty's top-hit gate.
-    /// The threshold IS the trigger — no probability dice, no dice
-    /// per turn. Rows below this are not surfaced. Zero disables the
-    /// duty entirely. Default 0.65 (matches the flash system's
-    /// semantic threshold).
-    pub connect_threshold: f32,
-    /// Refractory between fired connects, measured in turns of
-    /// forward movement. Prevents the connect duty from firing on
-    /// every turn of a topic-locked stretch and burying the record in
-    /// [connect] frames. Zero disables. Default 6 (matches glean's
-    /// window).
-    pub connect_min_new_turns: u64,
-    /// Look-back window for the connect duty's self-connection guard.
-    /// If the top-hit's file was written by the agent within this
-    /// many turns, skip the hit and try the next one. Zero disables
-    /// the guard. Default 5.
-    pub connect_self_write_window: u64,
 }
 
 impl Default for WitnessConfig {
@@ -188,9 +316,6 @@ impl Default for WitnessConfig {
             recent_rejections_window: 5,
             similar_rejections_top_k: 5,
             similar_rejections_threshold: 0.60,
-            connect_threshold: 0.65,
-            connect_min_new_turns: 6,
-            connect_self_write_window: 5,
         }
     }
 }
@@ -405,7 +530,40 @@ pub fn expand_vars(
 
 /// Parse expanded config text.
 pub fn parse(expanded: &str) -> Result<Config, String> {
+    check_removed_witness_fields(expanded)?;
     serde_json::from_str(expanded).map_err(|e| format!("config parse error: {e}"))
+}
+
+/// The 2026-07-13 flash spec removed three fields from `witness`:
+/// `connect_threshold`, `connect_min_new_turns`,
+/// `connect_self_write_window`. Their behavior migrates to
+/// `flash.types.connection.*`. Detect the removed names in the raw
+/// config text and emit a friendly error naming each removed field
+/// and pointing at the replacement — serde's "unknown field" error
+/// is uninformative for a migration this pointed.
+fn check_removed_witness_fields(text: &str) -> Result<(), String> {
+    const REMOVED: &[&str] = &[
+        "connect_threshold",
+        "connect_min_new_turns",
+        "connect_self_write_window",
+    ];
+    let mut found: Vec<&str> = REMOVED
+        .iter()
+        .copied()
+        .filter(|name| text.contains(&format!("\"{name}\"")))
+        .collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    found.sort();
+    Err(format!(
+        "config parse error: the witness.{} field(s) were removed \
+         by the flash-subsystem v2 spec (2026-07-13); move their \
+         behavior to flash.types.connection.* (threshold, \
+         self_write_window). \
+         See docs/superpowers/specs/2026-07-13-flash-subsystem-design.md",
+        found.join(", witness.")
+    ))
 }
 
 /// Validate everything before spawning anything; report all errors
@@ -630,6 +788,90 @@ mod tests {
         let config = parse(&bad).unwrap();
         let errors = validate(&config).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("decay_factor")), "{errors:?}");
+    }
+
+    #[test]
+    fn flash_block_absent_is_none() {
+        let base = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m"
+            }
+          }
+        }"#;
+        let config = parse(base).unwrap();
+        validate(&config).unwrap();
+        assert!(config.agents["ada"].flash.is_none());
+    }
+
+    #[test]
+    fn empty_flash_block_gets_all_defaults() {
+        let text = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m",
+              "flash": {}
+            }
+          }
+        }"#;
+        let config = parse(text).unwrap();
+        validate(&config).unwrap();
+        let flash = config.agents["ada"].flash.as_ref().unwrap();
+        assert_eq!(flash.top_k, 5);
+        assert!(flash.types.connection.enabled);
+        assert_eq!(flash.types.connection.threshold, 0.65);
+        assert!(flash.types.echo.enabled);
+        assert!(flash.types.return_.enabled);
+        assert!(flash.types.bridge.enabled);
+        assert!(!flash.types.correction.enabled);
+    }
+
+    #[test]
+    fn flash_type_defaults_when_type_block_missing() {
+        let text = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m",
+              "flash": { "top_k": 8, "types": { "bridge": { "enabled": false } } }
+            }
+          }
+        }"#;
+        let config = parse(text).unwrap();
+        validate(&config).unwrap();
+        let flash = config.agents["ada"].flash.as_ref().unwrap();
+        assert_eq!(flash.top_k, 8);
+        assert!(flash.types.connection.enabled, "missing type block → default enabled");
+        assert!(!flash.types.bridge.enabled, "explicit override wins");
+    }
+
+    #[test]
+    fn removed_connect_fields_fail_loudly() {
+        let text = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m",
+              "witness": { "connect_threshold": 0.7 }
+            }
+          }
+        }"#;
+        let err = parse(text).unwrap_err();
+        assert!(err.contains("connect_threshold"), "error names the field: {err}");
+        assert!(
+            err.contains("flash.types.connection") || err.contains("2026-07-13-flash"),
+            "error points at replacement: {err}"
+        );
     }
 
     #[test]
