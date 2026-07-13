@@ -159,6 +159,7 @@ pub struct TurnLoop<C: Chat> {
     /// in HOT) synthesises the same line into the live window.
     /// `None` when no witness/memory is configured.
     connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
+    atomic_max_words: usize,
 }
 
 impl<C: Chat> TurnLoop<C> {
@@ -185,6 +186,7 @@ impl<C: Chat> TurnLoop<C> {
         working: watch::Sender<Option<String>>,
         resume: Option<crate::session::SessionSnapshot>,
         connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
+        atomic_max_words: usize,
     ) -> anyhow::Result<Self> {
         let mut record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
@@ -281,6 +283,7 @@ impl<C: Chat> TurnLoop<C> {
             arc_dirty: Arc::new(AtomicBool::new(false)),
             warned_high: false,
             connect_frames,
+            atomic_max_words,
         })
     }
 
@@ -552,6 +555,7 @@ impl<C: Chat> TurnLoop<C> {
             digestion,
             compact_requested: self.compact_requested.clone(),
             arc_dirty: self.arc_dirty.clone(),
+            atomic_max_words: self.atomic_max_words,
         };
 
         // Budget warning fires in the last 20% of the turn's tool
@@ -1103,6 +1107,7 @@ mod tests {
             watch::channel(None).0,
             resume,
             None,
+            100,
         )
         .unwrap();
         Harness {

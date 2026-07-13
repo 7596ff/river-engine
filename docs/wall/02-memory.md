@@ -85,7 +85,12 @@ Rules of the web:
   activation makes contradicting notes surface together eventually.
 
 The agent writes atomic notes with its ordinary file tools. The engine
-imposes no ceremony beyond the format.
+imposes no ceremony beyond the format. A dedicated `write_atomic` tool
+(ch. 07) is the recommended path for new notes: it enforces the
+≤ `atomic.max_words` body cap and the ≥ 1 typed-link requirement,
+auto-populates `id` and `created`, and assembles frontmatter in a
+stable key order. Bare `write` and `edit` remain the escape hatch for
+revisions and rare exceptions.
 
 ## Digestion: how experience becomes knowledge
 

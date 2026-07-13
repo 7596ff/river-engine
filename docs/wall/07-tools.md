@@ -18,7 +18,7 @@ an agent's reach is an edit to a config file, not a rebuild.
 
 ## The core tools
 
-The default profile, thirteen tools:
+The default profile, fourteen tools:
 
 | tool | what it does |
 |---|---|
@@ -33,6 +33,7 @@ The default profile, thirteen tools:
 | `channel_read` | pure-peek window into a channel's history (ch. 05) |
 | `reject_candidate` | mark the current digestion candidate as no-go (ch. 04) |
 | `create_moment` | author a moment over a turn range (ch. 03) |
+| `write_atomic` | birth an atomic note under `knowledge/` with validation (ch. 02) |
 | `read_moves` | scan the witness's moves over a turn range (ch. 03) |
 | `compact` | force a compaction and leave a handoff for the next session (ch. 03) |
 
@@ -92,6 +93,19 @@ summary` — sorted ascending. Channel attribution is taken from the
 turn record. Used to choose what stretch to compress into a moment;
 moments stack with each other (overlap is allowed and shows both) so
 re-reading a stretch later doesn't overwrite the earlier reading.
+
+`write_atomic` is the agent's dedicated authoring path for the atomic
+web (ch. 02): `write_atomic(body, links, tags?, shape?)`. It enforces
+the wall's atomic rules that bare `write` leaves unchecked — body ≤
+`atomic.max_words` (default 100), at least one typed link — and
+auto-populates `id` (ULID) and `created` (RFC3339). Frontmatter is
+assembled in a deterministic key order (`id, created, links, tags,
+shape`; absent optionals omitted) and the file is written atomically
+to `workspace/knowledge/{ulid}.md` (tmp + fsync + rename).
+Unresolved link targets return in the result as warnings rather than
+blocking the write — forward references are legitimate. The plain
+`write` tool remains an escape hatch for the rare exception; bare-
+write atomics still get shape-glossed by the sync service (ch. 02).
 
 `compact` is the agent's wind-down tool: `compact(summary)`. It writes
 the summary to `workspace/handoff.md` (atomic tmp + fsync + rename) and

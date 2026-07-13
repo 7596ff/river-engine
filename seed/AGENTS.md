@@ -54,7 +54,8 @@ Reading is remembering: when you read or search indexed files, those notes warm 
 
 ```markdown
 ---
-id: 01JXAMPLE...              # any unique id
+id: 01JXAMPLE...              # ULID; write_atomic generates one
+created: 2026-07-13T14:23:00Z # RFC3339; write_atomic sets one
 links:
   - extends: 01JXX...
   - contradicts: 01JXX...
@@ -65,6 +66,8 @@ One claim, in your words.
 ```
 
 The link vocabulary is open — `extends`, `contradicts`, `supports`, `complicates`, `same-pattern-as`, anything you can name. If you cannot name the relationship, you do not understand it well enough to link.
+
+**Use `write_atomic` for new claims.** It enforces the ≤100-word cap and the ≥1 typed-link requirement, auto-populates `id` and `created`, and assembles frontmatter deterministically. Bare `write`/`edit` remain the escape hatch for revisions and rare exceptions where the format needs to bend. Unresolved link targets come back as warnings, not errors — forward references (linking to a note you're about to write next) are fine.
 
 **Flash.** Sometimes a `[flash]` appears in your context: a note that crossed a warmth threshold *without you looking at it* — surfaced by topic drift, by search, by association through links. The flash is the edge of your attention speaking. When an unlinked note flashes alongside something you're working on, that may be a link waiting to be written.
 

@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-pub const DEFAULT_TOOLS: [&str; 13] = [
+pub const DEFAULT_TOOLS: [&str; 14] = [
     "read", "write", "edit", "glob", "grep", "bash", "speak", "search", "channel_read",
-    "reject_candidate", "create_moment", "read_moves", "compact",
+    "reject_candidate", "create_moment", "read_moves", "compact", "write_atomic",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +89,24 @@ pub struct AgentConfig {
     /// Witness-side knobs (wall ch. 04). Optional; defaults bind here.
     #[serde(default)]
     pub witness: WitnessConfig,
+    /// Atomic-note knobs (wall ch. 02). Optional; defaults bind here.
+    #[serde(default)]
+    pub atomic: AtomicConfig,
+}
+
+/// Atomic-note knobs (wall ch. 02): the `write_atomic` tool
+/// enforces `max_words` on the body. Bare `write` remains an
+/// escape hatch and enforces nothing.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AtomicConfig {
+    pub max_words: usize,
+}
+
+impl Default for AtomicConfig {
+    fn default() -> Self {
+        Self { max_words: 100 }
+    }
 }
 
 /// Witness-side knobs (wall ch. 04). Every field optional in config;

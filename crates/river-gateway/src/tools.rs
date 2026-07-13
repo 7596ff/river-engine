@@ -61,6 +61,9 @@ pub struct ToolContext {
     /// agent's just-written moment is visible without waiting for
     /// compaction.
     pub arc_dirty: Arc<AtomicBool>,
+    /// Word-count cap enforced by `write_atomic` (wall ch. 02). From
+    /// `config.atomic.max_words`; defaults to 100.
+    pub atomic_max_words: usize,
 }
 
 /// The candidate the agent is being asked to digest this turn. Carries
@@ -101,6 +104,7 @@ impl Registry {
                 Box::new(ChannelReadTool),
                 Box::new(RejectCandidateTool),
                 Box::new(CreateMomentTool),
+                Box::new(WriteAtomicTool),
                 Box::new(ReadMovesTool),
                 Box::new(CompactTool),
             ],
@@ -1107,6 +1111,244 @@ impl Tool for CreateMomentTool {
     }
 }
 
+/// `write_atomic` (wall ch. 02): birth an atomic note into
+/// `workspace/knowledge/`. Enforces the wall's atomic-note rules
+/// (≤ `atomic.max_words` body, ≥1 typed link) that bare `write`
+/// leaves unchecked. Assembles deterministic frontmatter, writes
+/// atomically (tmp + fsync + rename), and submits a gloss job to
+/// the shape worker if configured.
+struct WriteAtomicTool;
+impl Tool for WriteAtomicTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "write_atomic".into(),
+            description: "Write a new atomic note under workspace/knowledge/. Body ≤100 words. At least one typed link is required. Auto-populates id (ULID) and created (RFC3339). Use for new claims; use `edit`/`write` for revisions.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "body": {
+                        "type": "string",
+                        "description": "The claim, ≤ atomic.max_words words (default 100)."
+                    },
+                    "links": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": { "type": "string" },
+                                "target": { "type": "string" }
+                            },
+                            "required": ["type", "target"]
+                        },
+                        "description": "Typed links; example: [{\"type\":\"extends\",\"target\":\"01JXX4PMRT...\"}]"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "shape": {
+                        "type": "string",
+                        "description": "Optional agent-authored shape gloss; overrides the witness's gloss in shape_vectors."
+                    }
+                },
+                "required": ["body", "links"]
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let body = required_str(&args, "body")?;
+            if body.trim().is_empty() {
+                anyhow::bail!("body must be non-empty");
+            }
+            let word_count = body.split_whitespace().count();
+            if word_count > ctx.atomic_max_words {
+                anyhow::bail!(
+                    "body is {word_count} words; limit is {}",
+                    ctx.atomic_max_words
+                );
+            }
+            let links = parse_typed_link_list(&args, "links")?;
+            if links.is_empty() {
+                anyhow::bail!("at least one typed link is required");
+            }
+            let tags = parse_string_list(&args, "tags")?;
+            let shape = args.get("shape").and_then(|v| v.as_str()).map(str::to_string);
+
+            let created = jiff::Timestamp::now().to_string();
+            let (id, path, relative) = {
+                let mut last_err = None;
+                let mut chosen: Option<(String, PathBuf, String)> = None;
+                for _ in 0..2 {
+                    let id = ulid::Ulid::new().to_string();
+                    let text =
+                        assemble_atomic(&id, &created, body, &links, &tags, shape.as_deref());
+                    match write_atomic_file(&ctx.workspace, &id, &text) {
+                        Ok((p, r)) => {
+                            chosen = Some((id, p, r));
+                            break;
+                        }
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+                chosen.ok_or_else(|| {
+                    last_err.unwrap_or_else(|| anyhow::anyhow!("ULID collision persisted"))
+                })?
+            };
+
+            // The capture seam: the sync service picks up the new file
+            // and re-indexes it on its own schedule.
+            capture_write(ctx, &path);
+
+            // TODO: submit gloss job to shape worker (shape-index spec).
+            //   ctx.shape_queue.as_ref().and_then(|q| q.try_send(GlossJob { ... }).ok());
+            // Deferred until the shape module lands.
+
+            let known = known_atomic_stems(&ctx.workspace);
+            let mut warnings: Vec<String> = Vec::new();
+            for link in &links {
+                if link.target != id && !known.contains(&link.target) {
+                    warnings.push(format!("unresolved link target: {}", link.target));
+                }
+            }
+            let result = json!({
+                "id": id,
+                "path": relative,
+                "warnings": warnings,
+            });
+            Ok(result.to_string())
+        })
+    }
+}
+
+/// Assemble the atomic note's contents: deterministic YAML
+/// frontmatter (`id, created, links, tags, shape` order; absent
+/// optionals omitted) followed by the body.
+fn assemble_atomic(
+    id: &str,
+    created: &str,
+    body: &str,
+    links: &[TypedLink],
+    tags: &[String],
+    shape: Option<&str>,
+) -> String {
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("id: {id}\n"));
+    fm.push_str(&format!("created: {created}\n"));
+    fm.push_str("links:\n");
+    for link in links {
+        fm.push_str(&format!("  - {}: {}\n", link.link_type, link.target));
+    }
+    if !tags.is_empty() {
+        fm.push_str(&format!("tags: [{}]\n", tags.join(", ")));
+    }
+    if let Some(shape) = shape {
+        fm.push_str(&format!("shape: {shape}\n"));
+    }
+    fm.push_str("---\n\n");
+    fm.push_str(body);
+    if !body.ends_with('\n') {
+        fm.push('\n');
+    }
+    fm
+}
+
+/// Write the atomic to `workspace/knowledge/{id}.md` (tmp + fsync +
+/// rename). Returns the absolute path and the workspace-relative
+/// path.
+fn write_atomic_file(
+    workspace: &Path,
+    id: &str,
+    text: &str,
+) -> anyhow::Result<(PathBuf, String)> {
+    let dir = workspace.join("knowledge");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| anyhow::anyhow!("creating {}: {e}", dir.display()))?;
+    let final_path = dir.join(format!("{id}.md"));
+    if final_path.exists() {
+        anyhow::bail!("atomic {id} already exists at {}", final_path.display());
+    }
+    let tmp = dir.join(format!(".{id}.tmp"));
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|e| anyhow::anyhow!("creating {}: {e}", tmp.display()))?;
+        file.write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("writing {}: {e}", tmp.display()))?;
+        file.sync_all()
+            .map_err(|e| anyhow::anyhow!("fsyncing {}: {e}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &final_path)
+        .map_err(|e| anyhow::anyhow!("renaming {}: {e}", tmp.display()))?;
+    let relative = format!("knowledge/{id}.md");
+    Ok((final_path, relative))
+}
+
+/// Collect atomic filename stems for advisory link-target
+/// resolution. Filename-stem match only; frontmatter-id lookup
+/// requires the memory index and lands when that's threaded
+/// through. Ambiguity conducts nothing (wall ch. 02) — an
+/// unresolved target is a warning, never an error.
+fn known_atomic_stems(workspace: &Path) -> std::collections::HashSet<String> {
+    let dir = workspace.join("knowledge");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                return None;
+            }
+            path.file_stem().and_then(|s| s.to_str()).map(str::to_string)
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct TypedLink {
+    link_type: String,
+    target: String,
+}
+
+fn parse_typed_link_list(args: &Value, key: &str) -> anyhow::Result<Vec<TypedLink>> {
+    match args.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let obj = v
+                    .as_object()
+                    .ok_or_else(|| anyhow::anyhow!("link {i}: must be an object"))?;
+                let link_type = obj
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("link {i}: missing type"))?
+                    .trim();
+                if link_type.is_empty() {
+                    anyhow::bail!("link {i}: type must be non-empty");
+                }
+                let target = obj
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("link {i}: missing target"))?
+                    .trim();
+                if target.is_empty() {
+                    anyhow::bail!("link {i}: target must be non-empty");
+                }
+                Ok(TypedLink {
+                    link_type: link_type.to_string(),
+                    target: target.to_string(),
+                })
+            })
+            .collect(),
+        Some(Value::Null) | None => Ok(Vec::new()),
+        Some(_) => anyhow::bail!("{key} must be a list of link objects"),
+    }
+}
+
 /// `read_moves` (wall ch. 03): scan `record/moves.jsonl` for moves in
 /// a turn range. The agent's retrospective lookback for authoring
 /// moments. Range capped at 200 turns.
@@ -1288,6 +1530,7 @@ mod tests {
             digestion: None,
             compact_requested: Arc::new(AtomicBool::new(false)),
             arc_dirty: Arc::new(AtomicBool::new(false)),
+            atomic_max_words: 100,
         };
         (ctx, dir, outbound_rx)
     }
@@ -1311,6 +1554,7 @@ mod tests {
             "create_moment",
             "read_moves",
             "compact",
+            "write_atomic",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -1810,6 +2054,234 @@ mod tests {
         let out = run(&registry, &ctx, "compact", json!({"summary": "  \n  "})).await;
         assert!(out.contains("summary must be non-empty"), "{out}");
         assert!(!ctx.compact_requested.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn write_atomic_writes_file_and_returns_id() {
+        let (ctx, dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "Reason requires agreed-upon names. Without settlement of names, reckoning produces different results for each party.",
+                "links": [{"type": "extends", "target": "01JXX4PMRT4V2S1J7K0H6E9P8B"}],
+                "tags": ["names", "reason"]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap_or_else(|_| panic!("expected JSON result, got: {out}"));
+        let id = parsed["id"].as_str().expect("id in result");
+        let path = parsed["path"].as_str().expect("path in result");
+        assert!(id.len() == 26, "ULID length: {id}");
+        assert_eq!(path, format!("knowledge/{id}.md"));
+        assert!(parsed["warnings"].is_array(), "warnings must be an array");
+
+        let full = dir.path().join(path);
+        let text = std::fs::read_to_string(&full).expect("file exists");
+        assert!(text.contains(&format!("id: {id}")));
+        assert!(text.contains("extends: 01JXX4PMRT4V2S1J7K0H6E9P8B"));
+        assert!(text.contains("Reason requires"));
+    }
+
+    #[tokio::test]
+    async fn write_atomic_warns_on_unresolved_target() {
+        let (ctx, dir, _) = ctx();
+        // Pre-create one atomic so its stem resolves.
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(
+            dir.path().join("knowledge/01EXISTS.md"),
+            "---\nid: 01EXISTS\n---\n\nbody\n",
+        )
+        .unwrap();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [
+                    {"type": "extends", "target": "01EXISTS"},
+                    {"type": "contradicts", "target": "01MISSING"}
+                ]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let warnings = parsed["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1, "one unresolved target: {out}");
+        assert!(warnings[0].as_str().unwrap().contains("01MISSING"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_frontmatter_key_order_and_omits_optionals() {
+        let (ctx, dir, _) = ctx();
+        let registry = Registry::core();
+        // No tags, no shape — both should be absent from the file.
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let path = dir.path().join(parsed["path"].as_str().unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let id_pos = text.find("id:").expect("id present");
+        let created_pos = text.find("created:").expect("created present");
+        let links_pos = text.find("links:").expect("links present");
+        assert!(id_pos < created_pos, "id before created");
+        assert!(created_pos < links_pos, "created before links");
+        assert!(!text.contains("tags:"), "tags omitted when absent");
+        assert!(!text.contains("shape:"), "shape omitted when absent");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_writes_shape_frontmatter_when_provided() {
+        let (ctx, dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [{"type": "extends", "target": "01X"}],
+                "shape": "a proxy under optimization pressure diverges from the target it stood for"
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let path = dir.path().join(parsed["path"].as_str().unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("shape: a proxy under optimization pressure"), "{text}");
+        // shape must appear after tags position (last field before ---).
+        let shape_pos = text.find("shape:").unwrap();
+        let close_pos = text.rfind("---").unwrap();
+        assert!(shape_pos < close_pos, "shape inside frontmatter");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_leaves_no_tmp_file() {
+        let (ctx, dir, _) = ctx();
+        let registry = Registry::core();
+        run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        let leftover: Vec<_> = std::fs::read_dir(dir.path().join("knowledge"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with('.') && n.ends_with(".tmp"))
+            .collect();
+        assert!(leftover.is_empty(), "tmp file survived rename: {leftover:?}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_rejects_no_links() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({"body": "a claim.", "links": []}),
+        )
+        .await;
+        assert!(out.contains("at least one typed link is required"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_rejects_malformed_link_missing_type() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({"body": "a claim.", "links": [{"target": "01X"}]}),
+        )
+        .await;
+        assert!(out.contains("missing type"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_rejects_malformed_link_empty_target() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({"body": "a claim.", "links": [{"type": "extends", "target": "  "}]}),
+        )
+        .await;
+        assert!(out.contains("target"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_rejects_over_word_limit() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let body = "word ".repeat(101);
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": body,
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        assert!(out.contains("101 words") && out.contains("limit is 100"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_respects_config_max_words() {
+        let (mut ctx, _dir, _) = ctx();
+        ctx.atomic_max_words = 200;
+        let registry = Registry::core();
+        let body = "word ".repeat(150);
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": body,
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap_or_else(|_| panic!("expected success, got: {out}"));
+        assert!(parsed["id"].is_string(), "{out}");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_rejects_empty_body() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({"body": "  \n  ", "links": [{"type": "extends", "target": "01X"}]}),
+        )
+        .await;
+        assert!(out.contains("body must be non-empty"), "{out}");
     }
 
     #[tokio::test]
