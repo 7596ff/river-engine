@@ -152,6 +152,7 @@ pub async fn gloss_note<C: Chat + Sync>(
 
 /// Compose a shape gloss for a turn transcript. No storage side
 /// effect — Bridge will embed the returned string separately.
+#[allow(dead_code)] // Bridge landing pad; pending flash-subsystem spec.
 pub async fn gloss_turn<C: Chat + Sync>(
     client: &C,
     prompt: &LoadedPrompt,

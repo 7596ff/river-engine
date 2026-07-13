@@ -117,10 +117,6 @@ impl Registry {
         }
     }
 
-    pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.push(tool);
-    }
-
     /// Schemas for the profiled tools only — what the model sees.
     pub fn schemas(&self, profile: &[String]) -> Vec<ToolSchema> {
         self.tools

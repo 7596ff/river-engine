@@ -195,8 +195,11 @@ impl ShapeAuthor {
 }
 
 /// One row of `shape_vectors`. The embedding stays inside `Memory`;
-/// callers work with the metadata + gloss text.
+/// callers work with the metadata + gloss text. `gloss` and `at`
+/// are consumed by Bridge's frame body (deferred: pending flash
+/// subsystem) and by the shape-log receipt in `shape::run_worker`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // `gloss` and `at` are Bridge-facing; kept for the flash-subsystem landing.
 pub struct ShapeRow {
     pub note_id: String,
     pub file_path: String,
@@ -322,6 +325,9 @@ fn migrate_extraction_queue(conn: &mut Connection) -> anyhow::Result<()> {
 }
 
 impl Memory {
+    /// Test convenience — production uses `open_with` to thread the
+    /// activation config through.
+    #[cfg(test)]
     pub fn open(
         data_dir: &Path,
         workspace: &Path,
@@ -891,6 +897,7 @@ impl Memory {
     /// Apply a bump and its single-pass wave (wall ch. 02): ×0.5 per
     /// hop, 3 hops deep, one wave outward — propagated bumps trigger
     /// no further waves. Energy ignores link direction and type.
+    #[cfg(test)]
     pub fn bump(&self, origin: &str, amount: f64, carrier: Carrier) -> anyhow::Result<()> {
         let graph = self.graph_snapshot()?;
         self.bump_with_graph(origin, amount, carrier, &graph)
@@ -1510,6 +1517,7 @@ impl Memory {
     /// shape gloss once and reuses the vector across candidates.
     /// Rows whose stored vector length disagrees with the query
     /// (embedding-model dim change) are silently skipped.
+    #[allow(dead_code)] // Bridge landing pad; used only in tests until flash subsystem ships.
     pub fn search_shapes(
         &self,
         query_vec: &[f32],
@@ -1572,6 +1580,7 @@ impl Memory {
     /// Rows returned by [`Memory::top_similar_rejections`].
     /// `score` is cosine similarity in [-1, 1] but in practice ≥ 0 for
     /// the OpenAI-family embeddings we ship against.
+    #[cfg(test)]
     pub fn rejection_vector_count(&self) -> anyhow::Result<u64> {
         let db = self.db.lock().expect("db lock");
         Ok(
@@ -1741,6 +1750,7 @@ impl Memory {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn activation(&self, note_id: &str) -> anyhow::Result<Option<f64>> {
         let db = self.db.lock().expect("db lock");
         let mut stmt = db.prepare("SELECT score FROM activation WHERE note_id = ?1")?;
@@ -1748,9 +1758,6 @@ impl Memory {
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
     }
 
-    pub fn workspace(&self) -> &Path {
-        &self.workspace
-    }
 
     /// Run the periodic sweep and the hourly decay tick until
     /// shutdown.
@@ -1813,10 +1820,10 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Paragraph-accumulating segmentation, ~1200 bytes per segment.
-/// Paragraphs longer than the hard cap are split at char boundaries —
-/// a single giant paragraph (voice transcripts) must never exceed the
-/// embedder's context.
+/// Paragraph-accumulating segmentation. Paragraphs longer than the
+/// hard cap are split at char boundaries — a single giant paragraph
+/// (voice transcripts) must never exceed the embedder's context.
+#[cfg(test)]
 fn segment(text: &str) -> Vec<String> {
     segment_with_cap(text, SEGMENT_HARD_CAP)
 }
