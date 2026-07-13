@@ -286,6 +286,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         resume,
         Some(connect_rx),
         agent.atomic.max_words,
+        None, // shape queue wired in a follow-up (Phase 8)
     )?;
 
     // Two phases: a process signal asks only the turn loop to stop. It

@@ -64,6 +64,12 @@ pub struct ToolContext {
     /// Word-count cap enforced by `write_atomic` (wall ch. 02). From
     /// `config.atomic.max_words`; defaults to 100.
     pub atomic_max_words: usize,
+    /// The shape worker's queue. `write_atomic` submits a Write job
+    /// after successful writes; None when the shape subsystem is
+    /// disabled or unwired (safe to skip — the sync sweep is an
+    /// independent Source 4 path that will pick up the atomic on
+    /// its next pass if the queue lands later).
+    pub shape_queue: Option<tokio::sync::mpsc::Sender<crate::shape::GlossJob>>,
 }
 
 /// The candidate the agent is being asked to digest this turn. Carries
@@ -1201,9 +1207,18 @@ impl Tool for WriteAtomicTool {
             // and re-indexes it on its own schedule.
             capture_write(ctx, &path);
 
-            // TODO: submit gloss job to shape worker (shape-index spec).
-            //   ctx.shape_queue.as_ref().and_then(|q| q.try_send(GlossJob { ... }).ok());
-            // Deferred until the shape module lands.
+            // Submit a Write job to the shape worker (spec §3, source
+            // 3). Fire-and-forget: the tool returns as soon as the
+            // file lands; the gloss happens on the worker's idle
+            // schedule. If the queue is full or absent, the sync
+            // sweep (source 4) picks the atomic up on its next pass.
+            if let Some(sender) = &ctx.shape_queue {
+                let _ = sender.try_send(crate::shape::GlossJob {
+                    note_id: id.clone(),
+                    note_path: relative.clone(),
+                    reason: crate::shape::JobReason::Write,
+                });
+            }
 
             let known = known_atomic_stems(&ctx.workspace);
             let mut warnings: Vec<String> = Vec::new();
@@ -1531,6 +1546,7 @@ mod tests {
             compact_requested: Arc::new(AtomicBool::new(false)),
             arc_dirty: Arc::new(AtomicBool::new(false)),
             atomic_max_words: 100,
+            shape_queue: None,
         };
         (ctx, dir, outbound_rx)
     }
@@ -2083,6 +2099,52 @@ mod tests {
         assert!(text.contains(&format!("id: {id}")));
         assert!(text.contains("extends: 01JXX4PMRT4V2S1J7K0H6E9P8B"));
         assert!(text.contains("Reason requires"));
+    }
+
+    #[tokio::test]
+    async fn write_atomic_submits_shape_job_when_queue_present() {
+        let (mut ctx, _dir, _) = ctx();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        ctx.shape_queue = Some(tx);
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let id = parsed["id"].as_str().unwrap();
+        let job = rx.try_recv().expect("job submitted");
+        assert_eq!(job.note_id, id);
+        assert_eq!(job.note_path, format!("knowledge/{id}.md"));
+        assert_eq!(job.reason, crate::shape::JobReason::Write);
+    }
+
+    #[tokio::test]
+    async fn write_atomic_no_gloss_when_shape_queue_absent() {
+        // Baseline: default ctx has shape_queue = None; write still
+        // succeeds. Exercised trivially by every other write_atomic
+        // test; this documents the contract explicitly.
+        let (ctx, _dir, _) = ctx();
+        assert!(ctx.shape_queue.is_none());
+        let registry = Registry::core();
+        let out = run(
+            &registry,
+            &ctx,
+            "write_atomic",
+            json!({
+                "body": "a claim.",
+                "links": [{"type": "extends", "target": "01X"}]
+            }),
+        )
+        .await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed["id"].is_string(), "write succeeds without queue: {out}");
     }
 
     #[tokio::test]

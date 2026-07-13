@@ -160,6 +160,7 @@ pub struct TurnLoop<C: Chat> {
     /// `None` when no witness/memory is configured.
     connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
     atomic_max_words: usize,
+    shape_queue: Option<mpsc::Sender<crate::shape::GlossJob>>,
 }
 
 impl<C: Chat> TurnLoop<C> {
@@ -187,6 +188,7 @@ impl<C: Chat> TurnLoop<C> {
         resume: Option<crate::session::SessionSnapshot>,
         connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
         atomic_max_words: usize,
+        shape_queue: Option<mpsc::Sender<crate::shape::GlossJob>>,
     ) -> anyhow::Result<Self> {
         let mut record = TurnRecord::open(&workspace)?;
         // Monotonic for life: resume from the record (wall ch. 01).
@@ -284,6 +286,7 @@ impl<C: Chat> TurnLoop<C> {
             warned_high: false,
             connect_frames,
             atomic_max_words,
+            shape_queue,
         })
     }
 
@@ -556,6 +559,7 @@ impl<C: Chat> TurnLoop<C> {
             compact_requested: self.compact_requested.clone(),
             arc_dirty: self.arc_dirty.clone(),
             atomic_max_words: self.atomic_max_words,
+            shape_queue: self.shape_queue.clone(),
         };
 
         // Budget warning fires in the last 20% of the turn's tool
@@ -1108,6 +1112,7 @@ mod tests {
             resume,
             None,
             100,
+            None,
         )
         .unwrap();
         Harness {
