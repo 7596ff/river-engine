@@ -34,14 +34,16 @@ pub const LOCAL_ADAPTER: &str = "local";
 /// can key on it (wall ch. 04 + the flash spec 2026-07-13). Legacy
 /// `[connect]` lines predating the flash pass remain in the record
 /// and are still recognized by tools that scan for it.
+#[allow(dead_code)]
 pub const CONNECT_MARKER: &str = "[connect]";
 /// The prefix flash frames use on the record's system-role line
 /// (per-type: `[flash: connection]`, `[flash: echo]`, etc). Kept as
 /// a const so scanners can key on the common prefix.
+#[allow(dead_code)]
 pub const FLASH_MARKER_PREFIX: &str = "[flash:";
 /// Re-exported so callers can pattern-match `FlashType` without a
 /// second `use` line.
-pub use crate::flashes::{FlashFrame, FlashType};
+pub use crate::flashes::FlashFrame;
 
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {

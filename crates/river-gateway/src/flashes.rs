@@ -146,7 +146,7 @@ pub struct FlashPassCtx<'a, C: Chat + Sync> {
 /// candidate pool, evaluates each enabled type's predicate, sends
 /// every qualifying frame through `sender`, appends receipt lines
 /// to `flashes.jsonl`, and updates per-target refractory state.
-pub async fn flash_pass<C: Chat + Sync>(mut ctx: FlashPassCtx<'_, C>) -> anyhow::Result<()> {
+pub async fn flash_pass<C: Chat + Sync>(ctx: FlashPassCtx<'_, C>) -> anyhow::Result<()> {
     // Embed once. Threaded through both the shared pool scan and
     // Bridge's per-candidate text_sim check.
     let query_vec = ctx.memory.embed_query(&ctx.transcript).await?;
@@ -283,7 +283,10 @@ pub mod signals {
     /// Turns elapsed since a target's last cognitive access,
     /// approximated as (now_turn - last_touched_turn). Returns
     /// `u64::MAX` for unknown targets (never touched → maximally
-    /// stale).
+    /// stale). Waiting for the Kanban's
+    /// `activation.last_touched_turn` follow-up before Return can
+    /// consume it.
+    #[allow(dead_code)]
     pub fn staleness_turns(last_touched: &HashMap<String, u64>, target: &str, now_turn: u64) -> u64 {
         match last_touched.get(target) {
             Some(&last) => now_turn.saturating_sub(last),

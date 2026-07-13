@@ -770,6 +770,10 @@ impl Memory {
     /// settled turn; the agent's `search` tool uses `search` proper.
     /// Firing an ambient bump per settled turn would pump warmth into
     /// notes the agent never saw.
+    /// Compat wrapper kept for tests and external consumers that
+    /// don't already hold a query embedding. The flash pass calls
+    /// `search_no_bump_with_vec` directly to avoid re-embedding.
+    #[allow(dead_code)]
     pub async fn search_no_bump(
         &self,
         query: &str,

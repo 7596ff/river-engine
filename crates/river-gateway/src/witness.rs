@@ -775,19 +775,6 @@ fn collect_recent_agent_writes(
     out
 }
 
-/// Rough path equality: canonicalise both when possible (they exist),
-/// otherwise fall back to component-wise comparison. Handles the
-/// common shapes — workspace-relative vs. absolute, `./` prefixes.
-fn paths_match(a: &Path, b: &str) -> bool {
-    let b = Path::new(b);
-    if let (Ok(ca), Ok(cb)) = (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        return ca == cb;
-    }
-    let na: PathBuf = a.components().collect();
-    let nb: PathBuf = b.components().collect();
-    na == nb
-}
-
 /// A turn is digestion-driven iff its inbound (non-Assistant,
 /// non-Tool) lines are all System frames marked with
 /// [`DIGESTION_MARKER`]. Conservative: any non-marked inbound line
