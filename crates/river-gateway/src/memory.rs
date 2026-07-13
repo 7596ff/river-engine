@@ -233,6 +233,13 @@ pub struct Memory {
     queue_notify: Arc<tokio::sync::Notify>,
     graph_generation: Arc<AtomicU64>,
     graph_cache: Arc<Mutex<Option<CachedGraph>>>,
+    /// Wired after construction by main.rs when the shape subsystem
+    /// is configured. On sync events over `knowledge/`, sweep either
+    /// enqueues a Missing job (no shape row and no `shape:`
+    /// frontmatter) or upserts an agent-authored row directly (a
+    /// `shape:` field is present). None disables the seam entirely,
+    /// leaving Memory's behavior identical to a pre-shape build.
+    shape_queue: Arc<Mutex<Option<tokio::sync::mpsc::Sender<crate::shape::GlossJob>>>>,
 }
 
 /// One indexed file's graph identity and links, derived from the
@@ -420,7 +427,21 @@ impl Memory {
             queue_notify: Arc::new(tokio::sync::Notify::new()),
             graph_generation: Arc::new(AtomicU64::new(0)),
             graph_cache: Arc::new(Mutex::new(None)),
+            shape_queue: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Wire the shape worker's queue. Idempotent — the last sender
+    /// wins. Passing `None` disables the seam.
+    pub fn set_shape_queue(
+        &self,
+        sender: Option<tokio::sync::mpsc::Sender<crate::shape::GlossJob>>,
+    ) {
+        *self.shape_queue.lock().expect("shape queue lock") = sender;
+    }
+
+    fn shape_sender(&self) -> Option<tokio::sync::mpsc::Sender<crate::shape::GlossJob>> {
+        self.shape_queue.lock().expect("shape queue lock").clone()
     }
 
     /// Every watched file, read once, deduplicated by path (watched
@@ -547,6 +568,7 @@ impl Memory {
         };
 
         let mut indexed = 0;
+        let mut changed_atomics: Vec<(String, String)> = Vec::new();
         for (path, hash, text) in &on_disk {
             let unchanged = known.iter().any(|(p, h)| p == path && h == hash);
             if unchanged {
@@ -555,7 +577,12 @@ impl Memory {
             // One bad file must not pin the sweep: warn and move on;
             // it retries next sweep.
             match self.index_file(path, hash, text).await {
-                Ok(()) => indexed += 1,
+                Ok(()) => {
+                    indexed += 1;
+                    if self.is_atomic_path(path) {
+                        changed_atomics.push((path.clone(), text.clone()));
+                    }
+                }
                 Err(e) => tracing::warn!(path, error = %e, "indexing failed; skipping"),
             }
         }
@@ -592,7 +619,70 @@ impl Memory {
             self.invalidate_graph();
             tracing::info!(indexed, removed, "sync sweep");
         }
+
+        // Shape hook: agent-authored `shape:` frontmatter upserts
+        // directly (Author=Agent); otherwise enqueue a Write job so
+        // the shape worker glosses it on the next idle window. No
+        // shape queue configured (or shape disabled) → no-op.
+        if let Some(sender) = self.shape_sender() {
+            for (path, text) in &changed_atomics {
+                let Some(id) = read_frontmatter_field(text, "id") else {
+                    continue;
+                };
+                let relative = self.workspace_relative(path);
+                if let Some(shape) = read_frontmatter_field(text, "shape") {
+                    if let Err(e) = self
+                        .upsert_shape(
+                            &id,
+                            &relative,
+                            &shape,
+                            ShapeAuthor::Agent,
+                            "agent",
+                            "",
+                        )
+                        .await
+                    {
+                        tracing::warn!(path, error = %e, "agent shape upsert failed");
+                    }
+                    continue;
+                }
+                if self.read_shape(&id)?.is_some() {
+                    continue; // already glossed; no re-enqueue on unchanged shape
+                }
+                let job = crate::shape::GlossJob {
+                    note_id: id,
+                    note_path: relative,
+                    reason: crate::shape::JobReason::Write,
+                };
+                let _ = sender.try_send(job);
+            }
+        }
+        // On atomic deletion, drop the shape row alongside segments.
+        let atomic_removed: Vec<String> = known
+            .iter()
+            .filter(|(path, _)| !on_disk.iter().any(|(p, _, _)| p == path))
+            .filter(|(path, _)| self.is_atomic_path(path))
+            .map(|(path, _)| self.workspace_relative(path))
+            .collect();
+        for path in atomic_removed {
+            if let Err(e) = self.delete_shape_by_path(&path) {
+                tracing::warn!(path, error = %e, "shape row cleanup failed");
+            }
+        }
+
         Ok((indexed, removed))
+    }
+
+    fn is_atomic_path(&self, path: &str) -> bool {
+        let knowledge = self.workspace.join("knowledge");
+        Path::new(path).starts_with(&knowledge)
+    }
+
+    fn workspace_relative(&self, path: &str) -> String {
+        Path::new(path)
+            .strip_prefix(&self.workspace)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| path.to_string())
     }
 
     async fn index_file(&self, path: &str, hash: &str, text: &str) -> anyhow::Result<()> {
@@ -1790,6 +1880,27 @@ fn collect_files(dir: &Path, out: &mut Vec<(String, String, String)>) -> anyhow:
     Ok(())
 }
 
+/// Read a single scalar YAML frontmatter field by name, tolerating
+/// bare and quoted values. Returns None when the file has no
+/// frontmatter or the field is absent. Only handles simple `key:
+/// value` shapes on one line — the fields we consume (`id`, `shape`)
+/// fit that shape by contract.
+fn read_frontmatter_field(text: &str, field: &str) -> Option<String> {
+    let rest = text.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let prefix = format!("{field}:");
+    for line in rest[..end].lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix(&prefix) {
+            let value = unquote(value.trim());
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// YAML scalars arrive bare or quoted; link targets and ids must
 /// compare equal either way.
 fn unquote(s: &str) -> &str {
@@ -1986,6 +2097,96 @@ pub mod tests {
                 FakeEmbedder.embed(texts).await
             })
         }
+    }
+
+    #[tokio::test]
+    async fn sweep_enqueues_gloss_job_for_new_atomic_without_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        mem.set_shape_queue(Some(tx));
+
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "01ATOM.md", "01ATOM", &[("extends", "01OTHER")], "the body");
+
+        mem.sweep().await.unwrap();
+        let job = rx.try_recv().unwrap();
+        assert_eq!(job.note_id, "01ATOM");
+        assert_eq!(job.note_path, "knowledge/01ATOM.md");
+        assert_eq!(job.reason, crate::shape::JobReason::Write);
+    }
+
+    #[tokio::test]
+    async fn sweep_upserts_agent_shape_when_frontmatter_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        mem.set_shape_queue(Some(tx));
+
+        let k = dir.path().join("ws/knowledge");
+        std::fs::create_dir_all(&k).unwrap();
+        std::fs::write(
+            k.join("01ATOM.md"),
+            "---\nid: 01ATOM\nlinks:\n  - extends: 01O\nshape: the agent's own skeleton\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        mem.sweep().await.unwrap();
+        assert!(rx.try_recv().is_err(), "no queue job when shape frontmatter is present");
+        let row = mem.read_shape("01ATOM").unwrap().unwrap();
+        assert_eq!(row.author, ShapeAuthor::Agent);
+        assert_eq!(row.gloss, "the agent's own skeleton");
+        assert_eq!(row.model_id, "agent");
+        assert_eq!(row.prompt_hash, "");
+    }
+
+    #[tokio::test]
+    async fn sweep_skips_atomic_that_already_has_shape_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        mem.set_shape_queue(Some(tx));
+
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "01ATOM.md", "01ATOM", &[("extends", "01O")], "body");
+        mem.upsert_shape("01ATOM", "knowledge/01ATOM.md", "existing", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+
+        mem.sweep().await.unwrap();
+        assert!(rx.try_recv().is_err(), "no re-enqueue when row already present");
+    }
+
+    #[tokio::test]
+    async fn sweep_deletes_shape_row_on_atomic_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        mem.set_shape_queue(Some(tx));
+
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "01GONE.md", "01GONE", &[("extends", "01O")], "body");
+        mem.sweep().await.unwrap();
+        mem.upsert_shape("01GONE", "knowledge/01GONE.md", "g", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+        assert!(mem.read_shape("01GONE").unwrap().is_some());
+
+        std::fs::remove_file(k.join("01GONE.md")).unwrap();
+        mem.sweep().await.unwrap();
+        assert!(mem.read_shape("01GONE").unwrap().is_none(), "row cleaned up on removal");
+    }
+
+    #[tokio::test]
+    async fn sweep_without_shape_queue_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // No shape queue configured — legacy behavior.
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "01ATOM.md", "01ATOM", &[("extends", "01O")], "body");
+        let (indexed, removed) = mem.sweep().await.unwrap();
+        assert_eq!((indexed, removed), (1, 0));
+        assert!(mem.read_shape("01ATOM").unwrap().is_none(), "no shape row without queue");
     }
 
     #[tokio::test]
