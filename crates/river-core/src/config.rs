@@ -92,6 +92,30 @@ pub struct AgentConfig {
     /// Atomic-note knobs (wall ch. 02). Optional; defaults bind here.
     #[serde(default)]
     pub atomic: AtomicConfig,
+    /// Shape-index knobs (wall ch. 02, this spec). Optional; defaults
+    /// bind here. Missing block disables the shape subsystem entirely.
+    #[serde(default)]
+    pub shape: ShapeConfig,
+}
+
+/// Shape-index knobs (see
+/// `docs/superpowers/specs/2026-07-12-shape-index-design.md`). The
+/// on/off knob and the idle-window seconds the background gloss worker
+/// uses (same 5-minute quiet threshold digestion uses).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ShapeConfig {
+    pub enabled: bool,
+    pub worker_idle_seconds: u64,
+}
+
+impl Default for ShapeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            worker_idle_seconds: 300,
+        }
+    }
 }
 
 /// Atomic-note knobs (wall ch. 02): the `write_atomic` tool
@@ -606,6 +630,34 @@ mod tests {
         let config = parse(&bad).unwrap();
         let errors = validate(&config).unwrap_err();
         assert!(errors.iter().any(|e| e.contains("decay_factor")), "{errors:?}");
+    }
+
+    #[test]
+    fn shape_block_parses_with_defaults_and_overrides() {
+        let base = r#"{
+          "models": {
+            "m": { "provider": "anthropic", "endpoint": "e", "name": "n" }
+          },
+          "agents": {
+            "ada": {
+              "workspace": "/ws", "data_dir": "/d", "model": "m"
+            }
+          }
+        }"#;
+        let config = parse(base).unwrap();
+        validate(&config).unwrap();
+        // Default: enabled true, worker_idle_seconds 300.
+        assert!(config.agents["ada"].shape.enabled);
+        assert_eq!(config.agents["ada"].shape.worker_idle_seconds, 300);
+
+        let overridden = base.replace(
+            "\"model\": \"m\"",
+            "\"model\": \"m\", \"shape\": { \"enabled\": false, \"worker_idle_seconds\": 60 }",
+        );
+        let config = parse(&overridden).unwrap();
+        validate(&config).unwrap();
+        assert!(!config.agents["ada"].shape.enabled);
+        assert_eq!(config.agents["ada"].shape.worker_idle_seconds, 60);
     }
 
     #[test]

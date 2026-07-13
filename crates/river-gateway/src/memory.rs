@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension as _};
 use sha2::Digest as _;
 
 use river_core::config::ModelConfig;
@@ -167,6 +167,44 @@ pub struct SimilarRejection {
     pub candidate: String,
     pub reason: Option<String>,
     pub score: f32,
+}
+
+/// Who authored a shape gloss (wall ch. 04's divided-authorship
+/// discipline). Agent-authored rows come from the atomic's `shape:`
+/// frontmatter; witness-authored rows come from the gloss worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeAuthor {
+    Witness,
+    Agent,
+}
+
+impl ShapeAuthor {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ShapeAuthor::Witness => "witness",
+            ShapeAuthor::Agent => "agent",
+        }
+    }
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "witness" => Some(ShapeAuthor::Witness),
+            "agent" => Some(ShapeAuthor::Agent),
+            _ => None,
+        }
+    }
+}
+
+/// One row of `shape_vectors`. The embedding stays inside `Memory`;
+/// callers work with the metadata + gloss text.
+#[derive(Debug, Clone)]
+pub struct ShapeRow {
+    pub note_id: String,
+    pub file_path: String,
+    pub gloss: String,
+    pub author: ShapeAuthor,
+    pub model_id: String,
+    pub prompt_hash: String,
+    pub at: String,
 }
 
 /// Mirror of one `rejections.jsonl` line, used only for the startup
@@ -340,7 +378,19 @@ impl Memory {
                  embedding    BLOB NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_rejection_vectors_turn
-               ON rejection_vectors (turn);",
+               ON rejection_vectors (turn);
+             CREATE TABLE IF NOT EXISTS shape_vectors (
+                 note_id      TEXT PRIMARY KEY,
+                 file_path    TEXT NOT NULL,
+                 gloss        TEXT NOT NULL,
+                 author       TEXT NOT NULL,
+                 model_id     TEXT NOT NULL,
+                 prompt_hash  TEXT NOT NULL,
+                 embedding    BLOB NOT NULL,
+                 at           TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_shape_vectors_file
+               ON shape_vectors (file_path);",
         )?;
         migrate_extraction_queue(&mut conn)?;
 
@@ -1226,6 +1276,183 @@ impl Memory {
     /// append succeeds, so failure here never blocks the rejection
     /// itself. Duplicate candidate_ids are ignored (the startup rebuild
     /// races with a live write in exactly this way).
+    /// Upsert a `shape_vectors` row. Embeds `gloss` internally via
+    /// the memory embedder. Author is `Witness` for gloss-worker
+    /// writes, `Agent` for values pulled from a note's `shape:`
+    /// frontmatter (in which case `model_id="agent"` and
+    /// `prompt_hash=""` by convention).
+    pub async fn upsert_shape(
+        &self,
+        note_id: &str,
+        file_path: &str,
+        gloss: &str,
+        author: ShapeAuthor,
+        model_id: &str,
+        prompt_hash: &str,
+    ) -> anyhow::Result<()> {
+        let vector = self
+            .embedder
+            .embed(&[gloss.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))?;
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let at = jiff::Timestamp::now().to_string();
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            "INSERT INTO shape_vectors
+               (note_id, file_path, gloss, author, model_id, prompt_hash, embedding, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(note_id) DO UPDATE SET
+               file_path = excluded.file_path,
+               gloss = excluded.gloss,
+               author = excluded.author,
+               model_id = excluded.model_id,
+               prompt_hash = excluded.prompt_hash,
+               embedding = excluded.embedding,
+               at = excluded.at",
+            rusqlite::params![
+                note_id,
+                file_path,
+                gloss,
+                author.as_str(),
+                model_id,
+                prompt_hash,
+                blob,
+                at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Read one `shape_vectors` row by `note_id`; `None` if absent.
+    pub fn read_shape(&self, note_id: &str) -> anyhow::Result<Option<ShapeRow>> {
+        let db = self.db.lock().expect("db lock");
+        let row: Option<(String, String, String, String, String, String, String)> = db
+            .query_row(
+                "SELECT note_id, file_path, gloss, author, model_id, prompt_hash, at
+                 FROM shape_vectors WHERE note_id = ?1",
+                [note_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((note_id, file_path, gloss, author, model_id, prompt_hash, at)) = row else {
+            return Ok(None);
+        };
+        let author = ShapeAuthor::parse(&author)
+            .ok_or_else(|| anyhow::anyhow!("unknown shape author: {author:?}"))?;
+        Ok(Some(ShapeRow {
+            note_id,
+            file_path,
+            gloss,
+            author,
+            model_id,
+            prompt_hash,
+            at,
+        }))
+    }
+
+    /// All `shape_vectors` rows — used by the drift-repair startup
+    /// scan and by tests. Order unspecified.
+    pub fn list_shape_rows(&self) -> anyhow::Result<Vec<ShapeRow>> {
+        let db = self.db.lock().expect("db lock");
+        let mut stmt = db.prepare(
+            "SELECT note_id, file_path, gloss, author, model_id, prompt_hash, at
+             FROM shape_vectors",
+        )?;
+        let rows: Vec<(String, String, String, String, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        rows.into_iter()
+            .map(
+                |(note_id, file_path, gloss, author, model_id, prompt_hash, at)| {
+                    let author = ShapeAuthor::parse(&author).ok_or_else(|| {
+                        anyhow::anyhow!("unknown shape author: {author:?}")
+                    })?;
+                    Ok(ShapeRow {
+                        note_id,
+                        file_path,
+                        gloss,
+                        author,
+                        model_id,
+                        prompt_hash,
+                        at,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    /// Delete every `shape_vectors` row whose `file_path` matches.
+    /// Called by the sync service when an atomic is removed.
+    pub fn delete_shape_by_path(&self, file_path: &str) -> anyhow::Result<()> {
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            "DELETE FROM shape_vectors WHERE file_path = ?1",
+            [file_path],
+        )?;
+        Ok(())
+    }
+
+    /// Top-K shape neighbors by cosine over an already-embedded query
+    /// vector. Bridge (`flashes.rs::types::bridge`) embeds the turn's
+    /// shape gloss once and reuses the vector across candidates.
+    /// Rows whose stored vector length disagrees with the query
+    /// (embedding-model dim change) are silently skipped.
+    pub fn search_shapes(
+        &self,
+        query_vec: &[f32],
+        k: usize,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(String, Vec<u8>)> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt = db.prepare("SELECT note_id, embedding FROM shape_vectors")?;
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let expected_bytes = query_vec.len() * 4;
+        let mut hits: Vec<(String, f32)> = rows
+            .into_iter()
+            .filter_map(|(note_id, blob)| {
+                if blob.len() != expected_bytes {
+                    return None;
+                }
+                let vector: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                Some((note_id, cosine(query_vec, &vector)))
+            })
+            .collect();
+        hits.sort_by(|a, b| b.1.total_cmp(&a.1));
+        hits.truncate(k);
+        Ok(hits)
+    }
+
     pub async fn insert_rejection_vector(
         &self,
         candidate_id: &str,
@@ -1759,6 +1986,113 @@ pub mod tests {
                 FakeEmbedder.embed(texts).await
             })
         }
+    }
+
+    #[tokio::test]
+    async fn upsert_shape_and_read_shape_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.upsert_shape(
+            "01ATOM",
+            "knowledge/01ATOM.md",
+            "a proxy under optimization pressure diverges",
+            ShapeAuthor::Witness,
+            "haiku-4.5",
+            "abc123",
+        )
+        .await
+        .unwrap();
+
+        let row = mem.read_shape("01ATOM").unwrap().expect("row present");
+        assert_eq!(row.note_id, "01ATOM");
+        assert_eq!(row.file_path, "knowledge/01ATOM.md");
+        assert_eq!(row.gloss, "a proxy under optimization pressure diverges");
+        assert_eq!(row.author, ShapeAuthor::Witness);
+        assert_eq!(row.model_id, "haiku-4.5");
+        assert_eq!(row.prompt_hash, "abc123");
+        assert!(!row.at.is_empty());
+
+        // Upsert (same note_id) replaces.
+        mem.upsert_shape(
+            "01ATOM",
+            "knowledge/01ATOM.md",
+            "a different skeleton",
+            ShapeAuthor::Agent,
+            "agent",
+            "",
+        )
+        .await
+        .unwrap();
+        let row = mem.read_shape("01ATOM").unwrap().unwrap();
+        assert_eq!(row.gloss, "a different skeleton");
+        assert_eq!(row.author, ShapeAuthor::Agent);
+    }
+
+    #[tokio::test]
+    async fn read_shape_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        assert!(mem.read_shape("01NOSUCH").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn search_shapes_ranks_by_cosine() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // FakeEmbedder is letter-histogram; craft glosses whose letter
+        // content ranks predictably.
+        mem.upsert_shape("A", "knowledge/A.md", "aaaa bbbb", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+        mem.upsert_shape("B", "knowledge/B.md", "aaaa cccc", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+        mem.upsert_shape("C", "knowledge/C.md", "xxxx yyyy", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+
+        let query_vec = FakeEmbedder
+            .embed(&["aaaa bbbb".into()])
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let hits = mem.search_shapes(&query_vec, 2).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, "A", "closest wins");
+        assert!(hits[0].1 > hits[1].1);
+        assert_ne!(hits[1].0, "C", "unrelated shape excluded from top-2");
+    }
+
+    #[tokio::test]
+    async fn list_shape_rows_returns_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.upsert_shape("A", "knowledge/A.md", "g1", ShapeAuthor::Witness, "m1", "h1")
+            .await
+            .unwrap();
+        mem.upsert_shape("B", "knowledge/B.md", "g2", ShapeAuthor::Agent, "agent", "")
+            .await
+            .unwrap();
+        let rows = mem.list_shape_rows().unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_id: std::collections::HashMap<String, ShapeRow> =
+            rows.into_iter().map(|r| (r.note_id.clone(), r)).collect();
+        assert_eq!(by_id["A"].author, ShapeAuthor::Witness);
+        assert_eq!(by_id["B"].author, ShapeAuthor::Agent);
+    }
+
+    #[tokio::test]
+    async fn delete_shape_by_path_removes_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        mem.upsert_shape("A", "knowledge/A.md", "g", ShapeAuthor::Witness, "m", "h")
+            .await
+            .unwrap();
+        assert!(mem.read_shape("A").unwrap().is_some());
+        mem.delete_shape_by_path("knowledge/A.md").unwrap();
+        assert!(mem.read_shape("A").unwrap().is_none());
     }
 
     #[tokio::test]
