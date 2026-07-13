@@ -6,18 +6,20 @@ concurrent task in the same binary, subscribed to the same event bus,
 with its own model assignment (often a smaller, cheaper model than the
 agent's; the work is summarization, not reasoning).
 
-It has four duties: **moves**, **gleaning**, **connecting**, and
+It has four duties: **moves**, **gleaning**, **flashes**, and
 **shape**. Compression of the record, the harvest of its margins,
-the retrieval of already-written knowledge the current turn resonates
-with, and the composition of one-line skeletons of atomic notes for
-the derived `shape_vectors` table (ch. 02). It writes to the moves
-file, the extraction queue, its own receipt logs
-(`glean-log.jsonl`, `connect-log.jsonl`, `shape-log.jsonl`, and the
-derived `rejection_vectors`/`shape_vectors` tables, ch. 10). Connect
-frames it produces are routed through the turn loop so the
-single-writer invariant on `turns.jsonl` (ch. 10) is preserved. It
-never writes to the agent's knowledge, never speaks on channels,
-never touches tools.
+the per-turn flash pass over a small feature space of signals
+(spec `2026-07-13-flash-subsystem-design.md` — four types ship:
+Connection, Echo, Return, Bridge; Correction is stubbed), and the
+composition of one-line skeletons of atomic notes for the derived
+`shape_vectors` table (ch. 02). It writes to the moves file, the
+extraction queue, its own receipt logs (`glean-log.jsonl`,
+`flashes.jsonl`, `shape-log.jsonl`, and the derived
+`rejection_vectors`/`shape_vectors` tables, ch. 10). Flash frames
+it produces are routed through the turn loop so the single-writer
+invariant on `turns.jsonl` (ch. 10) is preserved. It never writes
+to the agent's knowledge, never speaks on channels, never touches
+tools.
 
 ## Prompt-driven, entirely
 
@@ -33,9 +35,13 @@ workspace/witness/
   on-glean.md       produces extraction candidates (template vars:
                     {recent_record}, {recent_rejections},
                     {similar_rejections}) — optional
-  on-connect.md     composes a one-sentence connection why (template
-                    vars: {transcript}, {target_path},
-                    {target_excerpt}) — optional
+  flashes/
+    on-connection.md  Connection type's compose-why prompt (template
+                      vars: {transcript}, {target_path},
+                      {target_excerpt}) — optional; missing disables
+                      Connection specifically. Other flash types
+                      (Echo, Return, Bridge, Correction) use fixed
+                      templates and don't read a prompt.
   on-shape.md       composes a one-line logical skeleton of an atomic
                     (template var: {note_body}) — optional; missing
                     file disables the shape duty and leaves the

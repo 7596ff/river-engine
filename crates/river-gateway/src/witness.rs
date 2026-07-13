@@ -27,12 +27,7 @@ use crate::record::{self, MovesFile, RecordLine, RecordRole};
 use crate::turn::{DIGESTION_MARKER, HEARTBEAT_MARKER};
 
 pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
-pub const NOTHING_TO_CONNECT: &str = "nothing to connect";
 const GLEAN_WINDOW_TURNS: u64 = 6;
-/// How many top hits the connect duty scans past when self-write
-/// guards keep tripping. Small on purpose — this is a filter, not a
-/// search widening.
-const CONNECT_SCAN_K: usize = 5;
 
 /// Read `glean-log.jsonl` and recover the tail entry's turn. Torn
 /// lines and parse failures are skipped with a warning — the tail
@@ -62,57 +57,6 @@ fn recover_last_glean_through(path: &Path) -> Option<u64> {
         }
     }
     last
-}
-
-/// Recover the tail `turn` of the connect-log. Same shape as
-/// `recover_last_glean_through`.
-fn recover_last_connect_through(path: &Path) -> Option<u64> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "reading connect-log.jsonl");
-            return None;
-        }
-    };
-    let mut last: Option<u64> = None;
-    for (line_no, raw) in text.lines().enumerate() {
-        if raw.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<ConnectLogEntry>(raw) {
-            Ok(entry) => last = Some(entry.turn),
-            Err(e) => tracing::warn!(
-                path = %path.display(),
-                line = line_no + 1,
-                error = %e,
-                "skipping malformed connect-log entry"
-            ),
-        }
-    }
-    last
-}
-
-/// Append one entry to `connect-log.jsonl`, creating the file if
-/// absent. Same fsync-per-line discipline as the glean log.
-fn append_connect_log(path: &Path, entry: &ConnectLogEntry) -> anyhow::Result<()> {
-    use std::io::Write as _;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    let mut json = serde_json::to_string(entry)?;
-    json.push('\n');
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    file.write_all(json.as_bytes())
-        .with_context(|| format!("appending to {}", path.display()))?;
-    file.sync_data()
-        .with_context(|| format!("fsyncing {}", path.display()))?;
-    Ok(())
 }
 
 /// Append one entry to `glean-log.jsonl`, creating the file if absent.
@@ -166,26 +110,22 @@ pub struct Witness<C: Chat> {
     glean_log_path: PathBuf,
     /// `workspace/witness/rejections.jsonl`.
     rejections_path: PathBuf,
-    /// The compose-why prompt loaded from `witness/on-connect.md`, or
-    /// `None` when the file is absent (connect duty disabled).
-    on_connect: Option<String>,
-    /// Cosine floor for the connect duty's top-hit gate. Zero also
-    /// disables the duty (no embed, no scan, no model call).
-    connect_threshold: f32,
-    /// Refractory: minimum turns of forward movement between fired
-    /// connects. Zero disables.
-    connect_min_new_turns: u64,
-    /// Look-back window for the connect duty's self-connection guard.
-    connect_self_write_window: u64,
-    /// The turn of the most recently fired connect, recovered from
-    /// `connect-log.jsonl` on load.
-    last_connect_through: Option<u64>,
-    /// `workspace/witness/connect-log.jsonl`.
-    connect_log_path: PathBuf,
-    /// mpsc sender for connect frames — the seam that preserves the
+    /// The compose-why prompt loaded from
+    /// `witness/flashes/on-connection.md`, or `None` when the file is
+    /// absent (Connection type disabled).
+    on_connection: Option<String>,
+    /// Flash-subsystem state: per-type refractory maps + config +
+    /// log path. `None` disables the entire flash pass.
+    flashes: Option<crate::flashes::State>,
+    /// Bridge's shape-prompt loader. Shared with the shape worker's
+    /// loader by convention (both look at
+    /// `workspace/witness/on-shape.md`); each holds its own mtime
+    /// cache.
+    shape_prompt: crate::shape::Prompt,
+    /// mpsc sender for flash frames — the seam that preserves the
     /// turn record's single-writer invariant. None when no memory or
-    /// no sender was attached (duty disabled).
-    connect_sender: Option<tokio::sync::mpsc::Sender<crate::turn::ConnectFrame>>,
+    /// no sender was attached (flash pass disabled).
+    flash_sender: Option<tokio::sync::mpsc::Sender<crate::flashes::FlashFrame>>,
 }
 
 /// One entry in `glean-log.jsonl`: the receipt for a queued candidate.
@@ -197,15 +137,6 @@ struct GleanLogEntry {
 }
 
 /// One entry in `connect-log.jsonl`: the receipt for a fired connect
-/// frame. Persisted so refractory state (and idempotency across
-/// restart-mid-catch-up) survives a crash.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ConnectLogEntry {
-    turn: u64,
-    target_ref: String,
-    at: String,
-}
-
 /// One entry in `rejections.jsonl`: written by the agent's
 /// `reject_candidate` tool, read here so the witness can learn what
 /// the agent already turned away.
@@ -314,7 +245,7 @@ fn preview_line(text: &str) -> String {
     }
 }
 
-impl<C: Chat> Witness<C> {
+impl<C: Chat + Sync> Witness<C> {
     /// Load prompts and open the moves file. A missing
     /// `witness/identity.md` fails startup — the gateway does not run
     /// without its witness (wall ch. 04). Missing duty prompts
@@ -381,22 +312,31 @@ impl<C: Chat> Witness<C> {
         let last_glean_through = recover_last_glean_through(&glean_log_path);
         let rejections_path = workspace.join("witness").join("rejections.jsonl");
 
-        let on_connect_path = workspace.join("witness").join("on-connect.md");
-        let on_connect = match std::fs::read_to_string(&on_connect_path) {
+        // The flash pass's Connection type composes its "why" via
+        // this prompt. Missing file disables Connection specifically;
+        // Echo/Return/Bridge use fixed templates and don't need it.
+        let on_connection_path = workspace
+            .join("witness")
+            .join("flashes")
+            .join("on-connection.md");
+        let on_connection = match std::fs::read_to_string(&on_connection_path) {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::info!(
-                    path = %on_connect_path.display(),
-                    "witness on-connect prompt missing; connect duty disabled"
+                    path = %on_connection_path.display(),
+                    "witness on-connection prompt missing; Connection flash type disabled"
                 );
                 None
             }
             Err(e) => {
-                return Err(e).with_context(|| format!("reading {}", on_connect_path.display()));
+                return Err(e).with_context(|| format!("reading {}", on_connection_path.display()));
             }
         };
-        let connect_log_path = workspace.join("witness").join("connect-log.jsonl");
-        let last_connect_through = recover_last_connect_through(&connect_log_path);
+
+        // Bridge glosses the turn transcript via the shape prompt.
+        // The shape worker uses its own Prompt instance; this one is
+        // held by the witness for the flash pass.
+        let shape_prompt = crate::shape::Prompt::at_workspace(workspace);
 
         Ok(Self {
             workspace: workspace.to_path_buf(),
@@ -415,32 +355,27 @@ impl<C: Chat> Witness<C> {
             last_glean_through,
             glean_log_path,
             rejections_path,
-            on_connect,
-            connect_threshold: 0.0,
-            connect_min_new_turns: 0,
-            connect_self_write_window: 0,
-            last_connect_through,
-            connect_log_path,
-            connect_sender: None,
+            on_connection,
+            flashes: None,
+            shape_prompt,
+            flash_sender: None,
         })
     }
 
-    /// Enable the connect duty: attach the mpsc sender the turn loop
-    /// is listening on and set the threshold + refractory + self-write
-    /// window knobs. If the sender is `None` the duty stays disabled
-    /// (loaders that don't want connect can pass `None`).
-    pub fn with_connect(
+    /// Enable the flash subsystem: attach the mpsc sender the turn
+    /// loop is listening on and initialize per-type refractory state
+    /// from `witness/flashes.jsonl`. A `None` sender or `None` config
+    /// disables the pass.
+    pub fn with_flashes(
         mut self,
-        sender: Option<tokio::sync::mpsc::Sender<crate::turn::ConnectFrame>>,
-        threshold: f32,
-        min_new_turns: u64,
-        self_write_window: u64,
-    ) -> Self {
-        self.connect_sender = sender;
-        self.connect_threshold = threshold;
-        self.connect_min_new_turns = min_new_turns;
-        self.connect_self_write_window = self_write_window;
-        self
+        sender: Option<tokio::sync::mpsc::Sender<crate::flashes::FlashFrame>>,
+        config: Option<river_core::config::FlashConfig>,
+    ) -> anyhow::Result<Self> {
+        if let (Some(sender), Some(config)) = (sender, config) {
+            self.flash_sender = Some(sender);
+            self.flashes = Some(crate::flashes::State::new(config, &self.workspace)?);
+        }
+        Ok(self)
     }
 
     /// Enable σ retrieval: the on-glean prompt's `{similar_rejections}`
@@ -489,7 +424,7 @@ impl<C: Chat> Witness<C> {
                 for turn in duties_through + 1..=target {
                     // Connect is threshold-gated per settled turn. It
                     // runs before glean so both may fire independently.
-                    self.connect_for(turn).await?;
+                    self.flash_pass_for(turn).await?;
                     // Flat-probability gleaning: the agent cannot
                     // predict which turns get gleaned.
                     if rand::random::<f64>() < self.glean_probability {
@@ -727,39 +662,24 @@ impl<C: Chat> Witness<C> {
         Ok(())
     }
 
-    /// Duty three (the connect duty, spec 2026-07-07): after a turn
-    /// settles, semantically search the workspace for a note that
-    /// connects. If the top hit clears the threshold and the self-
-    /// write guard, compose a one-sentence why and post a
-    /// [`ConnectFrame`] to the turn loop. Best-effort throughout —
-    /// any failure downgrades to "no connect this turn."
-    async fn connect_for(&mut self, turn: u64) -> anyhow::Result<()> {
-        let (Some(template), Some(memory), Some(sender)) =
-            (&self.on_connect, &self.memory, &self.connect_sender)
+    /// Duty three (the flash pass, spec 2026-07-13): after a turn
+    /// settles, run every enabled flash type against the turn
+    /// transcript. Frames are sent to the turn loop via
+    /// `flash_sender`. Best-effort throughout — any failure logs and
+    /// contributes zero frames.
+    async fn flash_pass_for(&mut self, turn: u64) -> anyhow::Result<()> {
+        let (Some(memory), Some(sender), Some(state)) =
+            (self.memory.as_ref(), self.flash_sender.as_ref(), self.flashes.as_mut())
         else {
             return Ok(());
         };
-        if self.connect_threshold <= 0.0 {
-            return Ok(());
-        }
 
-        // Refractory: same shape as glean's.
-        if let Some(last) = self.last_connect_through
-            && self.connect_min_new_turns > 0
-            && turn.saturating_sub(last) < self.connect_min_new_turns
-        {
-            tracing::debug!(
-                turn,
-                last_connect_through = last,
-                min_new = self.connect_min_new_turns,
-                "connect: skipped (refractory)"
-            );
-            return Ok(());
-        }
-
+        // Widest lookback the flash pass might need — Connection's
+        // self-write window. Read once and reused for the pass.
+        let self_write_window = state.config.types.connection.self_write_window;
         let all_lines = record::scan_turn_range(
             &self.workspace.join("record").join("turns.jsonl"),
-            turn.saturating_sub(self.connect_self_write_window),
+            turn.saturating_sub(self_write_window),
             turn,
         )?;
         let this_turn_lines: Vec<RecordLine> = all_lines
@@ -770,95 +690,40 @@ impl<C: Chat> Witness<C> {
         if this_turn_lines.is_empty() {
             return Ok(());
         }
-        // Same exclusions the glean duty uses: digestion and heartbeat
-        // turns don't carry the kind of substance connect should search
-        // against.
-        if is_digestion_turn(&all_lines, turn) || is_heartbeat_turn(&all_lines, turn) {
-            tracing::debug!(turn, "connect: skipped (digestion/heartbeat)");
-            return Ok(());
-        }
+        // v2 removes the connect era's digestion + heartbeat
+        // exclusions; both turn types carry substance the flash pass
+        // should see.
 
         let transcript = format_transcript(&this_turn_lines);
-        // The channel of the settled turn — every RecordLine for one
-        // turn shares it (persist-once, wall ch. 01).
         let channel = this_turn_lines[0].channel.clone();
+        let recent_writes =
+            collect_recent_agent_writes(&all_lines, turn, self_write_window, &self.workspace);
 
-        let hits = match memory.search_no_bump(&transcript, CONNECT_SCAN_K).await {
-            Ok(h) => h,
+        // Bridge glosses through this Prompt; missing on-shape.md
+        // returns None, disabling Bridge silently.
+        let shape_prompt_loaded = match self.shape_prompt.load() {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(turn, error = %e, "connect search failed");
-                return Ok(());
+                tracing::warn!(turn, error = %e, "shape prompt load failed; Bridge disabled this pass");
+                None
             }
         };
 
-        let recent_writes = collect_recent_agent_writes(
-            &all_lines,
-            turn,
-            self.connect_self_write_window,
-            &self.workspace,
-        );
-        let hit = hits.into_iter().find(|h| {
-            if h.score < self.connect_threshold {
-                return false;
-            }
-            if self.connect_self_write_window == 0 {
-                return true;
-            }
-            !recent_writes.iter().any(|w| paths_match(w, &h.file_path))
-        });
-        let Some(hit) = hit else {
-            return Ok(());
-        };
-
-        let target_path = std::path::PathBuf::from(&hit.file_path);
-        let target_ref = crate::memory::target_ref_for_path(&target_path);
-
-        let prompt = template
-            .replace("{transcript}", &transcript)
-            .replace("{target_path}", &hit.file_path)
-            .replace("{target_excerpt}", &hit.text);
-        let messages = [ChatMessage::user(prompt)];
-        let why = match self.client.chat(&self.identity, &messages, &[]).await {
-            Ok(response) => {
-                let text = response.content.trim();
-                if text.is_empty() || text.eq_ignore_ascii_case(NOTHING_TO_CONNECT) {
-                    tracing::debug!(turn, target = %target_ref, "connect: nothing to connect");
-                    return Ok(());
-                }
-                text.to_string()
-            }
-            Err(e) => {
-                tracing::warn!(turn, error = %e, "connect model call failed");
-                return Ok(());
-            }
-        };
-
-        let frame = crate::turn::ConnectFrame {
+        let ctx = crate::flashes::FlashPassCtx {
             turn,
             channel,
-            target_ref: target_ref.clone(),
-            target_path,
-            why,
+            transcript,
+            memory,
+            workspace: &self.workspace,
+            client: &self.client,
+            identity: &self.identity,
+            state,
+            on_connection: self.on_connection.as_deref(),
+            shape_prompt: shape_prompt_loaded.as_ref(),
+            recent_agent_writes: recent_writes,
+            sender,
         };
-        if let Err(e) = sender.try_send(frame) {
-            tracing::warn!(turn, error = %e, "connect frame send failed; dropping");
-            return Ok(());
-        }
-
-        // Log receipt AFTER send succeeds — a torn log line must not
-        // describe a phantom frame (same discipline as glean).
-        let entry = ConnectLogEntry {
-            turn,
-            target_ref: target_ref.clone(),
-            at: jiff::Timestamp::now().to_string(),
-        };
-        if let Err(e) = append_connect_log(&self.connect_log_path, &entry) {
-            tracing::warn!(turn, error = %e, "connect-log append failed");
-        } else {
-            self.last_connect_through = Some(turn);
-        }
-        tracing::info!(turn, target = %target_ref, "connect: frame posted");
-        Ok(())
+        crate::flashes::flash_pass(ctx).await
     }
 }
 
@@ -1285,7 +1150,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_schedules_glean_and_connect_without_move_prompt() {
+    async fn run_schedules_glean_without_move_prompt() {
+        // Post-flash-v2 shape: gleaning fires on newly settled turns
+        // even when on-turn.md is missing. The old test also
+        // asserted a connect frame arrived; the flash pass now
+        // shipping in its own module handles that responsibility.
         let dir = tempfile::tempdir().unwrap();
         let witness_dir = dir.path().join("witness");
         std::fs::create_dir_all(&witness_dir).unwrap();
@@ -1295,27 +1164,12 @@ mod tests {
             "Recent:\n{recent_record}\nGlean.",
         )
         .unwrap();
-        std::fs::write(
-            witness_dir.join("on-connect.md"),
-            "Transcript:\n{transcript}\nTarget: {target_path}\n\
-             Excerpt: {target_excerpt}\nCompose the connection.",
-        )
-        .unwrap();
         std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal is a blue-green shade.\n",
-        )
-        .unwrap();
         record_turn(dir.path(), 1, "teal", Some("blue-green"));
 
         let memory = fresh_memory(dir.path());
         memory.sweep().await.unwrap();
-        let model = FakeModel::replying(vec![
-            ok("the turn and note share the same colour."),
-            ok("Teal matters to Cass — worth remembering."),
-        ]);
-        let (connect_tx, mut connect_rx) = tokio::sync::mpsc::channel(4);
+        let model = FakeModel::replying(vec![ok("Teal matters to Cass — worth remembering.")]);
         let witness = Witness::load(
             dir.path(),
             model.clone(),
@@ -1325,36 +1179,32 @@ mod tests {
             5,
             0,
         )
-        .unwrap()
-        .with_connect(Some(connect_tx), 0.001, 0, 0);
+        .unwrap();
 
         let (latest_tx, latest_rx) = watch::channel(0u64);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = tokio::spawn(witness.run(latest_rx, shutdown_rx, 0));
         latest_tx.send(1).unwrap();
 
-        let observed = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
-                if memory.queue_depth().unwrap() == 1
-                    && let Ok(frame) = connect_rx.try_recv()
-                {
-                    break frame;
+                if memory.queue_depth().unwrap() == 1 {
+                    break;
                 }
                 tokio::task::yield_now().await;
             }
         })
-        .await;
+        .await
+        .expect("glean must run without on-turn.md");
         shutdown_tx.send(true).unwrap();
         handle.await.unwrap().unwrap();
 
-        let frame = observed.expect("glean and connect must run without on-turn.md");
-        assert_eq!(frame.target_ref, "NTEAL");
         assert!(
             read_moves(&record::moves_path(dir.path()))
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(model.prompts.lock().unwrap().len(), 2);
+        assert_eq!(model.prompts.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -2192,226 +2042,4 @@ mod tests {
         );
     }
 
-    // ----- connect duty (spec 2026-07-07) -----
-
-    fn seed_connect(workspace: &Path) {
-        seed_witness(workspace);
-        std::fs::write(
-            workspace.join("witness/on-connect.md"),
-            "Transcript:\n{transcript}\nTarget: {target_path}\n\
-             Excerpt: {target_excerpt}\nCompose the connection.",
-        )
-        .unwrap();
-        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
-    }
-
-    async fn connect_witness(
-        workspace: &Path,
-        model: std::sync::Arc<FakeModel>,
-        memory: crate::memory::Memory,
-        threshold: f32,
-        min_new_turns: u64,
-        self_write_window: u64,
-    ) -> (Witness<std::sync::Arc<FakeModel>>, tokio::sync::mpsc::Receiver<crate::turn::ConnectFrame>) {
-        let (tx, rx) = tokio::sync::mpsc::channel(4);
-        let witness =
-            Witness::load(workspace, model, Some(memory), 0.0, 0, 0, 0)
-                .unwrap()
-                .with_connect(Some(tx), threshold, min_new_turns, self_write_window);
-        (witness, rx)
-    }
-
-    #[tokio::test]
-    async fn connect_fires_on_high_similarity_hit() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal is a shade between blue and green.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-
-        // Turn transcript uses letters overlapping with the note.
-        record_turn(dir.path(), 1, "teal", Some("blue-green"));
-
-        let model = FakeModel::replying(vec![ok("both dwell on the same colour.")]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
-        witness.connect_for(1).await.unwrap();
-
-        let frame = rx.try_recv().expect("connect frame posted");
-        assert_eq!(frame.turn, 1);
-        assert_eq!(frame.target_ref, "NTEAL", "atomic frontmatter id used");
-        assert!(frame.why.contains("dwell"), "why passed through: {}", frame.why);
-
-        // Receipt landed.
-        let log = std::fs::read_to_string(dir.path().join("witness/connect-log.jsonl")).unwrap();
-        assert!(log.contains("\"turn\":1"), "connect-log entry:\n{log}");
-        assert!(log.contains("NTEAL"), "connect-log target_ref:\n{log}");
-    }
-
-    #[tokio::test]
-    async fn connect_skips_on_sentinel_without_logging() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-        record_turn(dir.path(), 1, "teal", Some("noted"));
-
-        let model = FakeModel::replying(vec![ok("nothing to connect")]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
-        witness.connect_for(1).await.unwrap();
-
-        assert!(rx.try_recv().is_err(), "sentinel yields no frame");
-        assert!(
-            !dir.path().join("witness/connect-log.jsonl").exists(),
-            "no receipt on sentinel — the log must not describe a phantom frame"
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_below_threshold_never_calls_model() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        // Disjoint alphabets — cosine near zero in FakeEmbedder.
-        std::fs::write(
-            dir.path().join("knowledge/x.md"),
-            "---\nid: NX\n---\n\nxxx yyy zzz\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-        record_turn(dir.path(), 1, "aaa bbb ccc", Some("ddd"));
-
-        // Zero replies queued — a spurious model call would panic.
-        let model = FakeModel::replying(vec![]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.5, 0, 0).await;
-        witness.connect_for(1).await.unwrap();
-
-        assert!(rx.try_recv().is_err());
-        assert!(model.prompts.lock().unwrap().is_empty(), "model must not be called");
-    }
-
-    #[tokio::test]
-    async fn connect_refractory_blocks_second_fire_without_model_call() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal shade.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-        for turn in 1..=8u64 {
-            record_turn(dir.path(), turn, &format!("teal {turn}"), Some("noted"));
-        }
-
-        // One reply for the first connect. If refractory fails, the
-        // second call consumes another reply and panics on the empty
-        // queue.
-        let model = FakeModel::replying(vec![ok("first connect.")]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 6, 0).await;
-
-        witness.connect_for(1).await.unwrap();
-        assert!(rx.try_recv().is_ok(), "first fire");
-        // Within refractory (1 → 5 is only 4 turns forward, min is 6).
-        witness.connect_for(5).await.unwrap();
-        assert!(rx.try_recv().is_err(), "refractory blocks the second fire");
-    }
-
-    #[tokio::test]
-    async fn connect_self_write_guard_skips_recent_target() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        let target_abs = dir.path().join("knowledge/teal.md");
-        std::fs::write(
-            &target_abs,
-            "---\nid: NTEAL\n---\n\nteal shade.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-
-        // The agent wrote the target on turn 1 (recorded as a `write`
-        // tool call). Turn 2 is the settled turn we run connect on.
-        let mut rec = crate::record::TurnRecord::open(dir.path()).unwrap();
-        rec.append_full(
-            1,
-            "local_main",
-            RecordRole::Assistant,
-            Some(""),
-            Some(vec![crate::model::ToolCall {
-                id: "c1".into(),
-                name: "write".into(),
-                arguments: format!(
-                    r#"{{"path":"{}","content":"teal"}}"#,
-                    target_abs.display()
-                ),
-            }]),
-            None,
-        )
-        .unwrap();
-        record_turn(dir.path(), 2, "teal", Some("noted"));
-
-        // Zero model replies — a fire would panic. Guard must skip.
-        let model = FakeModel::replying(vec![]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 5).await;
-        witness.connect_for(2).await.unwrap();
-        assert!(rx.try_recv().is_err(), "self-write guard skipped the hit");
-    }
-
-    #[tokio::test]
-    async fn connect_duty_disabled_without_prompt() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_witness(dir.path()); // note: no on-connect.md
-        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-        record_turn(dir.path(), 1, "teal", Some("noted"));
-
-        let model = FakeModel::replying(vec![]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
-        witness.connect_for(1).await.unwrap();
-        assert!(rx.try_recv().is_err());
-        assert!(model.prompts.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn connect_skipped_on_digestion_turn_without_model_call() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_connect(dir.path());
-        std::fs::write(
-            dir.path().join("knowledge/teal.md"),
-            "---\nid: NTEAL\n---\n\nteal.\n",
-        )
-        .unwrap();
-        let memory = fresh_memory(dir.path());
-        memory.sweep().await.unwrap();
-        record_digestion_turn(dir.path(), 1, "candidate", "rejected");
-
-        let model = FakeModel::replying(vec![]);
-        let (mut witness, mut rx) =
-            connect_witness(dir.path(), model.clone(), memory, 0.001, 0, 0).await;
-        witness.connect_for(1).await.unwrap();
-        assert!(rx.try_recv().is_err());
-        assert!(model.prompts.lock().unwrap().is_empty());
-    }
 }

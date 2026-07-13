@@ -185,12 +185,12 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         }
     }
 
-    // Flash duty pair (spec 2026-07-13): witness posts frames, turn
-    // loop lands them. Wired end-to-end when the flashes module
-    // lands in Phase C; for now the receiver stays hooked up so the
-    // turn loop keeps its receiver arg and no flashes fire until
-    // the pass exists.
-    let (_flash_tx, connect_rx) = tokio::sync::mpsc::channel(32);
+    // Flash pass (spec 2026-07-13): witness posts frames, turn loop
+    // lands them. Sender goes to the witness (via with_flashes);
+    // receiver rides into TurnLoop::new. `flash.enabled` is inferred
+    // from `agent.flash.is_some()` — missing block disables entirely.
+    let (flash_tx, flash_rx) = tokio::sync::mpsc::channel(32);
+    let flash_sender = agent.flash.as_ref().map(|_| flash_tx);
     let witness = witness::Witness::load(
         &agent.workspace,
         witness_client,
@@ -203,7 +203,8 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
     .with_similar_rejections(
         agent.witness.similar_rejections_top_k,
         agent.witness.similar_rejections_threshold,
-    );
+    )
+    .with_flashes(flash_sender, agent.flash.clone())?;
 
     // Shape subsystem: queue + worker. Created here so both the sync
     // service (Source 4) and TurnLoop's ToolContext for write_atomic
@@ -329,7 +330,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         discord_tx,
         working_tx,
         resume,
-        Some(connect_rx),
+        Some(flash_rx),
         agent.atomic.max_words,
         shape_write_tx,
     )?;

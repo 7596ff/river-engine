@@ -31,29 +31,17 @@ pub const LOCAL_ADAPTER: &str = "local";
 /// Marker prefix for the system frame the connect duty appends when
 /// it surfaces a workspace-note connection on a settled turn. Stable
 /// so tests, transcript formatting, and any future arc-layer reader
-/// can key on it (wall ch. 04 + the connect-duty spec).
+/// can key on it (wall ch. 04 + the flash spec 2026-07-13). Legacy
+/// `[connect]` lines predating the flash pass remain in the record
+/// and are still recognized by tools that scan for it.
 pub const CONNECT_MARKER: &str = "[connect]";
-/// Word cap for the non-atomic body policy of a [connect] frame.
-pub(crate) const CONNECT_BODY_WORD_CAP: usize = 200;
-
-/// A connection the witness noticed on a settled turn. Posted from
-/// the witness's connect duty to the turn loop via mpsc; the turn
-/// loop writes a `RecordRole::System` line to turn N's record and (if
-/// N is still in HOT) synthesises the same line into the live window.
-#[derive(Debug, Clone)]
-pub struct ConnectFrame {
-    /// The settled turn the connection is about.
-    pub turn: u64,
-    /// The channel of turn N (mirrors the record line's channel field).
-    pub channel: String,
-    /// Wikilink target: frontmatter id if present, else filename stem.
-    pub target_ref: String,
-    /// Workspace-absolute path of the target file — the turn loop
-    /// reads it to render the frame body.
-    pub target_path: PathBuf,
-    /// The witness's one-sentence why.
-    pub why: String,
-}
+/// The prefix flash frames use on the record's system-role line
+/// (per-type: `[flash: connection]`, `[flash: echo]`, etc). Kept as
+/// a const so scanners can key on the common prefix.
+pub const FLASH_MARKER_PREFIX: &str = "[flash:";
+/// Re-exported so callers can pattern-match `FlashType` without a
+/// second `use` line.
+pub use crate::flashes::{FlashFrame, FlashType};
 
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
@@ -158,7 +146,7 @@ pub struct TurnLoop<C: Chat> {
     /// line to the referenced turn's record and (if the turn is still
     /// in HOT) synthesises the same line into the live window.
     /// `None` when no witness/memory is configured.
-    connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
+    flash_frames: Option<mpsc::Receiver<FlashFrame>>,
     atomic_max_words: usize,
     shape_queue: Option<mpsc::Sender<crate::shape::GlossJob>>,
 }
@@ -186,7 +174,7 @@ impl<C: Chat> TurnLoop<C> {
         discord: Option<mpsc::Sender<crate::discord::SpeakRequest>>,
         working: watch::Sender<Option<String>>,
         resume: Option<crate::session::SessionSnapshot>,
-        connect_frames: Option<mpsc::Receiver<ConnectFrame>>,
+        flash_frames: Option<mpsc::Receiver<FlashFrame>>,
         atomic_max_words: usize,
         shape_queue: Option<mpsc::Sender<crate::shape::GlossJob>>,
     ) -> anyhow::Result<Self> {
@@ -284,7 +272,7 @@ impl<C: Chat> TurnLoop<C> {
             compact_requested: Arc::new(AtomicBool::new(false)),
             arc_dirty: Arc::new(AtomicBool::new(false)),
             warned_high: false,
-            connect_frames,
+            flash_frames,
             atomic_max_words,
             shape_queue,
         })
@@ -387,7 +375,7 @@ impl<C: Chat> TurnLoop<C> {
         // [connect] system line to the referenced turn's record and
         // (if the turn is still in HOT) synthesises the same line into
         // the live window so the model sees it on the very next call.
-        self.drain_connect_frames();
+        self.drain_flash_frames();
 
         self.turn_number += 1;
         let n = self.turn_number;
@@ -800,34 +788,20 @@ impl<C: Chat> TurnLoop<C> {
         Ok(())
     }
 
-    /// Non-blocking drain of the connect-frame receiver. For each
-    /// frame, compose the body per policy, append a `[connect]` system
-    /// line to the referenced turn's record, and (when the referenced
-    /// turn is still in HOT) synthesise the same line into the live
-    /// window so it is visible on the very next model call.
-    fn drain_connect_frames(&mut self) {
-        let Some(rx) = self.connect_frames.as_mut() else {
+    /// Non-blocking drain of the flash-frame receiver. Each frame's
+    /// body is pre-formatted by the per-type module in flashes.rs
+    /// (target head appended, capped per wall ch. 02); this just
+    /// appends it as a system-role line on the referenced turn's
+    /// record and (when the referenced turn is still in HOT)
+    /// synthesises the same line into the live window.
+    fn drain_flash_frames(&mut self) {
+        let Some(rx) = self.flash_frames.as_mut() else {
             return;
         };
         loop {
             match rx.try_recv() {
                 Ok(frame) => {
-                    let body = match build_connect_frame_body(&frame, &self.workspace) {
-                        Ok(body) => body,
-                        Err(e) => {
-                            tracing::warn!(
-                                turn = frame.turn,
-                                target = %frame.target_ref,
-                                error = %e,
-                                "connect body build failed; dropping frame"
-                            );
-                            continue;
-                        }
-                    };
-                    let content = format!(
-                        "{CONNECT_MARKER} turn {} connects to [[{}]]: {}\n\n{}",
-                        frame.turn, frame.target_ref, frame.why, body,
-                    );
+                    let content = frame.body.clone();
                     if let Err(e) = self.record.append_full(
                         frame.turn,
                         &frame.channel,
@@ -839,7 +813,7 @@ impl<C: Chat> TurnLoop<C> {
                         tracing::warn!(
                             turn = frame.turn,
                             error = %e,
-                            "connect frame record-append failed"
+                            "flash frame record-append failed"
                         );
                         continue;
                     }
@@ -849,12 +823,13 @@ impl<C: Chat> TurnLoop<C> {
                     tracing::info!(
                         turn = frame.turn,
                         target = %frame.target_ref,
-                        "connect frame landed"
+                        flash_type = frame.flash_type.as_str(),
+                        "flash frame landed"
                     );
                 }
                 Err(mpsc::error::TryRecvError::Empty) => return,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    self.connect_frames = None;
+                    self.flash_frames = None;
                     return;
                 }
             }
@@ -862,39 +837,11 @@ impl<C: Chat> TurnLoop<C> {
     }
 }
 
-/// Compose the body portion of a `[connect]` frame. If the target is
-/// an *atomic* note — path under `knowledge/` **and** YAML
-/// frontmatter with an `id` — return the file's full text.
-/// Otherwise return the first `CONNECT_BODY_WORD_CAP` whitespace-
-/// separated words, appending `…` when truncation happens.
-pub(crate) fn build_connect_frame_body(
-    frame: &ConnectFrame,
-    workspace: &Path,
-) -> anyhow::Result<String> {
-    let text = std::fs::read_to_string(&frame.target_path)?;
-    if is_atomic_note(&frame.target_path, workspace, &text) {
-        return Ok(text.trim_end().to_string());
-    }
-    let mut words = text.split_whitespace();
-    let mut taken: Vec<&str> = Vec::with_capacity(CONNECT_BODY_WORD_CAP);
-    for _ in 0..CONNECT_BODY_WORD_CAP {
-        match words.next() {
-            Some(w) => taken.push(w),
-            None => break,
-        }
-    }
-    let truncated = words.next().is_some();
-    let mut out = taken.join(" ");
-    if truncated {
-        out.push('…');
-    }
-    Ok(out)
-}
-
-/// A note is *atomic* iff it lives under `knowledge/` in the workspace
-/// **and** its file starts with YAML frontmatter carrying an `id`.
-/// The connect duty renders atomic bodies in full and truncates the
-/// rest.
+// A note is *atomic* iff it lives under `knowledge/` in the workspace
+// **and** its file starts with YAML frontmatter carrying an `id`.
+// Kept as a private helper only used by the (now-removed) tests below;
+// left here in case a future scanner wants the same check.
+#[allow(dead_code)]
 fn is_atomic_note(path: &Path, workspace: &Path, text: &str) -> bool {
     let Ok(rel) = path.strip_prefix(workspace) else {
         return false;
@@ -902,8 +849,6 @@ fn is_atomic_note(path: &Path, workspace: &Path, text: &str) -> bool {
     if rel.components().next().and_then(|c| c.as_os_str().to_str()) != Some("knowledge") {
         return false;
     }
-    // Mirror memory::frontmatter_id: `---` opener, `id:` before the
-    // matching closer.
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
         return false;
@@ -1812,93 +1757,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn connect_frame_body_renders_atomic_note_in_full() {
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
-        let target = ws.join("knowledge/teal.md");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        let full = "---\nid: NTEAL\n---\n\nteal is a shade between blue and green.\n";
-        std::fs::write(&target, full).unwrap();
-        let frame = ConnectFrame {
-            turn: 1,
-            channel: "local_main".into(),
-            target_ref: "NTEAL".into(),
-            target_path: target,
-            why: "same colour".into(),
-        };
-        let body = build_connect_frame_body(&frame, ws).unwrap();
-        assert!(body.contains("teal is a shade"), "full text preserved");
-        assert!(body.contains("---"), "frontmatter preserved for atomics");
-        assert!(!body.ends_with('…'), "no truncation ellipsis on atomics");
-    }
-
-    #[test]
-    fn connect_frame_body_truncates_non_atomic_at_word_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
-        let target = ws.join("loom/20260707-note.md");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        // 250 words — 50 past the cap.
-        let long = (0..250)
-            .map(|i| format!("w{i}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        std::fs::write(&target, &long).unwrap();
-        let frame = ConnectFrame {
-            turn: 1,
-            channel: "local_main".into(),
-            target_ref: "20260707-note".into(),
-            target_path: target,
-            why: "the loom chain".into(),
-        };
-        let body = build_connect_frame_body(&frame, ws).unwrap();
-        assert!(body.ends_with('…'), "truncation ellipsis appended");
-        assert!(body.contains("w0"), "starts at the beginning");
-        assert!(body.contains("w199"), "reaches the cap");
-        assert!(!body.contains("w200"), "cap is exclusive of the 201st word");
-    }
-
-    #[test]
-    fn connect_frame_body_non_atomic_short_file_is_not_ellipsised() {
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
-        let target = ws.join("loom/tiny.md");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        std::fs::write(&target, "just a few words here.").unwrap();
-        let frame = ConnectFrame {
-            turn: 1,
-            channel: "local_main".into(),
-            target_ref: "tiny".into(),
-            target_path: target,
-            why: "resonance".into(),
-        };
-        let body = build_connect_frame_body(&frame, ws).unwrap();
-        assert!(!body.ends_with('…'), "short files skip the ellipsis");
-        assert_eq!(body, "just a few words here.");
-    }
-
-    #[test]
-    fn connect_frame_body_knowledge_without_id_is_not_atomic() {
-        // Only frontmatter-id notes under knowledge/ count as atomic.
-        // A knowledge/ file without frontmatter still gets truncated.
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
-        let target = ws.join("knowledge/no-id.md");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        let long = (0..250)
-            .map(|i| format!("w{i}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        std::fs::write(&target, &long).unwrap();
-        let frame = ConnectFrame {
-            turn: 1,
-            channel: "local_main".into(),
-            target_ref: "no-id".into(),
-            target_path: target,
-            why: "resonance".into(),
-        };
-        let body = build_connect_frame_body(&frame, ws).unwrap();
-        assert!(body.ends_with('…'), "no frontmatter id → not atomic → truncate");
-    }
+    // Flash-frame body composition tests moved into flashes.rs
+    // per-type modules — the turn loop no longer builds bodies;
+    // it just appends frame.body as-is.
 }
