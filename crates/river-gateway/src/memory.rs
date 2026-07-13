@@ -745,7 +745,7 @@ impl Memory {
     /// intact. Used by witness-side retrieval (connect duty and σ)
     /// where the query is the current window's transcript and can
     /// legitimately exceed the embedding model's context.
-    async fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+    pub async fn embed_query(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         let mut cap = SEGMENT_HARD_CAP;
         loop {
             let capped = cap_chars(text, cap);
@@ -779,31 +779,83 @@ impl Memory {
             return Ok(Vec::new());
         }
         let query_vec = self.embed_query(query).await?;
+        self.search_no_bump_with_vec(&query_vec, top_k)
+    }
 
+    /// Cosine scan against `segments`, reusing an already-embedded
+    /// query vector. The flash pass embeds the transcript once and
+    /// threads the vec through this variant plus Bridge's per-
+    /// candidate text-sim check.
+    pub fn search_no_bump_with_vec(
+        &self,
+        query_vec: &[f32],
+        top_k: usize,
+    ) -> anyhow::Result<Vec<SearchHit>> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(String, String, Vec<u8>)> = {
             let db = self.db.lock().expect("db lock");
             let mut stmt = db.prepare("SELECT file_path, text, embedding FROM segments")?;
             stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                 .collect::<Result<_, _>>()?
         };
-
+        let expected_bytes = query_vec.len() * 4;
         let mut hits: Vec<SearchHit> = rows
             .into_iter()
-            .map(|(file_path, text, blob)| {
+            .filter_map(|(file_path, text, blob)| {
+                if blob.len() != expected_bytes {
+                    return None;
+                }
                 let vector: Vec<f32> = blob
                     .chunks_exact(4)
                     .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                     .collect();
-                SearchHit {
+                Some(SearchHit {
                     file_path,
                     text,
-                    score: cosine(&query_vec, &vector),
-                }
+                    score: cosine(query_vec, &vector),
+                })
             })
             .collect();
         hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         hits.truncate(top_k);
         Ok(hits)
+    }
+
+    /// Max cosine between `query_vec` and any segment of the file at
+    /// `candidate_path`. Bridge uses this to check `text_sim ≤
+    /// text_sim_max` for its shape-retrieved candidates without
+    /// re-embedding the transcript. A path with no `segments` rows
+    /// (unindexed, or recently added and not yet swept) returns
+    /// 0.0.
+    pub fn text_sim(&self, candidate_path: &str, query_vec: &[f32]) -> anyhow::Result<f32> {
+        let rows: Vec<Vec<u8>> = {
+            let db = self.db.lock().expect("db lock");
+            let mut stmt =
+                db.prepare("SELECT embedding FROM segments WHERE file_path = ?1")?;
+            stmt.query_map([candidate_path], |row| row.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        if rows.is_empty() {
+            return Ok(0.0);
+        }
+        let expected_bytes = query_vec.len() * 4;
+        let mut best: f32 = 0.0;
+        for blob in rows {
+            if blob.len() != expected_bytes {
+                continue;
+            }
+            let vector: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let sim = cosine(query_vec, &vector);
+            if sim > best {
+                best = sim;
+            }
+        }
+        Ok(best)
     }
 
     /// Top-k cosine over the stored vectors. Every hit is an ambient
@@ -2194,6 +2246,63 @@ pub mod tests {
         let (indexed, removed) = mem.sweep().await.unwrap();
         assert_eq!((indexed, removed), (1, 0));
         assert!(mem.read_shape("01ATOM").unwrap().is_none(), "no shape row without queue");
+    }
+
+    #[tokio::test]
+    async fn embed_query_is_public_and_returns_nonempty_vec() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let vec = mem.embed_query("hello world").await.unwrap();
+        assert!(!vec.is_empty());
+    }
+
+    #[tokio::test]
+    async fn text_sim_returns_max_cosine_over_candidate_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        // Write a note whose text has known letter content.
+        write_note(&k, "n.md", "01N", &[("extends", "01O")], "the heron waits in shallow water");
+        mem.sweep().await.unwrap();
+        let path = k.join("n.md").display().to_string();
+
+        // Query vec close to the file's content.
+        let close = mem.embed_query("heron heron water").await.unwrap();
+        let close_sim = mem.text_sim(&path, &close).unwrap();
+        assert!(close_sim > 0.0, "close query cosine: {close_sim}");
+
+        // Query vec far from it.
+        let far = mem.embed_query("xxxxxxxx yyyyyyyyy zzzzzzz").await.unwrap();
+        let far_sim = mem.text_sim(&path, &far).unwrap();
+        assert!(close_sim > far_sim, "close ({close_sim}) > far ({far_sim})");
+    }
+
+    #[tokio::test]
+    async fn text_sim_unknown_path_returns_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let query = mem.embed_query("anything").await.unwrap();
+        let sim = mem.text_sim("no/such/file.md", &query).unwrap();
+        assert_eq!(sim, 0.0);
+    }
+
+    #[tokio::test]
+    async fn search_no_bump_with_vec_matches_search_no_bump() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "01A", &[("extends", "01O")], "the heron waits");
+        write_note(&k, "b.md", "01B", &[("extends", "01O")], "the owl asks");
+        mem.sweep().await.unwrap();
+
+        let via_query = mem.search_no_bump("heron", 2).await.unwrap();
+        let vec = mem.embed_query("heron").await.unwrap();
+        let via_vec = mem.search_no_bump_with_vec(&vec, 2).unwrap();
+        assert_eq!(via_query.len(), via_vec.len());
+        for (a, b) in via_query.iter().zip(via_vec.iter()) {
+            assert_eq!(a.file_path, b.file_path);
+            assert!((a.score - b.score).abs() < 1e-6, "scores match: {} vs {}", a.score, b.score);
+        }
     }
 
     #[tokio::test]
