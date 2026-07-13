@@ -10,6 +10,7 @@ mod model;
 mod moments;
 mod record;
 mod session;
+mod shape;
 mod surface;
 mod tools;
 mod turn;
