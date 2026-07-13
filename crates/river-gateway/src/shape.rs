@@ -321,6 +321,42 @@ pub async fn process_one<C: Chat + Sync>(
     Ok(Some(gloss))
 }
 
+/// One receipt-log line for a completed gloss job. Append-only,
+/// torn-line tolerant (same shape as glean-log.jsonl,
+/// connect-log.jsonl).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShapeLogEntry {
+    pub note_id: String,
+    pub author: String,
+    pub model_id: String,
+    pub prompt_hash: String,
+    pub gloss: String,
+    pub reason: String,
+    pub at: String,
+}
+
+/// Append one receipt line to `workspace/witness/shape-log.jsonl`.
+/// Creates the parent directory if absent. Uses fsync per line so
+/// crash recovery has ground truth to work with.
+pub fn append_shape_log(workspace: &Path, entry: &ShapeLogEntry) -> anyhow::Result<()> {
+    let dir = workspace.join("witness");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join("shape-log.jsonl");
+    let mut json = serde_json::to_string(entry)?;
+    json.push('\n');
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("appending to {}", path.display()))?;
+    file.sync_data()
+        .with_context(|| format!("fsyncing {}", path.display()))?;
+    Ok(())
+}
+
 /// Read the `id:` line out of YAML frontmatter, tolerantly (matches
 /// the wall's link-resolution style — quoted or bare values both
 /// resolve to the bare ulid). Returns None when the file has no
@@ -504,6 +540,25 @@ mod tests {
         assert_eq!(row.author, ShapeAuthor::Witness);
         assert_eq!(row.model_id, "haiku-4.5");
         assert_eq!(row.prompt_hash, "abcdef");
+    }
+
+    #[test]
+    fn append_shape_log_writes_json_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = ShapeLogEntry {
+            note_id: "01ATOM".into(),
+            author: "witness".into(),
+            model_id: "haiku".into(),
+            prompt_hash: "h".into(),
+            gloss: "a skeleton".into(),
+            reason: "missing".into(),
+            at: "2026-07-13T00:00:00Z".into(),
+        };
+        append_shape_log(dir.path(), &entry).unwrap();
+        append_shape_log(dir.path(), &entry).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("witness/shape-log.jsonl")).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("01ATOM"));
     }
 
     fn make_memory(dir: &Path) -> Memory {

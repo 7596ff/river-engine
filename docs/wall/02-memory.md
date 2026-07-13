@@ -263,6 +263,17 @@ retrieval into `{similar_rejections}` (ch. 04). Same discipline: the
 jsonl is ground truth; the vectors are derived, rebuilt at startup
 from the jsonl if empty or dim-mismatched, and safely disposable.
 
+A third derived vector table sits with the other two: `shape_vectors`
+— one row per atomic note, holding a one-line "logical skeleton" of
+the claim (see the shape-index design spec) plus its embedding. The
+witness composes glosses via an optional `witness/on-shape.md` prompt
+duty; agent-authored `shape:` frontmatter on an atomic overrides the
+witness's gloss and is respected as authorship of the agent's own
+skeleton. The sync service enqueues gloss jobs for new atomics
+lacking a row and deletes rows when the underlying file is removed.
+Same disposable discipline: delete the table and the shape worker
+rebuilds it from `knowledge/` glosses.
+
 ## Contracts
 
 - **One truth rule.** Ground truth is workspace files only — identity,
@@ -303,3 +314,7 @@ from the jsonl if empty or dim-mismatched, and safely disposable.
 - **File capture:** indexed reads are cognitive accesses; watched
   writes re-index and bump.
 - **No import.** The web grows only through digestion.
+- **Shapes are derived.** `shape_vectors` is disposable; witness
+  glosses live only in the derived table and never in `knowledge/`.
+  Agent-authored `shape:` frontmatter overrides the witness's gloss
+  and is never overwritten by the drift-repair worker.
