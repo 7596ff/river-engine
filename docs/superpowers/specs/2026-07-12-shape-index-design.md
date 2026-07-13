@@ -135,21 +135,36 @@ A single background task in the gateway drains a FIFO queue of
 `(note_id, note_path, reason)` gloss jobs. Small on purpose — the
 point is patience, not throughput.
 
-**Job sources**, three of them:
+**Job sources**, four of them:
 
-1. **Missing rows.** On startup, walk `knowledge/`, enqueue any
+1. **Missing rows on startup.** Walk `knowledge/`, enqueue any
    atomic whose `id` has no `shape_vectors` row. This is the backfill
    campaign for the current 64 atomics.
-2. **Drift.** On startup, enqueue any row where
+2. **Drift on startup.** Enqueue any row where
    `(model_id, prompt_hash) ≠ (current_witness_model_id, current_prompt_hash)`.
    Agent-authored rows (`author='agent'`) are exempt.
-3. **Live.** `write_atomic` (when it lands) submits directly. Same
-   queue, same worker.
+3. **Live from write_atomic.** The tool submits directly on
+   successful write. Same queue, same worker.
+4. **Live from sync service.** When the sync service observes a
+   change under `knowledge/` — bare `write`, `edit`, or any external
+   modification — it checks `shape_vectors` for the atomic's id and
+   enqueues a gloss job if no row exists (or if the row is
+   agent-authored via the frontmatter path, no witness job is
+   enqueued). This closes the gap for atomics not created via
+   `write_atomic`: they get glossed on the next idle window instead
+   of waiting for a restart.
 
 **Rate.** Fires only when the turn loop is idle — the same 5-minute
 quiet window digestion uses (ch. 02). One gloss per tick, then yields.
 Inbound messages preempt instantly; the queue is patient. A restart
 mid-campaign is fine — sources 1 and 2 re-enqueue on next startup.
+
+**Job pull check.** Before calling the model on any pulled job, the
+worker reads the current `shape_vectors` row for `note_id` and
+skips the job if a row with `author='agent'` already exists. This
+handles the race between a `write_atomic` job (source 3) and the
+sync-service upsert of the `shape:` frontmatter value — the agent's
+authorship wins whichever arrives first at the row.
 
 **Cost.** 64 atomics × one cheap-model call ≈ pennies and seconds.
 Bridge tolerates missing shapes: a candidate without a shape row
@@ -280,9 +295,11 @@ Changes to existing files:
   helper (returns `(note_id, cosine)` pairs). New `upsert_shape` and
   `read_shape` helpers used by `shape.rs`. Sync service extended to
   read `shape:` frontmatter on atomic changes and call
-  `upsert_shape` with `author='agent'`; also to `DELETE FROM
-  shape_vectors WHERE file_path = ?` on atomic deletion (same shape
-  as segments cleanup).
+  `upsert_shape` with `author='agent'`; when no `shape:` field is
+  present and no row exists for the atomic, the sync service
+  submits a `GlossJob` to the shape worker (source 4 above); and
+  to `DELETE FROM shape_vectors WHERE file_path = ?` on atomic
+  deletion (same shape as segments cleanup).
 - **`witness.rs`.** `Witness` gains `shape: Option<ShapeState>`
   holding worker handle and prompt-hash cache. Startup enqueues the
   missing-rows and drift-repair scans.
@@ -408,6 +425,11 @@ gain the default `shape` block and the default `bridge` sub-block.
   per settled turn when enabled. If measurement shows this
   meaningful, guard behind "flash pass produced any candidates at
   all" or a text-sim floor. Ship without the guard; measure.
+- **Sync-service enqueue for bare-write atomics.** Added in this
+  spec (source 4). Assumes the sync service can obtain a queue
+  handle from the shape subsystem; wire it during startup the
+  same way `write_atomic` gets its handle. If the shape subsystem
+  is disabled, the sync service holds `None` and never enqueues.
 - **Multi-shape per note.** Deferred. Revisit if the shape log
   shows notes that need two skeletons.
 - **Weaving reuse.** Spec 4's type-targeted `same-pattern-as` pass
