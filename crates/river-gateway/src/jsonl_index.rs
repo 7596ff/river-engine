@@ -1,21 +1,35 @@
 //! Incremental JSONL reader shared by record, move, and channel indexes.
 //! Engine-owned appends advance in memory after fsync. Unannounced
 //! growth, truncation, replacement, or same-size modification rebuilds
-//! from a stable snapshot.
+//! from a stable snapshot. Each cached snapshot carries a short tail
+//! sample so back-to-back same-size overwrites — which can produce
+//! identical (len, mtime, identity) triples on fast filesystems — are
+//! detected as content changes.
 
 use std::fs::{File, Metadata, OpenOptions};
-use std::io::Read as _;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Context as _;
 use serde::de::DeserializeOwned;
 
+/// Bytes of file-tail sampled into every `FileStamp`. Small enough to
+/// read cheaply on every `refresh`, big enough that any hand edit to
+/// the last line (the realistic same-size case for JSONL) changes it.
+const TAIL_SAMPLE_BYTES: usize = 128;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileStamp {
     len: u64,
     modified: Option<SystemTime>,
     identity: FileIdentity,
+    /// Last `TAIL_SAMPLE_BYTES` of the file (or the whole file when
+    /// shorter). Closes the same-size same-mtime blind spot that
+    /// metadata alone leaves open — back-to-back programmatic
+    /// overwrites can produce identical (len, mtime, identity)
+    /// triples on fast filesystems.
+    tail: Vec<u8>,
 }
 
 #[cfg(unix)]
@@ -30,13 +44,42 @@ struct FileIdentity {
 struct FileIdentity;
 
 impl FileStamp {
-    fn from_metadata(metadata: &Metadata) -> Self {
+    /// Metadata plus a small tail sample. `path` must name the file
+    /// `metadata` was taken from (raced tail reads self-correct on the
+    /// next `refresh`).
+    fn from_metadata_and_tail(metadata: &Metadata, path: &Path) -> Self {
         Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
             identity: file_identity(metadata),
+            tail: read_tail(path, metadata.len()).unwrap_or_default(),
         }
     }
+
+    /// Cheap variant when the caller already holds the file's content
+    /// (used by `stable_snapshot`, which just read the whole thing).
+    fn from_metadata_and_content(metadata: &Metadata, content: &[u8]) -> Self {
+        let start = content.len().saturating_sub(TAIL_SAMPLE_BYTES);
+        Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            identity: file_identity(metadata),
+            tail: content[start..].to_vec(),
+        }
+    }
+}
+
+fn read_tail(path: &Path, len: u64) -> anyhow::Result<Vec<u8>> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let mut file = File::open(path)?;
+    let sample = TAIL_SAMPLE_BYTES as u64;
+    let start = len.saturating_sub(sample);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity(sample.min(len) as usize);
+    file.take(sample).read_to_end(&mut buf)?;
+    Ok(buf)
 }
 
 #[cfg(unix)]
@@ -124,7 +167,7 @@ where
                 return Err(e).with_context(|| format!("reading {}", self.path.display()));
             }
         };
-        let current = FileStamp::from_metadata(&metadata);
+        let current = FileStamp::from_metadata_and_tail(&metadata, &self.path);
         let Some(previous) = &self.stamp else {
             self.rebuild()?;
             return Ok(Refresh::Rebuilt);
@@ -154,13 +197,28 @@ where
         let Some(previous) = &self.stamp else {
             return Ok(false);
         };
-        let before = FileStamp::from_metadata(before);
-        let after = FileStamp::from_metadata(after);
+        // Extend the previous tail by the just-serialized bytes so
+        // `before` matches the stored stamp exactly — the metadata
+        // Rust hands us doesn't reveal what was on disk.
+        let projected_before_tail = extend_tail(&previous.tail, &[]);
+        let before_stamp = FileStamp {
+            len: before.len(),
+            modified: before.modified().ok(),
+            identity: file_identity(before),
+            tail: projected_before_tail,
+        };
+        let after_tail = extend_tail(&previous.tail, serialized);
+        let after_stamp = FileStamp {
+            len: after.len(),
+            modified: after.modified().ok(),
+            identity: file_identity(after),
+            tail: after_tail,
+        };
         let one_complete_line = serialized.ends_with(b"\n")
             && serialized.iter().filter(|&&byte| byte == b'\n').count() == 1;
-        if before != *previous
-            || before.identity != after.identity
-            || after.len != before.len + serialized.len() as u64
+        if before_stamp != *previous
+            || before_stamp.identity != after_stamp.identity
+            || after_stamp.len != before_stamp.len + serialized.len() as u64
             || !self.tail.is_empty()
             || !one_complete_line
         {
@@ -169,9 +227,9 @@ where
 
         self.items.push(item);
         self.committed_items = self.items.len();
-        self.committed_offset = after.len;
+        self.committed_offset = after_stamp.len;
         self.committed_lines += 1;
-        self.stamp = Some(after);
+        self.stamp = Some(after_stamp);
         Ok(true)
     }
 
@@ -243,16 +301,28 @@ where
 fn stable_snapshot(path: &Path) -> anyhow::Result<(String, FileStamp)> {
     for _ in 0..3 {
         let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        let before = FileStamp::from_metadata(&file.metadata()?);
+        let before = FileStamp::from_metadata_and_tail(&file.metadata()?, path);
         let mut text = String::new();
         file.read_to_string(&mut text)
             .with_context(|| format!("reading {}", path.display()))?;
-        let after = FileStamp::from_metadata(&file.metadata()?);
+        let after_metadata = file.metadata()?;
+        let after = FileStamp::from_metadata_and_content(&after_metadata, text.as_bytes());
         if before == after && text.len() as u64 == after.len {
             return Ok((text, after));
         }
     }
     anyhow::bail!("{} changed repeatedly while being indexed", path.display())
+}
+
+/// Extend a stored tail sample by `appended` bytes, keeping only the
+/// last `TAIL_SAMPLE_BYTES`. Mirrors what a fresh tail read would
+/// return after the append.
+fn extend_tail(previous: &[u8], appended: &[u8]) -> Vec<u8> {
+    let mut combined = Vec::with_capacity(previous.len() + appended.len());
+    combined.extend_from_slice(previous);
+    combined.extend_from_slice(appended);
+    let start = combined.len().saturating_sub(TAIL_SAMPLE_BYTES);
+    combined[start..].to_vec()
 }
 
 #[cfg(test)]
