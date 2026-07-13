@@ -1,10 +1,18 @@
 # Flash subsystem — design
 
 **Date:** 2026-07-11
-**Status:** approved, ready for implementation plan
+**Status:** SUPERSEDED by `docs/superpowers/specs/2026-07-13-flash-subsystem-design.md` (v2)
 **Follows:** `docs/explorations/2026-07-10-weaving-shape-typed-flashes.md` (Fable, §1)
 **Absorbs:** the current connect duty (`witness.rs::connect_for`,
 `ConnectFrame`, `connect-log.jsonl`, `on-connect.md`)
+
+> **Superseded.** This spec was approved but not implemented while the
+> shape spec (2026-07-12) shipped around it. The v2 rewrite at
+> `docs/superpowers/specs/2026-07-13-flash-subsystem-design.md` is
+> smaller (four working types + one stub, no Danger), removes
+> exclusions and per-turn caps that turned out to be wrong, and
+> integrates against the shape substrate that now exists. Read v2
+> instead; v1 is preserved for provenance.
 
 ## Purpose
 
