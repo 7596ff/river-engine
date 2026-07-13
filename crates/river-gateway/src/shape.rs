@@ -321,6 +321,93 @@ pub async fn process_one<C: Chat + Sync>(
     Ok(Some(gloss))
 }
 
+/// Long-running task: drain the shape queue, gloss each job,
+/// append a receipt line. Stops when `shutdown` flips true (any
+/// in-flight gloss finishes before returning). Reloads the prompt
+/// on each iteration so an operator's mid-run edit picks up
+/// automatically on the next job.
+pub async fn run_worker<C: Chat + Sync + Send + 'static>(
+    mut receiver: mpsc::Receiver<GlossJob>,
+    client: C,
+    memory: Memory,
+    workspace: PathBuf,
+    mut prompt: Prompt,
+    system: String,
+    model_id: String,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    // Fast-path: bail if shutdown was already flipped before we
+    // spawned.
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+    loop {
+        tokio::select! {
+            biased;
+            result = shutdown.changed() => {
+                if result.is_err() || *shutdown.borrow() {
+                    tracing::info!("shape worker shutting down");
+                    return Ok(());
+                }
+                continue;
+            }
+            job = receiver.recv() => {
+                let Some(job) = job else {
+                    return Ok(());
+                };
+                let Some(loaded) = prompt.load()? else {
+                    // No prompt → duty disabled; drop this job.
+                    tracing::debug!(
+                        note_id = %job.note_id,
+                        "on-shape.md missing; dropping gloss job"
+                    );
+                    continue;
+                };
+                let outcome = process_one(
+                    &client,
+                    &memory,
+                    &workspace,
+                    &loaded,
+                    &system,
+                    &model_id,
+                    &job,
+                )
+                .await;
+                match outcome {
+                    Ok(Some(gloss)) => {
+                        let entry = ShapeLogEntry {
+                            note_id: job.note_id.clone(),
+                            author: "witness".into(),
+                            model_id: model_id.clone(),
+                            prompt_hash: loaded.hash.clone(),
+                            gloss,
+                            reason: job.reason.as_str().into(),
+                            at: jiff::Timestamp::now().to_string(),
+                        };
+                        if let Err(e) = append_shape_log(&workspace, &entry) {
+                            tracing::warn!(
+                                note_id = %job.note_id,
+                                error = %e,
+                                "shape-log append failed"
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        // Skipped (agent-authored row). Non-event.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            note_id = %job.note_id,
+                            error = %e,
+                            "shape gloss failed; job dropped"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// One receipt-log line for a completed gloss job. Append-only,
 /// torn-line tolerant (same shape as glean-log.jsonl,
 /// connect-log.jsonl).
@@ -540,6 +627,90 @@ mod tests {
         assert_eq!(row.author, ShapeAuthor::Witness);
         assert_eq!(row.model_id, "haiku-4.5");
         assert_eq!(row.prompt_hash, "abcdef");
+    }
+
+    #[tokio::test]
+    async fn worker_processes_job_and_writes_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01W.md", "01W", "the body");
+        std::fs::create_dir_all(workspace.join("witness")).unwrap();
+        std::fs::write(
+            workspace.join("witness/on-shape.md"),
+            "Body: {note_body}",
+        )
+        .unwrap();
+
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(GlossJob {
+            note_id: "01W".into(),
+            note_path: "knowledge/01W.md".into(),
+            reason: JobReason::Write,
+        })
+        .await
+        .unwrap();
+        drop(tx); // close so recv returns None after processing
+
+        let client = FakeModel::replying(vec![ok("worker output")]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        run_worker(
+            rx,
+            client,
+            mem.clone(),
+            workspace.clone(),
+            prompt,
+            "sys".into(),
+            "m1".into(),
+            shutdown_rx,
+        )
+        .await
+        .unwrap();
+
+        let row = mem.read_shape("01W").unwrap().unwrap();
+        assert_eq!(row.gloss, "worker output");
+        assert_eq!(row.author, ShapeAuthor::Witness);
+
+        let log = std::fs::read_to_string(workspace.join("witness/shape-log.jsonl")).unwrap();
+        assert!(log.contains("01W"), "receipt written: {log}");
+        assert!(log.contains("worker output"));
+        let _ = shutdown_tx; // silence unused
+    }
+
+    #[tokio::test]
+    async fn worker_stops_on_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+
+        let (_tx, rx) = mpsc::channel::<GlossJob>(4);
+        let client = FakeModel::replying(vec![]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let handle = tokio::spawn(async move {
+            run_worker(
+                rx,
+                client,
+                mem,
+                workspace,
+                prompt,
+                "sys".into(),
+                "m".into(),
+                shutdown_rx,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        shutdown_tx.send(true).unwrap();
+        // Should return promptly.
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("shutdown timely")
+            .unwrap()
+            .unwrap();
     }
 
     #[test]

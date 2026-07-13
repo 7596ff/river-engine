@@ -208,6 +208,54 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         agent.witness.connect_self_write_window,
     );
 
+    // Shape subsystem: queue + worker. Created here so both the sync
+    // service (Source 4) and TurnLoop's ToolContext for write_atomic
+    // (Source 3) can share the sender. The worker itself is spawned
+    // as a background task later.
+    let shape_setup = if agent.shape.enabled
+        && let Some(mem) = &mem
+    {
+        let (tx, rx) = tokio::sync::mpsc::channel::<shape::GlossJob>(128);
+        mem.set_shape_queue(Some(tx.clone()));
+
+        // Load the witness identity — same system prompt every
+        // witness duty uses (ch. 04). Required for the witness at
+        // startup, so an error here has already fired.
+        let witness_identity =
+            std::fs::read_to_string(agent.workspace.join("witness").join("identity.md"))
+                .unwrap_or_default();
+
+        // Startup scans: enqueue missing rows and drift rows before
+        // the worker starts draining. Best-effort — failures log
+        // and the worker still runs.
+        if let Err(e) = shape::enqueue_missing(mem, &agent.workspace, &tx).await {
+            tracing::warn!(error = %e, "shape missing-rows scan failed");
+        }
+        let current_model_id = agent.witness_model_name().to_string();
+        // Prompt hash for drift: read on-shape.md once to compute the
+        // current hash. The worker reloads on each job so an edit
+        // during the run picks up on the next drain.
+        let mut prompt = shape::Prompt::at_workspace(&agent.workspace);
+        let current_prompt_hash = prompt
+            .load()
+            .ok()
+            .flatten()
+            .map(|loaded| loaded.hash)
+            .unwrap_or_default();
+        if !current_prompt_hash.is_empty() {
+            if let Err(e) =
+                shape::enqueue_drift(mem, &tx, &current_model_id, &current_prompt_hash).await
+            {
+                tracing::warn!(error = %e, "shape drift-repair scan failed");
+            }
+        }
+
+        Some((rx, tx, witness_identity, current_model_id))
+    } else {
+        None
+    };
+    let shape_write_tx = shape_setup.as_ref().map(|(_, tx, _, _)| tx.clone());
+
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(256);
     let channels = channels::Channels::open(&agent.workspace, notify_tx)?;
     let (outbound_tx, _) = tokio::sync::broadcast::channel(256);
@@ -286,7 +334,7 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
         resume,
         Some(connect_rx),
         agent.atomic.max_words,
-        None, // shape queue wired in a follow-up (Phase 8)
+        shape_write_tx,
     )?;
 
     // Two phases: a process signal asks only the turn loop to stop. It
@@ -351,11 +399,35 @@ async fn run(args: RunArgs) -> anyhow::Result<()> {
             witness.run(settled_rx, shutdown, last_settled).await,
         )
     });
-    if let (Some(mem), Some(reindex_rx)) = (mem, reindex_rx) {
+    if let (Some(mem), Some(reindex_rx)) = (mem.clone(), reindex_rx) {
         let shutdown = background_shutdown_rx.clone();
         background_tasks.spawn(async move {
             mem.run_sync(reindex_rx, shutdown).await;
             ("memory sync", anyhow::Ok(()))
+        });
+    }
+    if let (Some((rx, _tx, witness_identity, model_id)), Some(mem)) = (shape_setup, mem) {
+        // Second witness-model client for the shape worker (the
+        // witness owns its own; both talk to the same endpoint).
+        let shape_client = model::ModelClient::new(witness_config)?;
+        let workspace = agent.workspace.clone();
+        let prompt = shape::Prompt::at_workspace(&agent.workspace);
+        let shutdown = background_shutdown_rx.clone();
+        background_tasks.spawn(async move {
+            (
+                "shape worker",
+                shape::run_worker(
+                    rx,
+                    shape_client,
+                    mem,
+                    workspace,
+                    prompt,
+                    witness_identity,
+                    model_id,
+                    shutdown,
+                )
+                .await,
+            )
         });
     }
     drop(background_shutdown_rx);
