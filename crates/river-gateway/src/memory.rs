@@ -863,8 +863,23 @@ impl Memory {
     }
 
     /// Top-k cosine over the stored vectors. Every hit is an ambient
-    /// access for the file it touches.
+    /// access for the file it touches. Delegates to
+    /// [`Memory::search_with_prefixes`] with an empty filter.
     pub async fn search(&self, query: &str) -> anyhow::Result<Vec<SearchHit>> {
+        self.search_with_prefixes(query, &[]).await
+    }
+
+    /// Same as [`Memory::search`] but with an optional allowed-prefix
+    /// list. When the list is non-empty, only hits whose file path is
+    /// under one of the workspace-relative prefixes survive the top-K
+    /// truncation, and ambient bumps fire only on surviving hits.
+    /// An empty list is equivalent to no filter (all indexed files
+    /// eligible).
+    pub async fn search_with_prefixes(
+        &self,
+        query: &str,
+        allowed_prefixes: &[String],
+    ) -> anyhow::Result<Vec<SearchHit>> {
         let query_vec = self
             .embedder
             .embed(&[query.to_string()])
@@ -882,6 +897,7 @@ impl Memory {
 
         let mut hits: Vec<SearchHit> = rows
             .into_iter()
+            .filter(|(file_path, _, _)| self.path_matches_prefixes(file_path, allowed_prefixes))
             .map(|(file_path, text, blob)| {
                 let vector: Vec<f32> = blob
                     .chunks_exact(4)
@@ -901,6 +917,24 @@ impl Memory {
             self.bump_path(&hit.file_path, self.knobs.ambient_bump, Carrier::Ambient)?;
         }
         Ok(hits)
+    }
+
+    /// True when `file_path` (as stored in `segments`, an absolute
+    /// path from `path.display().to_string()`) starts with any of the
+    /// workspace-relative `allowed_prefixes`. An empty list is
+    /// unconditionally true. The prefix comparison strips the
+    /// workspace root so callers write natural values like
+    /// `"knowledge/"`, `"loom/"`, `"knowledge/philosophy/"`.
+    fn path_matches_prefixes(&self, file_path: &str, allowed_prefixes: &[String]) -> bool {
+        if allowed_prefixes.is_empty() {
+            return true;
+        }
+        let path = Path::new(file_path);
+        let relative = path.strip_prefix(&self.workspace).unwrap_or(path);
+        let relative_str = relative.display().to_string();
+        allowed_prefixes
+            .iter()
+            .any(|prefix| relative_str.starts_with(prefix.as_str()))
     }
 
     /// Is this path under a watched directory (and so indexed)?
@@ -2268,6 +2302,78 @@ pub mod tests {
         let (indexed, removed) = mem.sweep().await.unwrap();
         assert_eq!((indexed, removed), (1, 0));
         assert!(mem.read_shape("01ATOM").unwrap().is_none(), "no shape row without queue");
+    }
+
+    #[tokio::test]
+    async fn search_with_prefixes_filters_to_allowed_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = dir.path().join("ws");
+        write_note(&ws.join("knowledge"), "k.md", "K1", &[("extends", "X")], "the heron waits");
+        std::fs::create_dir_all(ws.join("loom")).unwrap();
+        std::fs::write(ws.join("loom/l.md"), "the heron in loom").unwrap();
+        mem.sweep().await.unwrap();
+
+        let only_knowledge = mem
+            .search_with_prefixes("heron", &["knowledge/".to_string()])
+            .await
+            .unwrap();
+        assert!(only_knowledge.iter().all(|h| h.file_path.contains("knowledge/")));
+        assert!(only_knowledge.iter().any(|h| h.file_path.contains("k.md")));
+        assert!(!only_knowledge.iter().any(|h| h.file_path.contains("l.md")));
+
+        let both = mem
+            .search_with_prefixes(
+                "heron",
+                &["knowledge/".to_string(), "loom/".to_string()],
+            )
+            .await
+            .unwrap();
+        assert!(both.iter().any(|h| h.file_path.contains("k.md")));
+        assert!(both.iter().any(|h| h.file_path.contains("l.md")));
+
+        // No match: nonexistent prefix returns empty.
+        let none = mem
+            .search_with_prefixes("heron", &["notreal/".to_string()])
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_with_empty_prefixes_matches_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let k = dir.path().join("ws/knowledge");
+        write_note(&k, "a.md", "A", &[("extends", "X")], "the heron waits");
+        mem.sweep().await.unwrap();
+        let via_search = mem.search("heron").await.unwrap();
+        let via_prefixes = mem.search_with_prefixes("heron", &[]).await.unwrap();
+        assert_eq!(via_search.len(), via_prefixes.len());
+        for (a, b) in via_search.iter().zip(via_prefixes.iter()) {
+            assert_eq!(a.file_path, b.file_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn search_with_prefixes_bumps_only_kept_hits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = dir.path().join("ws");
+        write_note(&ws.join("knowledge"), "k.md", "K1", &[("extends", "X")], "the heron waits");
+        std::fs::create_dir_all(ws.join("loom")).unwrap();
+        std::fs::write(ws.join("loom/l.md"), "the heron in loom").unwrap();
+        mem.sweep().await.unwrap();
+
+        let _ = mem
+            .search_with_prefixes("heron", &["knowledge/".to_string()])
+            .await
+            .unwrap();
+        // K1 got its ambient bump; the loom file did not.
+        assert!(mem.activation("K1").unwrap().unwrap_or(0.0) > 0.0);
+        // Loom file is keyed by path (no frontmatter id). Fetch by path.
+        let loom_ref = crate::memory::target_ref_for_path(&ws.join("loom/l.md"));
+        assert_eq!(mem.activation(&loom_ref).unwrap().unwrap_or(0.0), 0.0);
     }
 
     #[tokio::test]

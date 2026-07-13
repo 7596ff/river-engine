@@ -756,10 +756,17 @@ impl Tool for SearchTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "search".into(),
-            description: "Semantic search over the indexed workspace. Returns the most similar passages with file paths.".into(),
+            description: "Semantic search over the indexed workspace. Returns the most similar passages with file paths. Optionally filter by an allow-list of workspace-relative path prefixes (e.g., [\"knowledge/\", \"loom/philosophy/\"]).".into(),
             parameters: json!({
                 "type": "object",
-                "properties": { "query": { "type": "string" } },
+                "properties": {
+                    "query": { "type": "string" },
+                    "path_prefixes": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional. When non-empty, restricts results to files whose workspace-relative path starts with any of these prefixes. Ambient warmth bumps only fire on kept results."
+                    }
+                },
                 "required": ["query"]
             }),
         }
@@ -767,10 +774,11 @@ impl Tool for SearchTool {
     fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
         Box::pin(async move {
             let query = required_str(&args, "query")?;
+            let prefixes = parse_string_list(&args, "path_prefixes")?;
             let Some(memory) = &ctx.memory else {
                 anyhow::bail!("no memory system configured (the agent has no embedding model)");
             };
-            let hits = memory.search(query).await?;
+            let hits = memory.search_with_prefixes(query, &prefixes).await?;
             if hits.is_empty() {
                 return Ok("no results".to_string());
             }
