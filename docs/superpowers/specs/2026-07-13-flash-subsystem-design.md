@@ -78,23 +78,32 @@ Steps:
    `record::scan_turn_range` call connect uses today).
 2. Format the transcript (same `format_transcript` used by connect
    and glean).
-3. **Shared candidate pool** for the text-sim types (Connection,
-   Echo, Return): `memory.search_no_bump(transcript, flash.top_k)`.
-   Default `top_k = 5`. One embed + one scan for the whole pass.
-4. **Bridge** does its own retrieval if enabled:
+3. **Embed the transcript once**: `let query_vec =
+   memory.embed_query(transcript).await?` (a new `pub` method
+   promoted from private). The vec drives both the shared text
+   pool and Bridge's per-candidate text-sim recheck.
+4. **Shared candidate pool** for the text-sim types (Connection,
+   Echo, Return): scan the same table `search_no_bump` scans,
+   using `query_vec`. Default `top_k = 5` (as `flash.top_k`).
+   One embed + one scan for the whole pass. A companion
+   `Memory::search_no_bump_with_vec(&query_vec, top_k)` variant
+   avoids re-embedding when the pass already has the vec.
+5. **Bridge** does its own retrieval if enabled:
    `shape::gloss_turn(client, prompt, system, transcript)` → embed
    the returned gloss via `memory.embedder` → `memory.search_shapes(
-   vec, flash.types.bridge.top_k)`. Missing shape substrate (no
-   `on-shape.md`, empty `shape_vectors`, `gloss_turn` errors) →
-   Bridge silently skips. This matches the shape spec's "missing
-   signal is silent" contract.
-5. For each enabled type in a fixed order (Connection, Echo, Return,
+   gloss_vec, flash.types.bridge.top_k)`. For each shape candidate,
+   `memory.text_sim(candidate_path, &query_vec)` gives the text-sim
+   for the ≤ text_sim_max check (reuses the query_vec from step 3).
+   Missing shape substrate (no `on-shape.md`, empty `shape_vectors`,
+   `gloss_turn` errors) → Bridge silently skips. This matches the
+   shape spec's "missing signal is silent" contract.
+6. For each enabled type in a fixed order (Connection, Echo, Return,
    Bridge), evaluate its predicate over its candidate pool. Iterate
    candidates in score order. Every candidate that clears the
    predicate + guards emits a `FlashFrame`.
-6. Each `FlashFrame` is sent via `flash_tx`. Send failure logs and
+7. Each `FlashFrame` is sent via `flash_tx`. Send failure logs and
    drops (best-effort, same as connect).
-7. After all frames send, append one `FlashLogEntry` per fired flash
+8. After all frames send, append one `FlashLogEntry` per fired flash
    to `witness/flashes.jsonl`, fsync per line. Refractory state
    updates from the successfully-appended entries.
 
@@ -196,10 +205,14 @@ Fixed template:
 `Memory::search_shapes(gloss_vec, flash.types.bridge.top_k)`.
 
 Predicate: `shape_sim ≥ shape_sim_min ∧ text_sim ≤ text_sim_max`.
-For each shape candidate, look up its `segments` and compute cosine
-against the turn's transcript embedding (already computed by the
-flash pass for the shared pool) — the same in-memory data drives
-both checks.
+For each shape candidate, compute cosine between the turn's
+transcript embedding and the candidate's text segments via a new
+`Memory::text_sim(candidate_path, query_vec) -> f32` helper (max
+cosine over the candidate's `segments` rows). The flash pass
+embeds the transcript exactly once — a new `Memory::embed_query`
+(promoted from private to `pub`) is called at the top of the pass,
+and the returned `Vec<f32>` is threaded to both the shared
+`search_no_bump` and Bridge's per-candidate `text_sim` recheck.
 
 Per-target refractory.
 
@@ -290,9 +303,32 @@ New per-agent block in `river.json`:
 }
 ```
 
-Validation: thresholds in `[0.0, 1.0]`; counts positive. Missing
-type block → type-level defaults. Missing `flash` block → subsystem
-entirely off (fail-safe for un-migrated configs).
+Validation: thresholds in `[0.0, 1.0]`; counts positive.
+
+**Config edge cases**:
+- **Missing `flash` block entirely** → the subsystem is off. Every
+  type contributes zero frames; no candidate pool retrieval;
+  fail-safe for un-migrated configs.
+- **Empty `flash` block (`"flash": {}`)** → all defaults apply.
+  `flash.top_k` defaults to 5; every type gets its default block
+  (Connection/Echo/Return/Bridge enabled, Correction stubbed). The
+  operator opts *in* by naming the block; missing = off, present =
+  defaults.
+- **Missing type block within `flash.types`** → that type gets its
+  default block (Connection/Echo/Return/Bridge default to
+  `enabled: true`; Correction defaults to `enabled: false`).
+- **Type block with `enabled: false`** → the type's predicate is
+  skipped entirely; no retrieval, no evaluation. `Bridge` disabled
+  in config means no `gloss_turn` call — the shape substrate is
+  not touched.
+- **Bridge tolerance is runtime, not config-gated on shape.** With
+  `flash.types.bridge.enabled: true` but the shape subsystem
+  disabled (`shape.enabled: false`) or unwired (no `on-shape.md`,
+  empty `shape_vectors`, `gloss_turn` errors), Bridge silently
+  contributes zero frames. Bridge does not read the `shape` config
+  block; it reads the runtime signals shape produces. This means
+  an operator can disable shape without also editing the flash
+  block, and Bridge safely no-ops.
 
 **Removed fields on `WitnessConfig`**: `connect_threshold`,
 `connect_min_new_turns`, `connect_self_write_window`. Any config
