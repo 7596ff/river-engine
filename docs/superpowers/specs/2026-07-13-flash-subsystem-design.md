@@ -120,6 +120,19 @@ at startup.
 threshold`; self-write guard skips candidates whose file was written
 by the agent within the last `self_write_window` turns.
 
+**Self-write guard covers `write_atomic`.** The current
+`collect_recent_agent_writes` helper (in `witness.rs`) matches
+`write | edit | create_moment` and reads the destination path from
+each tool call's *arguments*. `write_atomic` generates its own path
+(returned in the tool *result*), so the helper misses it entirely
+today — a freshly-written atomic would immediately be a valid
+Connection candidate for the next turn's flash pass. This spec
+closes that gap: the helper additionally matches `write_atomic` and
+reads the path from its result JSON (`{"id":...,"path":...,
+"warnings":[...]}` — the same shape the tool already returns). The
+result is on the record (persist-once, ch. 01), so the scan has
+what it needs.
+
 No per-target refractory — Connection is about the freshest hit, not
 repeats. (Same behavior as connect today.)
 
@@ -360,7 +373,9 @@ Changes to existing files:
   `append_connect_log`, `ConnectLogEntry`, `WitnessBuilder::with_connect`
   all delete (their generalizations live in `flashes`).
   `WitnessBuilder::with_flashes(sender, flash_config)` replaces
-  `with_connect`.
+  `with_connect`. `collect_recent_agent_writes` extends: `write_atomic`
+  joins the matched-tool set, and for that tool the path is read
+  from the tool *result* JSON rather than the *arguments*.
 - **`turn.rs`**. `ConnectFrame` → `FlashFrame` with a
   `flash_type: FlashType` field. `connect_frames` field →
   `flash_frames`. `drain_connect_frames` → `drain_flash_frames`.
@@ -426,6 +441,11 @@ Unit tests inside `flashes.rs`:
   `type: "connection"`; re-run is a no-op.
 - **Config parse**: a `river.json` with any `connect_*` field on
   `witness` fails loudly with an error naming the removed field.
+- **Self-write guard covers `write_atomic`**: synthetic record with
+  a recent `write_atomic` tool call + result; Connection's
+  candidate pool includes the atomic that call created; the guard
+  suppresses it. Regression coverage for the args-vs-result read
+  path.
 
 Integration test at the witness level (stubbed embedder + stubbed
 model client, mirroring today's connect integration): one turn
