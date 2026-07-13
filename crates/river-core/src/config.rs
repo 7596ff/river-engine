@@ -185,12 +185,18 @@ impl Default for EchoConfig {
     }
 }
 
+/// Return fires when the agent's transcript resembles a cold note.
+/// The `staleness_turns` signal the spec named needs a
+/// `last_touched_turn` column on `activation` that doesn't exist
+/// yet; warmth is the correct proxy today (decays hourly per wall
+/// ch. 02, so cold means recently untouched). A follow-up can
+/// swap in true turn-count staleness when the schema catches up.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ReturnConfig {
     pub enabled: bool,
     pub threshold: f32,
-    pub gap_min_turns: u64,
+    pub warmth_max: f64,
     pub min_new_turns_target: u64,
 }
 
@@ -199,7 +205,7 @@ impl Default for ReturnConfig {
         Self {
             enabled: true,
             threshold: 0.55,
-            gap_min_turns: 200,
+            warmth_max: 0.05,
             min_new_turns_target: 20,
         }
     }

@@ -1802,12 +1802,30 @@ impl Memory {
         Ok(())
     }
 
-    #[cfg(test)]
     pub fn activation(&self, note_id: &str) -> anyhow::Result<Option<f64>> {
         let db = self.db.lock().expect("db lock");
         let mut stmt = db.prepare("SELECT score FROM activation WHERE note_id = ?1")?;
         let mut rows = stmt.query([note_id])?;
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+    }
+
+    /// The workspace root this Memory was opened for. Used by
+    /// consumers that render paths back to their workspace-relative
+    /// or absolute form.
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// Embed a single text via the configured embedder. Bridge uses
+    /// this to embed the turn-shape gloss returned by
+    /// `shape::gloss_turn` before scanning `shape_vectors`.
+    pub async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        self.embedder
+            .embed(&[text.to_string()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned nothing"))
     }
 
 
