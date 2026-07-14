@@ -134,6 +134,15 @@ pub struct TurnLoop<C: Chat> {
     /// Raised by the `compact` tool; honored at the next turn start as
     /// a force-compaction (in addition to the threshold-based trigger).
     compact_requested: Arc<AtomicBool>,
+    /// Written by `SettleTool::execute`; drained at end-of-turn to
+    /// recompute [`Self::next_heartbeat_at`]. When set, the current
+    /// turn ends after the pending batch of tool calls resolves.
+    settle_intent: Arc<std::sync::Mutex<Option<crate::tools::SettleIntent>>>,
+    /// When the next heartbeat wake should fire. Deadline-based (wall
+    /// ch. 01, settle-tool amendment): only an explicit `settle` call
+    /// recomputes it; every other wake (channel, digestion, natural
+    /// end-of-turn) leaves it alone.
+    next_heartbeat_at: std::time::Instant,
     /// Raised by `create_moment`; checked after every tool round to
     /// refresh the arc so a just-written moment is visible in the
     /// next model call instead of waiting on compaction.
@@ -273,6 +282,8 @@ impl<C: Chat> TurnLoop<C> {
             active_flashes,
             compact_requested: Arc::new(AtomicBool::new(false)),
             arc_dirty: Arc::new(AtomicBool::new(false)),
+            settle_intent: Arc::new(std::sync::Mutex::new(None)),
+            next_heartbeat_at: std::time::Instant::now() + heartbeat,
             warned_high: false,
             flash_frames,
             atomic_max_words,
@@ -357,7 +368,7 @@ impl<C: Chat> TurnLoop<C> {
                         wake
                     }
                 }
-                _ = tokio::time::sleep(self.heartbeat) => Wake::Heartbeat,
+                _ = tokio::time::sleep_until(self.next_heartbeat_at.into()) => Wake::Heartbeat,
             };
 
             match wake {
@@ -550,6 +561,8 @@ impl<C: Chat> TurnLoop<C> {
             arc_dirty: self.arc_dirty.clone(),
             atomic_max_words: self.atomic_max_words,
             shape_queue: self.shape_queue.clone(),
+            heartbeat_default_minutes: self.heartbeat.as_secs() / 60,
+            settle_intent: self.settle_intent.clone(),
         };
 
         // Budget warning fires in the last 20% of the turn's tool
@@ -668,9 +681,30 @@ impl<C: Chat> TurnLoop<C> {
                 }
             }
 
+            // The agent called `settle` in this batch; the turn ends
+            // after the batch resolves (wall ch. 01, settle amendment).
+            // The intent is drained and applied to `next_heartbeat_at`
+            // below, in the settle path.
+            if self.settle_intent.lock().unwrap().is_some() {
+                break;
+            }
+
             if iteration + 1 == self.max_iterations {
                 tracing::warn!(turn = n, "iteration ceiling hit; turn ends");
             }
+        }
+
+        // Apply any pending settle intent to the heartbeat deadline.
+        // Bare settle recomputes to now + config default; NextHeartbeat
+        // uses the (already-clamped) minutes the agent chose. Natural
+        // end-of-turn leaves the deadline alone.
+        if let Some(intent) = self.settle_intent.lock().unwrap().take() {
+            let minutes = match intent {
+                crate::tools::SettleIntent::Bare => self.heartbeat.as_secs() / 60,
+                crate::tools::SettleIntent::NextHeartbeat(m) => m,
+            };
+            self.next_heartbeat_at =
+                std::time::Instant::now() + Duration::from_secs(minutes * 60);
         }
 
         // SETTLE: a cursor to every channel read this turn, pointing
@@ -1762,4 +1796,194 @@ mod tests {
     // Flash-frame body composition tests moved into flashes.rs
     // per-type modules — the turn loop no longer builds bodies;
     // it just appends frame.body as-is.
+
+    // -------- settle tool ↔ turn loop --------
+    //
+    // Every test names the specific drift it hunts. See CLAUDE.md:
+    // "we don't write tests that pass, we write tests that HUNT."
+
+    fn settle_call(id: &str, next_heartbeat: Option<u64>) -> anyhow::Result<ChatResponse> {
+        let args = match next_heartbeat {
+            Some(n) => serde_json::json!({ "next_heartbeat": n }),
+            None => serde_json::json!({}),
+        };
+        Ok(ChatResponse {
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: id.into(),
+                name: "settle".into(),
+                arguments: args.to_string(),
+            }],
+            prompt_tokens: Some(50),
+        })
+    }
+
+    fn speak_and_settle(next_heartbeat: Option<u64>) -> anyhow::Result<ChatResponse> {
+        let settle_args = match next_heartbeat {
+            Some(n) => serde_json::json!({ "next_heartbeat": n }),
+            None => serde_json::json!({}),
+        };
+        Ok(ChatResponse {
+            content: String::new(),
+            tool_calls: vec![
+                ToolCall {
+                    id: "call_speak".into(),
+                    name: "speak".into(),
+                    arguments: serde_json::json!({ "content": "batched" }).to_string(),
+                },
+                ToolCall {
+                    id: "call_settle".into(),
+                    name: "settle".into(),
+                    arguments: settle_args.to_string(),
+                },
+            ],
+            prompt_tokens: Some(50),
+        })
+    }
+
+    /// Hunts: someone deletes the `next_heartbeat_at: now + heartbeat`
+    /// line in `TurnLoop::new` and the wake loop falls back to `Instant::now()`
+    /// (immediate re-fire) or an uninitialized value.
+    #[tokio::test]
+    async fn cold_start_deadline_is_now_plus_config_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![]);
+        let h = harness(dir.path(), model);
+        let expected = std::time::Instant::now() + Duration::from_secs(3600);
+        let deadline = h.turn_loop.next_heartbeat_at;
+        let delta = if deadline > expected {
+            (deadline - expected).as_secs()
+        } else {
+            (expected - deadline).as_secs()
+        };
+        assert!(delta < 5, "cold-start deadline off by {delta}s from expected");
+    }
+
+    /// Hunts: bare settle failing to recompute the deadline (turn just
+    /// runs to natural end and the old deadline stays).
+    #[tokio::test]
+    async fn settle_bare_recomputes_deadline_to_config_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![settle_call("c1", None)]);
+        let mut h = harness(dir.path(), model);
+        // Force an obviously-wrong starting deadline so any drift-preserving
+        // bug leaves the deadline near this value.
+        h.turn_loop.next_heartbeat_at =
+            std::time::Instant::now() + Duration::from_secs(9999);
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        let expected = std::time::Instant::now() + Duration::from_secs(3600);
+        let deadline = h.turn_loop.next_heartbeat_at;
+        let delta = if deadline > expected {
+            (deadline - expected).as_secs() as i64
+        } else {
+            -((expected - deadline).as_secs() as i64)
+        };
+        assert!(
+            delta.abs() < 5,
+            "bare settle should recompute to now + 3600s; delta {delta}s"
+        );
+        assert!(
+            h.turn_loop.settle_intent.lock().unwrap().is_none(),
+            "intent cleared after apply"
+        );
+    }
+
+    /// Hunts: settle(N) arg ignored, unit confusion (minutes vs seconds),
+    /// or intent applied at wrong point.
+    #[tokio::test]
+    async fn settle_with_arg_sets_deadline_at_now_plus_n_minutes() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![settle_call("c1", Some(120))]);
+        let mut h = harness(dir.path(), model);
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        let expected = std::time::Instant::now() + Duration::from_secs(120 * 60);
+        let deadline = h.turn_loop.next_heartbeat_at;
+        let delta = if deadline > expected {
+            (deadline - expected).as_secs() as i64
+        } else {
+            -((expected - deadline).as_secs() as i64)
+        };
+        assert!(delta.abs() < 5, "deadline off by {delta}s");
+    }
+
+    /// Hunts: natural end-of-turn resetting the deadline (the deadline
+    /// model's whole point). Also hunts intent leaking across turns.
+    #[tokio::test]
+    async fn natural_settle_preserves_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        // Turn 1: settle(240). Turn 2: natural end (speak + done).
+        let model = FakeModel::replying(vec![
+            settle_call("c1", Some(240)),
+            speak("hi"),
+            done(""),
+        ]);
+        let mut h = harness(dir.path(), model);
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        let deadline_after_settle = h.turn_loop.next_heartbeat_at;
+        // Simulate a channel wake for turn 2.
+        let note2 = say(&mut h, DEFAULT_CHANNEL, "and more").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note2]))
+            .await
+            .unwrap();
+        let deadline_after_natural = h.turn_loop.next_heartbeat_at;
+        assert_eq!(
+            deadline_after_natural, deadline_after_settle,
+            "natural settle must not touch next_heartbeat_at"
+        );
+    }
+
+    /// Hunts: settle short-circuiting a batch and dropping peer tool
+    /// calls that were meant to run first.
+    #[tokio::test]
+    async fn settle_runs_after_batch_peers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![speak_and_settle(Some(60))]);
+        let mut h = harness(dir.path(), model);
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        // The speak in the batch delivered.
+        let out = h.outbound.try_recv().expect("speak fired");
+        assert_eq!(out.content, "batched");
+        // And settle set the deadline.
+        let expected = std::time::Instant::now() + Duration::from_secs(60 * 60);
+        let delta = h.turn_loop.next_heartbeat_at.saturating_duration_since(expected).as_secs()
+            + expected.saturating_duration_since(h.turn_loop.next_heartbeat_at).as_secs();
+        assert!(delta < 5, "deadline off by {delta}s");
+    }
+
+    /// Hunts: settle intent being ignored when it appears in a non-final
+    /// iteration, causing extra model calls after the agent chose to end.
+    #[tokio::test]
+    async fn settle_ends_turn_after_current_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only ONE model response queued. If the loop iterates past the
+        // settle-bearing batch, it'll try to call chat() a second time
+        // and panic on the empty replies vector.
+        let model = FakeModel::replying(vec![speak_and_settle(Some(30))]);
+        let mut h = harness(dir.path(), model.clone());
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+        h.turn_loop
+            .turn(Wake::Notifications(vec![note]))
+            .await
+            .unwrap();
+        // Exactly one chat() call happened — the second iteration was
+        // skipped because settle set the intent.
+        assert_eq!(model.seen.lock().unwrap().len(), 1);
+    }
 }

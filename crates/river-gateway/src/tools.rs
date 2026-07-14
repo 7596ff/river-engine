@@ -70,6 +70,27 @@ pub struct ToolContext {
     /// independent Source 4 path that will pick up the atomic on
     /// its next pass if the queue lands later).
     pub shape_queue: Option<tokio::sync::mpsc::Sender<crate::shape::GlossJob>>,
+    /// The config heartbeat interval in minutes. Used by `settle`
+    /// (bare-settle recomputes to now + this; the tool also uses it to
+    /// compute the `next_wake_at` field in its result JSON).
+    pub heartbeat_default_minutes: u64,
+    /// Slot the `settle` tool writes into when the agent chooses to end
+    /// the turn. The turn loop drains it after the tool batch resolves,
+    /// applies it to `next_heartbeat_at`, and clears the slot.
+    /// Last-writer-wins if multiple settle calls appear in one batch.
+    pub settle_intent: Arc<std::sync::Mutex<Option<SettleIntent>>>,
+}
+
+/// Emitted by `SettleTool::execute`; consumed by the turn loop at
+/// end-of-turn. Both variants end the turn; they differ only in how
+/// `next_heartbeat_at` is recomputed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettleIntent {
+    /// `settle()` with no argument — recompute to now + config default.
+    Bare,
+    /// `settle(N)` with N already clamped to [SETTLE_FLOOR_MINUTES,
+    /// SETTLE_CEILING_MINUTES]. Recompute to now + N minutes.
+    NextHeartbeat(u64),
 }
 
 /// The candidate the agent is being asked to digest this turn. Carries
@@ -113,6 +134,7 @@ impl Registry {
                 Box::new(WriteAtomicTool),
                 Box::new(ReadMovesTool),
                 Box::new(CompactTool),
+                Box::new(SettleTool),
             ],
         }
     }
@@ -1507,6 +1529,86 @@ impl Tool for CompactTool {
     }
 }
 
+pub const SETTLE_FLOOR_MINUTES: u64 = 1;
+pub const SETTLE_CEILING_MINUTES: u64 = 480; // 8h
+
+struct SettleTool;
+impl Tool for SettleTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "settle".into(),
+            description: "End the current turn. Optionally set when you want to wake next: `next_heartbeat` is a duration in minutes (floor 1, ceiling 480 = 8h). Without an argument, the default heartbeat cadence applies from now. With one, the deadline you name sticks — other wakes (channel messages, digestions) don't reset it; only another `settle` does. Use this when you want to be explicit about ending the turn, or to change your own cadence.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "next_heartbeat": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Minutes until the next heartbeat wake. Clamped to [1, 480]. Omit to use the default cadence."
+                    }
+                }
+            }),
+        }
+    }
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let raw = match args.get("next_heartbeat") {
+                Some(Value::Null) | None => None,
+                Some(v) => match v.as_u64() {
+                    Some(n) => Some(n),
+                    None => anyhow::bail!(
+                        "next_heartbeat must be a non-negative integer (minutes)"
+                    ),
+                },
+            };
+            let (intent, effective_minutes, clamp_note) = match raw {
+                None => (SettleIntent::Bare, ctx.heartbeat_default_minutes, None),
+                Some(requested) => {
+                    let clamped = requested
+                        .clamp(SETTLE_FLOOR_MINUTES, SETTLE_CEILING_MINUTES);
+                    let note = if clamped != requested {
+                        Some((requested, clamped))
+                    } else {
+                        None
+                    };
+                    (SettleIntent::NextHeartbeat(clamped), clamped, note)
+                }
+            };
+
+            // Last-writer-wins if multiple settles in one batch; warn so
+            // the drift is visible.
+            {
+                let mut slot = ctx
+                    .settle_intent
+                    .lock()
+                    .expect("settle_intent mutex poisoned");
+                if slot.is_some() {
+                    tracing::warn!(
+                        turn = ctx.current_turn,
+                        "settle called more than once in a batch; last call wins"
+                    );
+                }
+                *slot = Some(intent);
+            }
+
+            let seconds_until = effective_minutes.saturating_mul(60);
+            let next_wake_at = jiff::Timestamp::now()
+                .checked_add(jiff::SignedDuration::from_secs(seconds_until as i64))
+                .map(|t| t.to_string())
+                .unwrap_or_else(|_| "unknown".into());
+            let mut result = json!({
+                "next_wake_at": next_wake_at,
+                "seconds_until": seconds_until,
+            });
+            if let Some((requested, clamped)) = clamp_note {
+                result["requested_minutes"] = json!(requested);
+                result["clamped_to_minutes"] = json!(clamped);
+            }
+            Ok(result.to_string())
+        })
+    }
+}
+
 fn parse_string_list(args: &Value, key: &str) -> anyhow::Result<Vec<String>> {
     match args.get(key) {
         Some(Value::Array(items)) => items
@@ -1551,6 +1653,8 @@ mod tests {
             arc_dirty: Arc::new(AtomicBool::new(false)),
             atomic_max_words: 100,
             shape_queue: None,
+            heartbeat_default_minutes: 45,
+            settle_intent: Arc::new(std::sync::Mutex::new(None)),
         };
         (ctx, dir, outbound_rx)
     }
@@ -1575,6 +1679,7 @@ mod tests {
             "read_moves",
             "compact",
             "write_atomic",
+            "settle",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2348,6 +2453,112 @@ mod tests {
         )
         .await;
         assert!(out.contains("body must be non-empty"), "{out}");
+    }
+
+    // -------- settle tool --------
+    //
+    // Hunt intent: each test names the drift it would catch. Do not
+    // add a settle test that cannot fail on a plausible regression.
+
+    /// Hunts: bare settle failing to write any intent (so the turn loop
+    /// wouldn't recompute the deadline) or writing the wrong variant.
+    #[tokio::test]
+    async fn settle_bare_writes_bare_intent() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "settle", json!({})).await;
+        let parsed: Value = serde_json::from_str(&out)
+            .unwrap_or_else(|_| panic!("expected JSON, got: {out}"));
+        assert!(parsed["next_wake_at"].is_string(), "{out}");
+        assert_eq!(parsed["seconds_until"].as_u64().unwrap(), 45 * 60);
+        assert!(parsed.get("requested_minutes").is_none(), "no clamp: {out}");
+        let intent = *ctx.settle_intent.lock().unwrap();
+        assert_eq!(intent, Some(SettleIntent::Bare));
+    }
+
+    /// Hunts: settle(N) ignoring the arg, unit confusion (seconds vs
+    /// minutes), or writing Bare when the agent gave an explicit value.
+    #[tokio::test]
+    async fn settle_with_arg_writes_next_heartbeat_intent() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": 120})).await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["seconds_until"].as_u64().unwrap(), 120 * 60);
+        assert!(parsed.get("clamped_to_minutes").is_none(), "no clamp: {out}");
+        let intent = *ctx.settle_intent.lock().unwrap();
+        assert_eq!(intent, Some(SettleIntent::NextHeartbeat(120)));
+    }
+
+    /// Hunts: floor missing or off-by-one; result JSON not surfacing the
+    /// clamp so the agent can't notice its arg was rewritten.
+    #[tokio::test]
+    async fn settle_clamps_below_floor() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": 0})).await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["seconds_until"].as_u64().unwrap(), 60);
+        assert_eq!(parsed["requested_minutes"].as_u64().unwrap(), 0);
+        assert_eq!(parsed["clamped_to_minutes"].as_u64().unwrap(), 1);
+        let intent = *ctx.settle_intent.lock().unwrap();
+        assert_eq!(intent, Some(SettleIntent::NextHeartbeat(1)));
+    }
+
+    /// Hunts: ceiling missing, off-by-one at 480, or the ceiling being
+    /// set below 8h by accident.
+    #[tokio::test]
+    async fn settle_clamps_above_ceiling() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": 1000})).await;
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["seconds_until"].as_u64().unwrap(), 480 * 60);
+        assert_eq!(parsed["requested_minutes"].as_u64().unwrap(), 1000);
+        assert_eq!(parsed["clamped_to_minutes"].as_u64().unwrap(), 480);
+        let intent = *ctx.settle_intent.lock().unwrap();
+        assert_eq!(intent, Some(SettleIntent::NextHeartbeat(480)));
+    }
+
+    /// Hunts: exact-boundary values (1 and 480) getting clamped by an
+    /// exclusive comparison.
+    #[tokio::test]
+    async fn settle_boundary_values_pass_through() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        for &n in &[1u64, 480u64] {
+            let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": n})).await;
+            let parsed: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(parsed["seconds_until"].as_u64().unwrap(), n * 60);
+            assert!(
+                parsed.get("clamped_to_minutes").is_none(),
+                "boundary {n} shouldn't clamp: {out}"
+            );
+        }
+    }
+
+    /// Hunts: multi-settle-in-batch silently keeping the FIRST intent,
+    /// which would let a stale earlier value override the agent's most
+    /// recent choice.
+    #[tokio::test]
+    async fn settle_multiple_calls_last_wins() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let _ = run(&registry, &ctx, "settle", json!({"next_heartbeat": 60})).await;
+        let _ = run(&registry, &ctx, "settle", json!({"next_heartbeat": 30})).await;
+        let intent = *ctx.settle_intent.lock().unwrap();
+        assert_eq!(intent, Some(SettleIntent::NextHeartbeat(30)));
+    }
+
+    /// Hunts: non-integer or negative args slipping through and either
+    /// panicking or being coerced to 0 silently.
+    #[tokio::test]
+    async fn settle_rejects_non_integer_arg() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": "soon"})).await;
+        assert!(out.contains("next_heartbeat"), "{out}");
+        assert!(ctx.settle_intent.lock().unwrap().is_none(), "no intent on error");
     }
 
     #[tokio::test]

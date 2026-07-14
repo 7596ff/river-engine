@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-pub const DEFAULT_TOOLS: [&str; 14] = [
+pub const DEFAULT_TOOLS: [&str; 15] = [
     "read", "write", "edit", "glob", "grep", "bash", "speak", "search", "channel_read",
-    "reject_candidate", "create_moment", "read_moves", "compact", "write_atomic",
+    "reject_candidate", "create_moment", "read_moves", "compact", "write_atomic", "settle",
 ];
 
 #[derive(Debug, Deserialize)]

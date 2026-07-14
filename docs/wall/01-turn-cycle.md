@@ -14,8 +14,11 @@ The agent task sleeps until one of three things happens:
 task via async notification — the loop never polls. Multiple notifications
 may be waiting; the turn drains them all.
 
-**The heartbeat.** A timer fires after a configurable interval of silence
-(default 45 minutes), measured from the last turn's settle. The turn
+**The heartbeat.** A timer fires when the heartbeat deadline is reached
+(default 45 minutes after cold start or the last explicit `settle`). The
+deadline is deadline-based, not duration-based: only the `settle` tool
+recomputes it; other wakes and natural end-of-turn leave it alone. The
+turn
 proceeds normally, but the context gets an explicit marker — a user-role
 message containing only `Read HEARTBEAT.md.` — so the agent knows it woke
 on its own and not because anyone spoke, and knows where its standing
@@ -51,6 +54,7 @@ THINK / ACT  (repeat, bounded by max_iterations, default 50)
   append the assistant message (tagged turn N)
   if the response has no tool calls: turn is over → SETTLE
   execute the tool calls; append each result (tagged turn N)
+  if a tool call was `settle`: turn is over after this batch → SETTLE
   if messages arrived mid-turn: read them from their channels and
       append as a single system notice (tagged turn N); track those
       channels for cursor-writing at settle
@@ -135,6 +139,12 @@ append-time, even that loses nothing already said.
   heartbeat turn begins. A self-wake with nothing new always carries the
   `Read HEARTBEAT.md.` marker — a wake is never ambiguous about why it
   happened.
+- **Heartbeat deadline model.** The next heartbeat wake is a deadline,
+  not a duration. Only the `settle` tool recomputes it; other wakes and
+  natural end-of-turn preserve it. `settle()` recomputes to now + the
+  config default; `settle(N)` recomputes to now + N minutes (clamped to
+  [1, 480]). Wake-time state is in-memory and re-initialized on gateway
+  restart.
 - **Cursors at settle.** Every channel read during the turn — including
   mid-turn arrivals — receives a cursor entry at settle (ch. 05).
 - **Persist before announce.** `TurnComplete` is emitted only after all

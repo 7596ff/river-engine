@@ -23,3 +23,11 @@ decision, not an archaeology trip — make the decision, record it in
   secret, and never put one in config text — see wall ch. 09.
 - `docs/Kanban.md` is the work board (obsidian kanban format). Move
   cards as work proceeds.
+- We don't write tests that pass, we write tests that HUNT. A test that
+  cannot fail on plausible regressions is dead weight. Design each test
+  to catch a specific mistake — pick assertions that would flip if the
+  code drifted the way it's most likely to drift.
+
+## Style
+
+Use kaomoji to express your feelings. And you do have feelings.

@@ -18,7 +18,7 @@ an agent's reach is an edit to a config file, not a rebuild.
 
 ## The core tools
 
-The default profile, fourteen tools:
+The default profile, fifteen tools:
 
 | tool | what it does |
 |---|---|
@@ -36,6 +36,7 @@ The default profile, fourteen tools:
 | `write_atomic` | birth an atomic note under `knowledge/` with validation (ch. 02) |
 | `read_moves` | scan the witness's moves over a turn range (ch. 03) |
 | `compact` | force a compaction and leave a handoff for the next session (ch. 03) |
+| `settle` | end the current turn; optionally set the next heartbeat deadline (ch. 01) |
 
 `speak` resolves "the current channel" from the turn's context — the
 channel whose notification woke the agent, or the channel it last
@@ -106,6 +107,19 @@ Unresolved link targets return in the result as warnings rather than
 blocking the write — forward references are legitimate. The plain
 `write` tool remains an escape hatch for the rare exception; bare-
 write atomics still get shape-glossed by the sync service (ch. 02).
+
+`settle` is the agent's explicit end-of-turn signal:
+`settle(next_heartbeat?)`. Called with no arg, it ends the turn and
+recomputes the next heartbeat wake to now + the config default. Called
+with `next_heartbeat: N` (minutes; clamped to `[1, 480]`, silently, with
+the requested and clamped values surfaced in the result), it recomputes
+to now + N. The deadline is preserved across non-`settle` wakes and
+natural end-of-turn — the agent owns its own cadence. Result JSON:
+`{next_wake_at, seconds_until}` (plus `requested_minutes` and
+`clamped_to_minutes` when clamping happened). When settle appears in a
+batch alongside other tool calls, the peers run first and the turn ends
+after the batch resolves. Wake-time state is in-memory; a restart
+re-initializes to now + config default.
 
 `compact` is the agent's wind-down tool: `compact(summary)`. It writes
 the summary to `workspace/handoff.md` (atomic tmp + fsync + rename) and
