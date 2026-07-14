@@ -1847,6 +1847,21 @@ impl Memory {
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
     }
 
+    /// Test-only: set an activation score for a note directly, without
+    /// the bump/propagation machinery. Lets tests parameterize warmth
+    /// gates precisely; production code always goes through the
+    /// bump path so warmth reflects real access.
+    #[cfg(test)]
+    pub fn set_activation_for_test(&self, note_id: &str, score: f64) -> anyhow::Result<()> {
+        let db = self.db.lock().expect("db lock");
+        db.execute(
+            "INSERT INTO activation (note_id, score, bumped_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(note_id) DO UPDATE SET score = ?2, bumped_at = ?3",
+            rusqlite::params![note_id, score, jiff::Timestamp::now().to_string()],
+        )?;
+        Ok(())
+    }
+
     /// The workspace root this Memory was opened for. Used by
     /// consumers that render paths back to their workspace-relative
     /// or absolute form.

@@ -216,44 +216,50 @@ pub async fn flash_pass<C: Chat + Sync>(ctx: FlashPassCtx<'_, C>) -> anyhow::Res
     // Correction is stubbed; its predicate is empty. Skip.
 
     for frame in frames {
-        // Send first; if send fails, don't log the receipt (avoid a
-        // torn log line that describes a phantom frame — same
-        // discipline as connect today).
-        if let Err(e) = ctx.sender.try_send(frame.clone()) {
+        let turn = frame.turn;
+        let flash_type = frame.flash_type;
+        if let Err(e) = deliver_and_log(ctx.sender, ctx.state, frame) {
             tracing::warn!(
-                turn = ctx.turn,
+                turn,
                 error = %e,
-                flash_type = frame.flash_type.as_str(),
-                "flash frame send failed; dropping"
+                flash_type = flash_type.as_str(),
+                "flash delivery failed"
             );
-            continue;
         }
-        let entry = frame_to_log_entry(&frame);
-        if let Err(e) = log::append(&ctx.state.log_path, &entry) {
-            tracing::warn!(
-                turn = ctx.turn,
-                error = %e,
-                "flash-log append failed"
-            );
-            continue;
+    }
+    Ok(())
+}
+
+/// Send a frame, append its receipt, update refractory — in that
+/// order, with each step guarding the next. The ordering is the
+/// invariant: no log line describes an undelivered frame, no
+/// refractory state marks a target as recently-fired without a
+/// receipt to back it. Errors at any step short-circuit the rest so
+/// state stays consistent.
+fn deliver_and_log(
+    sender: &mpsc::Sender<FlashFrame>,
+    state: &mut State,
+    frame: FlashFrame,
+) -> anyhow::Result<()> {
+    let entry = frame_to_log_entry(&frame);
+    let target_ref = frame.target_ref.clone();
+    let turn = frame.turn;
+    let flash_type = frame.flash_type;
+    sender
+        .try_send(frame)
+        .map_err(|e| anyhow::anyhow!("send failed: {e}"))?;
+    log::append(&state.log_path, &entry)?;
+    match flash_type {
+        FlashType::Echo => {
+            state.echo_last.insert(target_ref, turn);
         }
-        // Update refractory only for successfully-appended entries.
-        match frame.flash_type {
-            FlashType::Echo => {
-                ctx.state.echo_last.insert(frame.target_ref, frame.turn);
-            }
-            FlashType::Return => {
-                ctx.state
-                    .return_last
-                    .insert(frame.target_ref, frame.turn);
-            }
-            FlashType::Bridge => {
-                ctx.state
-                    .bridge_last
-                    .insert(frame.target_ref, frame.turn);
-            }
-            FlashType::Connection | FlashType::Correction => {}
+        FlashType::Return => {
+            state.return_last.insert(target_ref, turn);
         }
+        FlashType::Bridge => {
+            state.bridge_last.insert(target_ref, turn);
+        }
+        FlashType::Connection | FlashType::Correction => {}
     }
     Ok(())
 }
@@ -729,6 +735,72 @@ fn paths_match(a: &Path, b_str: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::tests::FakeEmbedder;
+    use crate::memory::Memory;
+    use crate::model::{ChatMessage, ChatResponse, ToolSchema};
+    use std::sync::Arc;
+
+    /// Fake Chat that returns a scripted queue of replies. `chat`
+    /// pops one per call; extra calls panic (a signal the test setup
+    /// under-provisioned, which is itself a bug worth catching).
+    struct ScriptedChat(std::sync::Mutex<Vec<String>>);
+
+    impl ScriptedChat {
+        fn new(replies: Vec<&str>) -> Self {
+            Self(std::sync::Mutex::new(
+                replies.into_iter().map(String::from).collect(),
+            ))
+        }
+    }
+
+    impl crate::model::Chat for ScriptedChat {
+        async fn chat(
+            &self,
+            _system: &str,
+            _messages: &[ChatMessage],
+            _tools: &[ToolSchema],
+        ) -> anyhow::Result<ChatResponse> {
+            let mut q = self.0.lock().unwrap();
+            if q.is_empty() {
+                panic!("ScriptedChat exhausted — test asked for more replies than provided");
+            }
+            let content = q.remove(0);
+            Ok(ChatResponse {
+                content,
+                tool_calls: Vec::new(),
+                prompt_tokens: Some(0),
+            })
+        }
+    }
+
+    fn make_memory(dir: &Path) -> Memory {
+        let workspace = dir.join("ws");
+        std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
+        Memory::open(&dir.join("data"), &workspace, &[], Arc::new(FakeEmbedder)).unwrap()
+    }
+
+    fn make_state(log_path: PathBuf) -> State {
+        State {
+            config: FlashConfig::default(),
+            log_path,
+            echo_last: HashMap::new(),
+            return_last: HashMap::new(),
+            bridge_last: HashMap::new(),
+        }
+    }
+
+    fn echo_frame(target: &str, turn: u64) -> FlashFrame {
+        FlashFrame {
+            turn,
+            channel: "local_main".into(),
+            flash_type: FlashType::Echo,
+            target_ref: target.into(),
+            target_path: PathBuf::from(format!("knowledge/{target}.md")),
+            score: 0.9,
+            body: "body".into(),
+            bridge_extras: None,
+        }
+    }
 
     #[test]
     fn frame_to_log_entry_carries_bridge_extras() {
@@ -852,5 +924,355 @@ mod tests {
         assert_eq!(signals::staleness_turns(&last, "01A", 100), 60);
         // now_turn < last_touched (shouldn't happen but must be safe):
         assert_eq!(signals::staleness_turns(&last, "01A", 20), 0);
+    }
+
+    // -------- hunt tests: deliver/log/refractory ordering --------
+    //
+    // These prove the "no phantom receipt" and "no false refractory"
+    // invariants of deliver_and_log. Each names the drift it hunts.
+
+    /// Hunts: someone reorders deliver_and_log so `log::append` runs
+    /// before `try_send`, or ignores the send Err. Either would let
+    /// flashes.jsonl accumulate receipts for frames that never
+    /// reached the turn loop.
+    #[test]
+    fn deliver_and_log_send_failure_skips_log_and_refractory() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("flashes.jsonl");
+        let mut state = make_state(log_path.clone());
+        let (tx, rx) = mpsc::channel::<FlashFrame>(1);
+        drop(rx); // closes the channel; every try_send fails with Closed.
+
+        let err = deliver_and_log(&tx, &mut state, echo_frame("01A", 5)).unwrap_err();
+        assert!(err.to_string().contains("send failed"), "err = {err}");
+
+        // Log must not exist (never opened).
+        assert!(!log_path.exists(), "log written despite send failure");
+        // Refractory map must be untouched.
+        assert!(state.echo_last.is_empty(), "refractory updated despite send failure");
+    }
+
+    /// Hunts: someone updates the refractory map before verifying the
+    /// log append succeeded, causing a "recently fired" state with no
+    /// receipt to back it — the target then never re-fires but no
+    /// audit trail says why.
+    #[test]
+    fn deliver_and_log_log_failure_skips_refractory() {
+        let dir = tempfile::tempdir().unwrap();
+        // Point log_path at an existing DIRECTORY: OpenOptions::append
+        // on a dir returns EISDIR, guaranteeing log::append fails.
+        let bad_log = dir.path().join("nested_dir");
+        std::fs::create_dir_all(&bad_log).unwrap();
+        let mut state = make_state(bad_log);
+        let (tx, mut rx) = mpsc::channel::<FlashFrame>(4);
+
+        let err = deliver_and_log(&tx, &mut state, echo_frame("01A", 5)).unwrap_err();
+        // Must be log-append flavored, not send-flavored.
+        assert!(!err.to_string().contains("send failed"), "err classification wrong: {err}");
+        // Frame reached the queue (send succeeded).
+        assert!(rx.try_recv().is_ok(), "frame should have been sent before log attempted");
+        // Refractory map untouched even though send worked.
+        assert!(
+            state.echo_last.is_empty(),
+            "refractory updated despite log failure"
+        );
+    }
+
+    // -------- hunt tests: recover + serde format --------
+
+    /// Hunts: someone changes `warn+continue` on malformed lines to
+    /// `bail!`, which would make the witness fail to start after one
+    /// torn line at the tail. Also hunts silent-drop of valid entries
+    /// that happen to appear after a bad line.
+    #[test]
+    fn recover_skips_malformed_lines_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("witness/flashes.jsonl");
+        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        let good = |target: &str, turn: u64| {
+            let entry = FlashLogEntry {
+                flash_type: FlashType::Echo,
+                turn,
+                channel: "local_main".into(),
+                target_ref: target.into(),
+                target_path: format!("knowledge/{target}.md"),
+                score: 0.7,
+                at: "t".into(),
+                turn_shape: None,
+                target_shape: None,
+            };
+            serde_json::to_string(&entry).unwrap()
+        };
+        let mut body = String::new();
+        body.push_str(&good("01A", 10));
+        body.push('\n');
+        body.push_str("{ this is not valid json\n");
+        body.push_str(&good("01B", 20));
+        body.push('\n');
+        body.push_str("\n"); // empty line (already handled but confirm)
+        body.push_str("garbage that isn't even an object\n");
+        body.push_str(&good("01C", 30));
+        body.push('\n');
+        std::fs::write(&log_path, body).unwrap();
+
+        let mut state = make_state(log_path);
+        log::recover(&mut state).expect("recover must not bail on malformed lines");
+        assert_eq!(state.echo_last.get("01A"), Some(&10));
+        assert_eq!(state.echo_last.get("01B"), Some(&20));
+        assert_eq!(state.echo_last.get("01C"), Some(&30));
+        assert_eq!(state.echo_last.len(), 3, "no phantom entries from junk");
+    }
+
+    /// Hunts: someone removes or edits the `#[serde(rename_all =
+    /// "lowercase")]` on FlashType, breaking every existing
+    /// flashes.jsonl at recover time. Also hunts: someone renames a
+    /// variant (Connection → Connect) without a migration.
+    #[test]
+    fn flash_type_serde_is_stable_lowercase() {
+        assert_eq!(
+            serde_json::from_str::<FlashType>("\"connection\"").unwrap(),
+            FlashType::Connection
+        );
+        assert_eq!(
+            serde_json::from_str::<FlashType>("\"echo\"").unwrap(),
+            FlashType::Echo
+        );
+        assert_eq!(
+            serde_json::from_str::<FlashType>("\"return\"").unwrap(),
+            FlashType::Return
+        );
+        assert_eq!(
+            serde_json::from_str::<FlashType>("\"bridge\"").unwrap(),
+            FlashType::Bridge
+        );
+        assert_eq!(
+            serde_json::from_str::<FlashType>("\"correction\"").unwrap(),
+            FlashType::Correction
+        );
+        // Round-trip: variant → JSON → variant.
+        for ft in [
+            FlashType::Connection,
+            FlashType::Echo,
+            FlashType::Return,
+            FlashType::Bridge,
+            FlashType::Correction,
+        ] {
+            let j = serde_json::to_string(&ft).unwrap();
+            let back: FlashType = serde_json::from_str(&j).unwrap();
+            assert_eq!(ft, back, "round-trip mismatch: {j}");
+            assert!(
+                j.chars().all(|c| c == '"' || c.is_ascii_lowercase()),
+                "expected lowercase, got {j}"
+            );
+        }
+    }
+
+    // -------- hunt tests: predicate boundaries --------
+
+    fn make_hit(path: &str, score: f32) -> SearchHit {
+        SearchHit {
+            file_path: path.into(),
+            text: "excerpt".into(),
+            score,
+        }
+    }
+
+    /// Hunts: `<` → `<=` (or vice versa) on the warmth gate in Echo.
+    /// The predicate spec: warmth exactly at min → fires; warmth just
+    /// below → skips. Also hunts the min_new_turns_target refractory
+    /// boundary (turn - last == threshold should FIRE, meaning strict
+    /// `<`).
+    #[tokio::test]
+    async fn echo_boundaries_fire_at_equality_and_skip_below() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        // Write a knowledge note so target_ref_for_path resolves and
+        // load_target_head has content.
+        std::fs::write(
+            mem.workspace_root().join("knowledge/01A.md"),
+            "---\nid: 01A\n---\nbody\n",
+        )
+        .unwrap();
+        let mut config = EchoConfig::default();
+        config.enabled = true;
+        config.threshold = 0.5;
+        config.warmth_min = 2.0;
+        config.min_new_turns_target = 10;
+
+        let pool = vec![make_hit("knowledge/01A.md", 0.9)];
+
+        // Warmth just below min → skips.
+        mem.set_activation_for_test("01A", 1.99).unwrap();
+        let frames = types::echo::evaluate(&pool, &config, 100, "c", &mem, &HashMap::new());
+        assert!(frames.is_empty(), "warmth < min must skip");
+
+        // Warmth exactly at min → fires.
+        mem.set_activation_for_test("01A", 2.0).unwrap();
+        let frames = types::echo::evaluate(&pool, &config, 100, "c", &mem, &HashMap::new());
+        assert_eq!(frames.len(), 1, "warmth == min must fire");
+
+        // Refractory boundary. last_fire = 100, current turn 109
+        // (delta 9 < threshold 10) → skips. current turn 110
+        // (delta 10 == threshold) → fires.
+        let mut last = HashMap::new();
+        last.insert("01A".into(), 100u64);
+        let frames = types::echo::evaluate(&pool, &config, 109, "c", &mem, &last);
+        assert!(frames.is_empty(), "delta < min_new_turns_target must skip");
+        let frames = types::echo::evaluate(&pool, &config, 110, "c", &mem, &last);
+        assert_eq!(frames.len(), 1, "delta == min_new_turns_target must fire");
+    }
+
+    /// Hunts: `>` → `>=` on Return's warmth-max gate. Predicate spec:
+    /// warmth exactly at max → fires; warmth just above → skips.
+    #[tokio::test]
+    async fn return_boundary_fires_at_equality_and_skips_above() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        std::fs::write(
+            mem.workspace_root().join("knowledge/01A.md"),
+            "---\nid: 01A\n---\nbody\n",
+        )
+        .unwrap();
+        let mut config = ReturnConfig::default();
+        config.enabled = true;
+        config.threshold = 0.5;
+        config.warmth_max = 3.0;
+        config.min_new_turns_target = 0; // disable refractory for this test
+
+        let pool = vec![make_hit("knowledge/01A.md", 0.9)];
+
+        // Warmth just above max → skips.
+        mem.set_activation_for_test("01A", 3.01).unwrap();
+        let frames = types::return_::evaluate(&pool, &config, 100, "c", &mem, &HashMap::new());
+        assert!(frames.is_empty(), "warmth > max must skip");
+
+        // Warmth exactly at max → fires.
+        mem.set_activation_for_test("01A", 3.0).unwrap();
+        let frames = types::return_::evaluate(&pool, &config, 100, "c", &mem, &HashMap::new());
+        assert_eq!(frames.len(), 1, "warmth == max must fire");
+    }
+
+    // -------- hunt tests: helpers --------
+
+    /// Hunts: someone changes `chars().enumerate()` truncation to byte
+    /// slicing, which panics on non-ASCII boundaries. Also hunts the
+    /// 1200 constant flipping to a smaller value silently.
+    #[test]
+    fn load_target_head_utf8_safe_at_cap_and_short_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // 2000 multi-byte chars (each 3 bytes). If truncation used
+        // bytes, this would panic on a char boundary somewhere.
+        let content: String = "字".repeat(2000);
+        let path = dir.path().join("wide.md");
+        std::fs::write(&path, &content).unwrap();
+
+        let head = load_target_head(dir.path(), Path::new("wide.md"));
+        assert_eq!(head.chars().count(), 1200, "cap is 1200 chars");
+        // All chars remain the same multi-byte char — no torn boundary.
+        assert!(head.chars().all(|c| c == '字'), "utf8 boundary torn");
+
+        // Short file: whole thing.
+        std::fs::write(dir.path().join("short.md"), "hi").unwrap();
+        assert_eq!(load_target_head(dir.path(), Path::new("short.md")), "hi");
+    }
+
+    /// Hunts: someone changes `unwrap_or_default()` on the file read
+    /// to `?` or `expect`, turning a missing target into a hard error
+    /// that would kill the flash pass instead of quietly producing an
+    /// empty tail.
+    #[test]
+    fn load_target_head_returns_empty_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let head = load_target_head(dir.path(), Path::new("nope/absent.md"));
+        assert_eq!(head, "", "missing file must return empty, not panic");
+    }
+
+    /// Hunts: someone tightens paths_match (e.g., requiring absolute
+    /// paths) and breaks the Connection self-write guard for
+    /// workspace-relative recent_writes; or loosens it so different
+    /// files with same stem collide unexpectedly.
+    #[test]
+    fn paths_match_equivalence_rules() {
+        // Same path matches.
+        assert!(paths_match(Path::new("knowledge/01A.md"), "knowledge/01A.md"));
+        // Different directories, same filename: matches (deliberate —
+        // the guard tolerates absolute vs relative renderings).
+        assert!(paths_match(
+            Path::new("/abs/knowledge/01A.md"),
+            "knowledge/01A.md"
+        ));
+        // Different filenames: does NOT match.
+        assert!(!paths_match(
+            Path::new("knowledge/01A.md"),
+            "knowledge/01B.md"
+        ));
+        // Root-ish path with no file_name doesn't spuriously match.
+        assert!(!paths_match(Path::new("/"), "knowledge/01A.md"));
+    }
+
+    /// Hunts: someone changes eq_ignore_ascii_case → strict eq (so
+    /// the witness saying "nothing_to_connect" or
+    /// "Nothing_To_Connect" starts producing spurious frames), or
+    /// drops the empty check (so blank replies land as blank flash
+    /// bodies).
+    #[tokio::test]
+    async fn connection_skips_sentinel_and_whitespace_responses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(
+            dir.path().join("knowledge/01A.md"),
+            "---\nid: 01A\n---\nbody\n",
+        )
+        .unwrap();
+        let mut config = ConnectionConfig::default();
+        config.enabled = true;
+        config.threshold = 0.5;
+        // Four candidate hits, each triggers one chat call.
+        let pool = vec![
+            make_hit("knowledge/01A.md", 0.9),
+            make_hit("knowledge/01A.md", 0.9),
+            make_hit("knowledge/01A.md", 0.9),
+            make_hit("knowledge/01A.md", 0.9),
+        ];
+        // Responses (in order): sentinel exact, sentinel lowercase,
+        // pure whitespace, real content.
+        let client = ScriptedChat::new(vec![
+            "NOTHING_TO_CONNECT",
+            "nothing_to_connect",
+            "  \n\t  ",
+            "the pattern from turn N shows up in [[01A]] as X",
+        ]);
+        let frames = types::connection::evaluate(
+            &pool,
+            &config,
+            42,
+            "c",
+            &[],
+            dir.path(),
+            &client,
+            "identity",
+            Some("prompt template {transcript} {target_path} {target_excerpt}"),
+            "transcript",
+        )
+        .await;
+        assert_eq!(frames.len(), 1, "only the real response should produce a frame");
+        assert!(
+            frames[0].body.contains("the pattern from turn N"),
+            "wrong frame kept: {}",
+            frames[0].body
+        );
+    }
+
+    /// Hunts: someone changes warmth_for to panic or return NaN on
+    /// missing activation. NaN would defeat every warmth-gate
+    /// comparison (`NaN < x` = false, `NaN > x` = false), producing
+    /// silent spurious fires or silent silence.
+    #[test]
+    fn warmth_for_missing_activation_returns_zero_not_nan() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let w = warmth_for(&mem, "01NEVER_SEEN");
+        assert_eq!(w, 0.0);
+        assert!(!w.is_nan(), "must not be NaN");
     }
 }
