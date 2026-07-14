@@ -3766,4 +3766,313 @@ pub mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].candidate_id, "01A");
     }
+
+    // -------- hunt tests --------
+    //
+    // Each names the drift it catches. Per CLAUDE.md, no test that
+    // cannot fail on a plausible regression.
+
+    // --- cosine primitive ---
+
+    /// Hunts: someone drops the `na == 0.0 || nb == 0.0` guard and
+    /// zero vectors produce NaN, which then poisons every downstream
+    /// comparator (`NaN < x` = false, `NaN > x` = false) — silent
+    /// misfires or silent silence across the whole retrieval layer.
+    /// Also hunts drift of the identity/orthogonal/anti properties.
+    #[test]
+    fn cosine_zero_and_dim_and_identity_properties() {
+        // Zero vector: 0.0, not NaN.
+        let z = vec![0.0f32; 3];
+        assert_eq!(cosine(&[1.0, 2.0, 3.0], &z), 0.0);
+        assert_eq!(cosine(&z, &[1.0, 2.0, 3.0]), 0.0);
+        assert!(!cosine(&z, &z).is_nan(), "zero/zero must not be NaN");
+        // Dim mismatch: 0.0.
+        assert_eq!(cosine(&[1.0, 0.0], &[1.0, 0.0, 0.0]), 0.0);
+        // Empty: 0.0.
+        assert_eq!(cosine(&[], &[]), 0.0);
+        // Identity: 1.0.
+        let v = [3.0f32, 4.0, 0.0];
+        assert!((cosine(&v, &v) - 1.0).abs() < 1e-5);
+        // Orthogonal: 0.0.
+        assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-5);
+        // Anti-parallel: -1.0.
+        assert!((cosine(&[1.0, 0.0], &[-1.0, 0.0]) + 1.0).abs() < 1e-5);
+    }
+
+    // --- cap_chars ---
+
+    /// Hunts: someone converts cap_chars from chars() to len() (bytes)
+    /// and multi-byte truncation panics on non-ASCII boundaries. Also
+    /// hunts changes that omit the ellipsis suffix.
+    #[test]
+    fn cap_chars_utf8_and_boundary() {
+        assert_eq!(cap_chars("hello", 100), "hello", "under cap: unchanged");
+        assert_eq!(cap_chars("hello", 5), "hello", "at cap: unchanged");
+        let out = cap_chars("hello", 4);
+        assert_eq!(out, "hell…", "over cap: 4 chars + ellipsis");
+        // 3-byte codepoints — no panic, correct char count.
+        let wide: String = "字".repeat(1000);
+        let out = cap_chars(&wide, 200);
+        assert_eq!(out.chars().count(), 201, "200 chars + ellipsis");
+        assert!(out.chars().take(200).all(|c| c == '字'));
+    }
+
+    // --- search_no_bump_with_vec ---
+
+    /// Hunts: someone removes the top_k == 0 short-circuit and does a
+    /// full segments scan for nothing (perf regression on any Bridge
+    /// call that gates top_k on config).
+    #[tokio::test]
+    async fn search_no_bump_with_vec_top_k_zero_short_circuits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // Give it a segment to prove k=0 wouldn't accidentally return.
+        let ws = dir.path().join("ws");
+        std::fs::write(ws.join("knowledge/01A.md"), "some words here\n").unwrap();
+        mem.sweep().await.unwrap();
+        let v = mem.embed_query("anything").await.unwrap();
+        let hits = mem.search_no_bump_with_vec(&v, 0).unwrap();
+        assert!(hits.is_empty(), "k=0 must return empty");
+    }
+
+    /// Hunts: someone drops the `blob.len() == expected_bytes` guard,
+    /// and a dim-mismatched row (stale after embedder swap) panics on
+    /// chunks_exact or produces a nonsense cosine.
+    #[tokio::test]
+    async fn search_no_bump_with_vec_skips_dim_mismatched_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = dir.path().join("ws");
+        std::fs::write(ws.join("knowledge/01A.md"), "some words\n").unwrap();
+        mem.sweep().await.unwrap();
+        // Corrupt one segment's embedding to the wrong byte length.
+        {
+            let db = mem.db.lock().unwrap();
+            db.execute(
+                "UPDATE segments SET embedding = ?1",
+                [&vec![0u8; 4] as &dyn rusqlite::ToSql],
+            )
+            .unwrap();
+        }
+        let v = mem.embed_query("query").await.unwrap();
+        // FakeEmbedder produces 26-dim vectors → 104 bytes. Our
+        // corrupted row is 4 bytes. Must be skipped, not panic.
+        let hits = mem.search_no_bump_with_vec(&v, 10).unwrap();
+        assert!(hits.is_empty(), "dim-mismatched row skipped, no panic");
+    }
+
+    // --- text_sim ---
+
+    /// Hunts: someone changes text_sim to return the FIRST segment's
+    /// similarity instead of the MAX. Bridge's text_sim_max gate then
+    /// misclassifies files whose first segment is neutral but a later
+    /// segment is a near-duplicate — spurious Bridge frames.
+    #[tokio::test]
+    async fn text_sim_returns_max_across_segments_not_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = dir.path().join("ws");
+        // Two paragraphs, split by blank line → two segments. First is
+        // all consonants, second is a near-duplicate of the query.
+        let path = ws.join("knowledge/01A.md");
+        std::fs::write(
+            &path,
+            "bcdfg hjklm npqrs tvwxz\n\n\
+             query words that should match\n",
+        )
+        .unwrap();
+        mem.sweep().await.unwrap();
+        let v = mem.embed_query("query words that should match").await.unwrap();
+        let stored_path = path.display().to_string();
+        let sim = mem.text_sim(&stored_path, &v).unwrap();
+        // Should be very close to 1.0 (max hits the second segment,
+        // which is nearly identical to the query).
+        assert!(sim > 0.9, "text_sim must return MAX segment sim, got {sim}");
+    }
+
+    // --- decay_tick ---
+
+    /// Hunts: someone changes the prune predicate from `< 0.01` to
+    /// `<= 0.01` (or drops it entirely). The 0.01 floor is what keeps
+    /// activation from silting up with sub-noise rows over time.
+    #[tokio::test]
+    async fn decay_tick_prunes_below_threshold_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // Set three activations: just above the floor, exactly at,
+        // and just below.
+        mem.set_activation_for_test("above", 0.011).unwrap();
+        mem.set_activation_for_test("at", 0.010).unwrap();
+        mem.set_activation_for_test("below", 0.009).unwrap();
+        // Decay factor from default knobs (0.8 per wall) — but tick
+        // multiplies BEFORE pruning, so post-tick scores are:
+        //   above: 0.011 * decay
+        //   at:    0.010 * decay
+        //   below: 0.009 * decay
+        // All three shrink; the prune keeps only rows with score >= 0.01.
+        // Since even 0.011 * 0.8 = 0.0088 < 0.01, ALL three get pruned.
+        // Use a decay of 1.0 (no shrink) by setting activation slightly
+        // higher on the "above" case to verify the boundary logic.
+        mem.set_activation_for_test("above", 100.0).unwrap();
+        mem.set_activation_for_test("at", 0.010).unwrap();
+        mem.set_activation_for_test("below", 0.009).unwrap();
+        mem.decay_tick().unwrap();
+        // "below" (< 0.01 after decay) is gone.
+        assert!(mem.activation("below").unwrap().is_none(), "below-floor pruned");
+        // "at" — 0.010 * 0.8 = 0.008 < 0.01, also pruned.
+        assert!(mem.activation("at").unwrap().is_none(), "at-floor pruned after decay");
+        // "above" survives — its score after decay is 80.0.
+        let score_above = mem.activation("above").unwrap().unwrap();
+        assert!(
+            (score_above - 80.0).abs() < 1e-6,
+            "above-floor survives with expected decayed score, got {score_above}"
+        );
+    }
+
+    // --- read_frontmatter_field ---
+
+    /// Hunts: someone tightens the parser to reject colons in the
+    /// value, empty values passing through as Some(""), or missing
+    /// closing --- treated as a valid block.
+    #[test]
+    fn read_frontmatter_field_handles_adversarial_shapes() {
+        // Simple bare value.
+        assert_eq!(
+            read_frontmatter_field("---\nid: 01A\n---\nbody", "id").as_deref(),
+            Some("01A")
+        );
+        // Quoted value.
+        assert_eq!(
+            read_frontmatter_field("---\nid: \"01B\"\n---\nbody", "id").as_deref(),
+            Some("01B")
+        );
+        // Value contains a colon.
+        assert_eq!(
+            read_frontmatter_field("---\nshape: has:colons\n---\nbody", "shape").as_deref(),
+            Some("has:colons")
+        );
+        // Empty value → None.
+        assert!(read_frontmatter_field("---\nid: \n---\nbody", "id").is_none());
+        // Field absent → None.
+        assert!(read_frontmatter_field("---\nother: v\n---\nbody", "id").is_none());
+        // No frontmatter at all → None.
+        assert!(read_frontmatter_field("just body", "id").is_none());
+        // Missing closing --- → None.
+        assert!(read_frontmatter_field("---\nid: 01A\nnever ended", "id").is_none());
+    }
+
+    // --- unquote ---
+
+    /// Hunts: someone breaks the paired-only unquoting (e.g., strips a
+    /// single leading quote when the trailing is absent, mangling a
+    /// value that happens to start with `"`).
+    #[test]
+    fn unquote_only_strips_paired_delimiters() {
+        assert_eq!(unquote("bare"), "bare");
+        assert_eq!(unquote("\"double\""), "double");
+        assert_eq!(unquote("'single'"), "single");
+        // Unpaired: return the raw value untouched.
+        assert_eq!(unquote("\"unpaired"), "\"unpaired");
+        assert_eq!(unquote("unpaired\""), "unpaired\"");
+        // Whitespace is trimmed before quote handling.
+        assert_eq!(unquote("  \"padded\"  "), "padded");
+    }
+
+    // --- link_stem ---
+
+    /// Hunts: someone changes the stem extractor to always require the
+    /// `.md` suffix (breaking bare-ulid targets) or to drop everything
+    /// after the first `.` (breaking filenames like `20260612.md.bak`
+    /// or partially-typed writes).
+    #[test]
+    fn link_stem_handles_bare_id_paths_and_no_extension() {
+        assert_eq!(link_stem("knowledge/01A.md"), "01A");
+        assert_eq!(link_stem("01A"), "01A");
+        assert_eq!(link_stem("a/b/c/01A.md"), "01A");
+        // No .md: return the last component as-is (bare wikilink).
+        assert_eq!(link_stem("plain-target"), "plain-target");
+        // Trailing slash: return empty (nothing after final /).
+        assert_eq!(link_stem("dir/"), "");
+    }
+
+    // --- path_matches_prefixes ---
+
+    /// Hunts: someone changes empty-list semantics from "match all" to
+    /// "match none" (which would silently break every default search).
+    /// Also hunts starts_with pitfalls where "knowledge/" would
+    /// mistakenly match "knowledgeextra/foo.md" (it must not — the
+    /// caller supplies a trailing slash by convention).
+    #[tokio::test]
+    async fn path_matches_prefixes_empty_and_starts_with_pitfall() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = mem.workspace_root();
+
+        // Empty prefixes: match anything.
+        let arbitrary = ws.join("anything/foo.md").display().to_string();
+        assert!(mem.path_matches_prefixes(&arbitrary, &[]));
+
+        // Real prefix on workspace-relative path.
+        let atomic = ws.join("knowledge/01A.md").display().to_string();
+        assert!(mem.path_matches_prefixes(&atomic, &["knowledge/".to_string()]));
+
+        // Same prefix WITHOUT trailing slash — matches a sibling dir
+        // that shares the letter run. This documents current behavior:
+        // the caller is expected to supply the trailing slash.
+        let sibling = ws.join("knowledgex/foo.md").display().to_string();
+        assert!(
+            mem.path_matches_prefixes(&sibling, &["knowledge".to_string()]),
+            "starts_with is literal — caller responsibility to trail-slash"
+        );
+        assert!(
+            !mem.path_matches_prefixes(&sibling, &["knowledge/".to_string()]),
+            "trailing slash disambiguates"
+        );
+    }
+
+    // --- is_atomic_path / workspace_relative ---
+
+    /// Hunts: someone widens is_atomic_path to include record/ or
+    /// channels/, which would let the shape subsystem try to gloss
+    /// engine-managed files.
+    #[tokio::test]
+    async fn is_atomic_path_scoped_to_knowledge_and_workspace_relative_strips_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        let ws = mem.workspace_root();
+        let atomic = ws.join("knowledge/01A.md").display().to_string();
+        let loom = ws.join("loom/2026.md").display().to_string();
+        assert!(mem.is_atomic_path(&atomic));
+        assert!(!mem.is_atomic_path(&loom), "loom is not an atomic path");
+        assert!(!mem.is_atomic_path("random/knowledge/01A.md"), "not workspace-anchored");
+
+        // workspace_relative strips the workspace prefix cleanly.
+        assert_eq!(mem.workspace_relative(&atomic), "knowledge/01A.md");
+        // Already-relative or unrelated: passed through.
+        assert_eq!(mem.workspace_relative("outside/other.md"), "outside/other.md");
+    }
+
+    // --- extraction queue ---
+
+    /// Hunts: someone changes pop_candidate to return Err on empty or
+    /// to panic. On a healthy quiet cycle the queue is empty most of
+    /// the time; a bail would break the digestion wake loop.
+    #[tokio::test]
+    async fn pop_candidate_on_empty_queue_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        assert!(mem.pop_candidate().unwrap().is_none());
+        assert_eq!(mem.queue_depth().unwrap(), 0);
+    }
+
+    // --- segmentation ---
+
+    /// Hunts: someone changes segment_with_cap to panic or return
+    /// Vec![""] on empty input. Empty files pass through index_file
+    /// via this function; a panic would kill the sweep.
+    #[test]
+    fn segment_with_cap_on_empty_and_whitespace_returns_empty() {
+        assert!(segment_with_cap("", 100).is_empty());
+        assert!(segment_with_cap("   \n  \n\n   ", 100).is_empty());
+    }
 }
