@@ -742,33 +742,64 @@ fn collect_recent_agent_writes(
         return Vec::new();
     }
     let from = turn.saturating_sub(window);
+    // Build a tool-result index once: id → content (JSON string).
+    // Needed for `write_atomic`, which generates its path inside the
+    // tool and returns it in the result JSON rather than accepting it
+    // as an argument.
+    let tool_results: std::collections::HashMap<&str, &str> = all_lines
+        .iter()
+        .filter(|l| l.role == RecordRole::Tool && l.turn >= from && l.turn <= turn)
+        .filter_map(|l| {
+            let id = l.tool_call_id.as_deref()?;
+            let content = l.content.as_deref()?;
+            Some((id, content))
+        })
+        .collect();
     let mut out: Vec<PathBuf> = Vec::new();
+    let mut push_relative = |path_str: &str| {
+        let candidate = std::path::PathBuf::from(path_str);
+        let abs = if candidate.is_absolute() {
+            candidate
+        } else {
+            workspace.join(candidate)
+        };
+        if !out.contains(&abs) {
+            out.push(abs);
+        }
+    };
     for line in all_lines.iter().filter(|l| l.turn >= from && l.turn <= turn) {
         if line.role != RecordRole::Assistant {
             continue;
         }
         for call in line.tool_calls.iter().flatten() {
-            let is_write = matches!(call.name.as_str(), "write" | "edit" | "create_moment");
-            if !is_write {
-                continue;
-            }
-            let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
-                continue;
-            };
-            let Some(path_str) = args.get("path").and_then(|v| v.as_str()) else {
-                // create_moment writes under record/moments/{id}.md — but
-                // record/ is not indexed (wall ch. 10), so it never
-                // matches a hit anyway. Nothing to record here.
-                continue;
-            };
-            let candidate = std::path::PathBuf::from(path_str);
-            let abs = if candidate.is_absolute() {
-                candidate
-            } else {
-                workspace.join(candidate)
-            };
-            if !out.contains(&abs) {
-                out.push(abs);
+            match call.name.as_str() {
+                "write" | "edit" | "create_moment" => {
+                    // Path is in the args for these three.
+                    let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                    else {
+                        continue;
+                    };
+                    if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+                        push_relative(p);
+                    }
+                    // create_moment writes under record/moments/{id}.md
+                    // — but record/ is not indexed (wall ch. 10), so
+                    // it never matches a hit anyway.
+                }
+                "write_atomic" => {
+                    // Path is in the tool RESULT, not args. Look up
+                    // by call id.
+                    let Some(result) = tool_results.get(call.id.as_str()) else {
+                        continue;
+                    };
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(result) else {
+                        continue;
+                    };
+                    if let Some(p) = value.get("path").and_then(|v| v.as_str()) {
+                        push_relative(p);
+                    }
+                }
+                _ => continue,
             }
         }
     }
@@ -2029,4 +2060,333 @@ mod tests {
         );
     }
 
+    // -------- hunt tests --------
+    //
+    // Each names the drift it catches. Per CLAUDE.md, no test that
+    // cannot fail on a plausible regression.
+
+    // --- collect_recent_agent_writes ---
+
+    fn assistant_line(
+        turn: u64,
+        call_name: &str,
+        call_id: &str,
+        args: serde_json::Value,
+    ) -> RecordLine {
+        RecordLine {
+            id: format!("assist-{turn}-{call_id}"),
+            turn,
+            channel: "local_main".into(),
+            role: RecordRole::Assistant,
+            content: None,
+            tool_calls: Some(vec![crate::model::ToolCall {
+                id: call_id.into(),
+                name: call_name.into(),
+                arguments: args.to_string(),
+            }]),
+            tool_call_id: None,
+        }
+    }
+
+    fn tool_line(turn: u64, call_id: &str, content: &str) -> RecordLine {
+        RecordLine {
+            id: format!("tool-{turn}-{call_id}"),
+            turn,
+            channel: "local_main".into(),
+            role: RecordRole::Tool,
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: Some(call_id.into()),
+        }
+    }
+
+    /// Hunts: someone removes the `if window == 0` early return,
+    /// causing a wasted scan that would also emit spurious writes
+    /// from turn 0 (saturating_sub against unsigned).
+    #[test]
+    fn collect_recent_agent_writes_window_zero_returns_empty() {
+        let ws = tempfile::tempdir().unwrap();
+        let lines = vec![assistant_line(
+            5,
+            "write",
+            "c1",
+            serde_json::json!({"path": "foo.md"}),
+        )];
+        let out = collect_recent_agent_writes(&lines, 5, 0, ws.path());
+        assert!(out.is_empty(), "window=0 must short-circuit");
+    }
+
+    /// Hunts: someone drops the dedupe check and Connection's guard
+    /// gets an inflated recent_writes list — mostly harmless but a
+    /// signal the list is being built naively.
+    #[test]
+    fn collect_recent_agent_writes_dedupes_duplicate_paths() {
+        let ws = tempfile::tempdir().unwrap();
+        let lines = vec![
+            assistant_line(5, "write", "c1", serde_json::json!({"path": "foo.md"})),
+            assistant_line(5, "edit", "c2", serde_json::json!({"path": "foo.md"})),
+            assistant_line(6, "write", "c3", serde_json::json!({"path": "foo.md"})),
+        ];
+        let out = collect_recent_agent_writes(&lines, 6, 5, ws.path());
+        assert_eq!(out.len(), 1, "same path across three calls counted once: {out:?}");
+        assert_eq!(out[0], ws.path().join("foo.md"));
+    }
+
+    /// Hunts: someone widens the tool-name match set and starts
+    /// treating `read`/`bash` as writes, or narrows it and drops one
+    /// of the three legitimate write tools.
+    #[test]
+    fn collect_recent_agent_writes_ignores_non_write_tools() {
+        let ws = tempfile::tempdir().unwrap();
+        let lines = vec![
+            assistant_line(5, "read", "c1", serde_json::json!({"path": "a.md"})),
+            assistant_line(5, "bash", "c2", serde_json::json!({"command": "ls"})),
+            assistant_line(5, "search", "c3", serde_json::json!({"query": "x"})),
+            assistant_line(5, "write", "c4", serde_json::json!({"path": "kept.md"})),
+        ];
+        let out = collect_recent_agent_writes(&lines, 5, 5, ws.path());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], ws.path().join("kept.md"));
+    }
+
+    /// Hunts: the fix for write_atomic's self-write gap regressing.
+    /// write_atomic generates its path inside the tool and returns it
+    /// in the tool RESULT (not args), so the guard has to consult the
+    /// matching Tool-role line by call id.
+    #[test]
+    fn collect_recent_agent_writes_reads_write_atomic_path_from_result() {
+        let ws = tempfile::tempdir().unwrap();
+        let lines = vec![
+            assistant_line(
+                5,
+                "write_atomic",
+                "call_A",
+                serde_json::json!({"body": "a claim", "links": []}),
+            ),
+            tool_line(
+                5,
+                "call_A",
+                &serde_json::json!({
+                    "id": "01ATOM",
+                    "path": "knowledge/01ATOM.md",
+                    "warnings": []
+                })
+                .to_string(),
+            ),
+        ];
+        let out = collect_recent_agent_writes(&lines, 5, 5, ws.path());
+        assert_eq!(
+            out.len(),
+            1,
+            "write_atomic path must be extracted from tool result"
+        );
+        assert_eq!(out[0], ws.path().join("knowledge/01ATOM.md"));
+    }
+
+    /// Hunts: a write_atomic call whose tool line is missing (torn
+    /// mid-write, or the pair straddles the window boundary and got
+    /// filtered). The guard should silently drop the case, not panic.
+    #[test]
+    fn collect_recent_agent_writes_write_atomic_without_result_skips() {
+        let ws = tempfile::tempdir().unwrap();
+        let lines = vec![assistant_line(
+            5,
+            "write_atomic",
+            "call_A",
+            serde_json::json!({"body": "a"}),
+        )];
+        let out = collect_recent_agent_writes(&lines, 5, 5, ws.path());
+        assert!(out.is_empty(), "no result line → no path");
+    }
+
+    // --- is_digestion_turn / is_heartbeat_turn ---
+
+    fn user_line(turn: u64, content: &str) -> RecordLine {
+        RecordLine {
+            id: format!("u-{turn}"),
+            turn,
+            channel: "local_main".into(),
+            role: RecordRole::User,
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn system_line(turn: u64, content: &str) -> RecordLine {
+        RecordLine {
+            id: format!("s-{turn}"),
+            turn,
+            channel: "local_main".into(),
+            role: RecordRole::System,
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Hunts: someone loosens is_digestion_turn to treat any turn
+    /// with a `[digestion]` marker as digestion-driven, missing the
+    /// "conservative" contract: a real user message on the same turn
+    /// disqualifies (hybrid turns must not be skipped).
+    #[test]
+    fn is_digestion_turn_user_line_disqualifies_even_with_marker() {
+        let lines = vec![
+            system_line(5, &format!("{DIGESTION_MARKER} candidate x")),
+            user_line(5, "[local_main] cass: interrupt"),
+        ];
+        assert!(!is_digestion_turn(&lines, 5));
+    }
+
+    /// Hunts: someone drops the "any other system frame disqualifies"
+    /// branch. A hybrid turn (digestion + budget warning, or
+    /// digestion + mid-turn arrival notice) must be treated as real
+    /// activity, not skipped from glean.
+    #[test]
+    fn is_digestion_turn_other_system_frame_disqualifies() {
+        let lines = vec![
+            system_line(5, &format!("{DIGESTION_MARKER} candidate x")),
+            system_line(5, "[3/10 tool calls remaining]"),
+        ];
+        assert!(!is_digestion_turn(&lines, 5));
+    }
+
+    /// Hunts: symmetry with is_digestion_turn — a heartbeat turn is
+    /// only heartbeat-driven if the sole user line is the exact
+    /// HEARTBEAT_MARKER content. Any real user message disqualifies.
+    #[test]
+    fn is_heartbeat_turn_non_marker_user_line_disqualifies() {
+        let lines = vec![
+            user_line(5, HEARTBEAT_MARKER),
+            user_line(5, "[local_main] cass: hi"),
+        ];
+        assert!(!is_heartbeat_turn(&lines, 5));
+    }
+
+    /// Hunts: someone lets system frames slip past the heartbeat
+    /// classifier. Any system frame on a turn means "not a bare
+    /// heartbeat" — the glean should not skip.
+    #[test]
+    fn is_heartbeat_turn_system_frame_disqualifies() {
+        let lines = vec![
+            user_line(5, HEARTBEAT_MARKER),
+            system_line(5, "compaction happened"),
+        ];
+        assert!(!is_heartbeat_turn(&lines, 5));
+    }
+
+    // --- preview_line ---
+
+    /// Hunts: someone switches `chars().count()` to `.len()` (bytes)
+    /// and multi-byte previews truncate on wrong boundaries or count
+    /// wrong. Also hunts the 80-char cap flipping to a smaller value
+    /// silently.
+    #[test]
+    fn preview_line_truncation_boundary_and_utf8() {
+        // Under cap: whole text, no ellipsis.
+        let short = "a".repeat(80);
+        assert_eq!(preview_line(&short), short);
+        // At cap boundary (81 chars): truncates + ellipsis.
+        let long = "a".repeat(81);
+        let out = preview_line(&long);
+        assert_eq!(out.chars().count(), 81, "80 chars + ellipsis");
+        assert!(out.ends_with('…'));
+        // Multi-byte: 100 chars of a 3-byte codepoint.
+        let wide: String = "字".repeat(100);
+        let out = preview_line(&wide);
+        assert_eq!(out.chars().count(), 81, "80 chars + ellipsis");
+        assert!(out.chars().take(80).all(|c| c == '字'));
+        // Multi-line: takes only the first line, trimmed.
+        let multi = "  first line  \nsecond line\nthird";
+        assert_eq!(preview_line(multi), "first line");
+    }
+
+    // --- recent_rejections ---
+
+    /// Hunts: someone changes the tail-take from `skip(len - window)`
+    /// to `take(window)` (head-take) — silently returning the OLDEST
+    /// rejections instead of the most recent, so the glean prompt
+    /// warns about ancient turned-down candidates.
+    #[test]
+    fn recent_rejections_returns_last_window_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("witness")).unwrap();
+        let path = dir.path().join("witness/rejections.jsonl");
+        // Write 5 rejections; request window=3 → should get turns 3, 4, 5.
+        let mut body = String::new();
+        for t in 1..=5 {
+            body.push_str(&format!(
+                "{{\"candidate_id\":\"01T{t}\",\"candidate\":\"c{t}\",\"turn\":{t},\"at\":\"t\"}}\n",
+            ));
+        }
+        std::fs::write(&path, body).unwrap();
+        let entries = recent_rejections(&path, 3);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].turn, 3);
+        assert_eq!(entries[1].turn, 4);
+        assert_eq!(entries[2].turn, 5);
+    }
+
+    /// Hunts: someone changes the malformed-line handler from
+    /// warn+skip to bail, breaking every glean after a torn write to
+    /// rejections.jsonl.
+    #[test]
+    fn recent_rejections_skips_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("witness")).unwrap();
+        let path = dir.path().join("witness/rejections.jsonl");
+        let mut body = String::new();
+        body.push_str(
+            "{\"candidate_id\":\"01A\",\"candidate\":\"a\",\"turn\":1,\"at\":\"t\"}\n",
+        );
+        body.push_str("{ this is not valid json\n");
+        body.push_str(
+            "{\"candidate_id\":\"01B\",\"candidate\":\"b\",\"turn\":2,\"at\":\"t\"}\n",
+        );
+        body.push_str("\n"); // blank line (already handled)
+        body.push_str("garbage\n");
+        body.push_str(
+            "{\"candidate_id\":\"01C\",\"candidate\":\"c\",\"turn\":3,\"at\":\"t\"}\n",
+        );
+        std::fs::write(&path, body).unwrap();
+        let entries = recent_rejections(&path, 10);
+        assert_eq!(entries.len(), 3, "three valid entries survive junk");
+        let turns: Vec<_> = entries.iter().map(|e| e.turn).collect();
+        assert_eq!(turns, vec![1, 2, 3]);
+    }
+
+    // --- format_rejections ---
+
+    /// Hunts: someone changes the format so the "reason:" suffix is
+    /// dropped, or emits it even when None. Prompt shape matters —
+    /// the witness's on-glean template reads this block.
+    #[test]
+    fn format_rejections_renders_reason_when_present_and_omits_when_absent() {
+        let with_reason = RejectionEntry {
+            candidate_id: "01A".into(),
+            candidate: "a claim".into(),
+            reason: Some("too vague".into()),
+            turn: 3,
+            at: "t".into(),
+        };
+        let without = RejectionEntry {
+            candidate_id: "01B".into(),
+            candidate: "another".into(),
+            reason: None,
+            turn: 7,
+            at: "t".into(),
+        };
+        let out = format_rejections(&[with_reason, without]);
+        assert!(out.contains("turn 3:"));
+        assert!(out.contains("a claim"));
+        assert!(out.contains("reason: too vague"), "reason renders: {out}");
+        assert!(out.contains("turn 7:"));
+        assert!(out.contains("another"));
+        // The no-reason line must NOT carry the em-dash suffix.
+        let line7 = out.lines().find(|l| l.contains("turn 7")).unwrap();
+        assert!(
+            !line7.contains(" — "),
+            "no-reason line has no reason suffix: {line7}"
+        );
+    }
 }
