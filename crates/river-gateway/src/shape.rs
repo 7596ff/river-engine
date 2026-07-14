@@ -475,6 +475,12 @@ fn strip_frontmatter(text: &str) -> &str {
     let Some(rest) = text.strip_prefix("---\n") else {
         return text;
     };
+    // Empty frontmatter: `---\n---\n...` — closing delimiter is at
+    // position 0 of `rest`, with no preceding newline, so the
+    // find("\n---") below wouldn't see it.
+    if let Some(after) = rest.strip_prefix("---") {
+        return after.trim_start_matches('\n');
+    }
     match rest.find("\n---") {
         Some(end) => rest[end..]
             .trim_start_matches("\n---")
@@ -904,6 +910,371 @@ mod tests {
         let row = mem.read_shape("01Y").unwrap().unwrap();
         assert_eq!(row.gloss, "the agent's own skeleton", "unchanged");
         assert_eq!(row.author, ShapeAuthor::Agent);
+    }
+
+    // -------- hunt tests --------
+    //
+    // Each names the drift it hunts. Same discipline as flashes.rs:
+    // if the assertion can't fail on a plausible regression, don't
+    // add it.
+
+    /// Hunts: someone changes the missing-prompt branch from `continue`
+    /// to `return Err(_)`, killing the whole worker on any job that
+    /// races the operator deleting `on-shape.md`. Spec calls this
+    /// "duty disabled; drop this job."
+    #[tokio::test]
+    async fn worker_drops_job_when_prompt_missing_no_bail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01Z.md", "01Z", "body");
+        // Intentionally do NOT create witness/on-shape.md.
+
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(GlossJob {
+            note_id: "01Z".into(),
+            note_path: "knowledge/01Z.md".into(),
+            reason: JobReason::Write,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        // If the worker tried to call the model, this replies-empty
+        // client would panic — proving the job was dropped upstream.
+        let client = FakeModel::replying(vec![]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        run_worker(
+            rx,
+            client,
+            mem.clone(),
+            workspace.clone(),
+            prompt,
+            "sys".into(),
+            "m1".into(),
+            shutdown_rx,
+        )
+        .await
+        .expect("worker must not bail on missing prompt");
+
+        assert!(mem.read_shape("01Z").unwrap().is_none(), "no row written");
+        assert!(
+            !workspace.join("witness/shape-log.jsonl").exists(),
+            "no receipt when duty disabled"
+        );
+    }
+
+    /// Hunts: worker appends a receipt even when process_one returned
+    /// Ok(None) (the agent-authored skip). Regression would fill the
+    /// shape-log with phantom "witness"-tagged entries for atomics
+    /// the agent owns.
+    #[tokio::test]
+    async fn worker_skips_receipt_on_agent_authored_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01AGENT.md", "01AGENT", "body");
+        std::fs::create_dir_all(workspace.join("witness")).unwrap();
+        std::fs::write(workspace.join("witness/on-shape.md"), "{note_body}").unwrap();
+
+        // Pre-populate agent-authored row.
+        mem.upsert_shape(
+            "01AGENT",
+            "knowledge/01AGENT.md",
+            "the agent's own skeleton",
+            ShapeAuthor::Agent,
+            "agent",
+            "",
+        )
+        .await
+        .unwrap();
+
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(GlossJob {
+            note_id: "01AGENT".into(),
+            note_path: "knowledge/01AGENT.md".into(),
+            reason: JobReason::Write,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        // Empty replies: if process_one *did* call the model, it panics.
+        let client = FakeModel::replying(vec![]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        run_worker(
+            rx,
+            client,
+            mem.clone(),
+            workspace.clone(),
+            prompt,
+            "sys".into(),
+            "m1".into(),
+            shutdown_rx,
+        )
+        .await
+        .unwrap();
+
+        // Row unchanged.
+        let row = mem.read_shape("01AGENT").unwrap().unwrap();
+        assert_eq!(row.author, ShapeAuthor::Agent);
+        assert_eq!(row.gloss, "the agent's own skeleton");
+        // Critically: no receipt line for this note_id.
+        let log_path = workspace.join("witness/shape-log.jsonl");
+        if log_path.exists() {
+            let text = std::fs::read_to_string(&log_path).unwrap();
+            assert!(
+                !text.contains("01AGENT"),
+                "phantom receipt for agent-authored row: {text}"
+            );
+        }
+    }
+
+    /// Hunts: someone changes the per-job error branch from
+    /// warn+continue to bail+return, freezing the whole shape
+    /// backfill on one bad note. Send job A that fails, then B that
+    /// succeeds; verify B lands and worker exits cleanly.
+    #[tokio::test]
+    async fn worker_continues_after_per_job_gloss_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01BAD.md", "01BAD", "body a");
+        write_atomic_file(&workspace, "01OK.md", "01OK", "body b");
+        std::fs::create_dir_all(workspace.join("witness")).unwrap();
+        std::fs::write(workspace.join("witness/on-shape.md"), "{note_body}").unwrap();
+
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(GlossJob {
+            note_id: "01BAD".into(),
+            note_path: "knowledge/01BAD.md".into(),
+            reason: JobReason::Missing,
+        })
+        .await
+        .unwrap();
+        tx.send(GlossJob {
+            note_id: "01OK".into(),
+            note_path: "knowledge/01OK.md".into(),
+            reason: JobReason::Missing,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        // First reply errors, second succeeds.
+        let client = FakeModel::replying(vec![
+            Err(anyhow::anyhow!("model exploded")),
+            ok("skeleton for OK"),
+        ]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        run_worker(
+            rx,
+            client,
+            mem.clone(),
+            workspace.clone(),
+            prompt,
+            "sys".into(),
+            "m1".into(),
+            shutdown_rx,
+        )
+        .await
+        .expect("worker must not bail on per-job failure");
+
+        // 01BAD has no row (gloss failed).
+        assert!(mem.read_shape("01BAD").unwrap().is_none());
+        // 01OK does — proving the worker reached the second job.
+        let row = mem.read_shape("01OK").unwrap().unwrap();
+        assert_eq!(row.gloss, "skeleton for OK");
+    }
+
+    /// Hunts: someone caches the LoadedPrompt for the worker's lifetime
+    /// (e.g., moves prompt.load() outside the loop), breaking the
+    /// documented "reloads on each iteration so an operator's mid-run
+    /// edit picks up." The prompt_hash on the receipt row is the
+    /// tell — a mid-run edit must change it.
+    #[tokio::test]
+    async fn worker_reloads_prompt_between_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01A.md", "01A", "body a");
+        write_atomic_file(&workspace, "01B.md", "01B", "body b");
+        std::fs::create_dir_all(workspace.join("witness")).unwrap();
+        let prompt_path = workspace.join("witness/on-shape.md");
+        std::fs::write(&prompt_path, "v1: {note_body}").unwrap();
+
+        // A channel we can drive step by step. Buffer 1 so send
+        // blocks until the worker consumes the first job.
+        let (tx, rx) = mpsc::channel::<GlossJob>(1);
+        let client = FakeModel::replying(vec![ok("gloss a"), ok("gloss b")]);
+        let prompt = Prompt::at_workspace(&workspace);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let mem2 = mem.clone();
+        let workspace2 = workspace.clone();
+        let handle = tokio::spawn(async move {
+            run_worker(
+                rx,
+                client,
+                mem2,
+                workspace2,
+                prompt,
+                "sys".into(),
+                "m1".into(),
+                shutdown_rx,
+            )
+            .await
+        });
+
+        // Job A → worker glosses with v1.
+        tx.send(GlossJob {
+            note_id: "01A".into(),
+            note_path: "knowledge/01A.md".into(),
+            reason: JobReason::Write,
+        })
+        .await
+        .unwrap();
+        // Wait for the row to appear (worker finished A).
+        for _ in 0..100 {
+            if mem.read_shape("01A").unwrap().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let hash_a = mem.read_shape("01A").unwrap().unwrap().prompt_hash;
+
+        // Rewrite prompt so hash changes. Sleep to advance mtime past
+        // the mtime-cache tick.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        std::fs::write(&prompt_path, "v2: {note_body} — different content").unwrap();
+
+        tx.send(GlossJob {
+            note_id: "01B".into(),
+            note_path: "knowledge/01B.md".into(),
+            reason: JobReason::Write,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        handle.await.unwrap().unwrap();
+
+        let hash_b = mem.read_shape("01B").unwrap().unwrap().prompt_hash;
+        assert_ne!(
+            hash_a, hash_b,
+            "worker should reload prompt between jobs; hashes must differ"
+        );
+
+        // The receipt log entries should carry the same drift.
+        let log = std::fs::read_to_string(workspace.join("witness/shape-log.jsonl")).unwrap();
+        assert!(log.contains(&hash_a), "receipt for A carries v1 hash");
+        assert!(log.contains(&hash_b), "receipt for B carries v2 hash");
+    }
+
+    // -------- Tier B: enqueue edges --------
+
+    /// Hunts: someone removes the `if extension != "md" continue`
+    /// guard. The subsystem starts trying to read binary attachments
+    /// as text, wasting cycles and cluttering logs with warnings.
+    #[tokio::test]
+    async fn enqueue_missing_skips_non_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = make_memory(dir.path());
+        let workspace = dir.path().join("ws");
+        write_atomic_file(&workspace, "01A.md", "01A", "atomic body");
+        std::fs::write(workspace.join("knowledge/note.txt"), "---\nid: 01B\n---\nbody").unwrap();
+        std::fs::write(workspace.join("knowledge/photo.png"), &[0u8, 1, 2, 3]).unwrap();
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let n = enqueue_missing(&mem, &workspace, &tx).await.unwrap();
+        drop(tx);
+        assert_eq!(n, 1, "only the .md file enqueued");
+        let job = rx.recv().await.unwrap();
+        assert_eq!(job.note_id, "01A");
+        assert!(rx.recv().await.is_none());
+    }
+
+    /// Hunts: someone changes the NotFound branch on `read_dir` from
+    /// `Ok(0)` to `Err(_)`, making the shape subsystem fail to start
+    /// on a fresh workspace with no knowledge/ dir yet.
+    #[tokio::test]
+    async fn enqueue_missing_returns_zero_when_knowledge_dir_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // No knowledge/ subdir.
+        let mem_dir = dir.path().join("data");
+        let mem = Memory::open(
+            &mem_dir,
+            &workspace,
+            &[],
+            Arc::new(crate::memory::tests::FakeEmbedder),
+        )
+        .unwrap();
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let n = enqueue_missing(&mem, &workspace, &tx).await.unwrap();
+        drop(tx);
+        assert_eq!(n, 0, "missing knowledge/ dir returns 0, not error");
+        assert!(rx.recv().await.is_none());
+    }
+
+    // -------- Tier C: parser adversarials --------
+
+    /// Hunts: someone tightens strip_frontmatter to bail or panic on
+    /// malformed atomics instead of degrading to "whole text."
+    /// Downstream (gloss_note) then sees corrupted body and either
+    /// gloss-fails or embeds frontmatter garbage into the shape.
+    #[test]
+    fn strip_frontmatter_degrades_gracefully_on_malformed() {
+        // Missing opening ---: return whole text.
+        assert_eq!(strip_frontmatter("no fm here\nline"), "no fm here\nline");
+        // Missing closing ---: return whole text (no truncation).
+        assert_eq!(
+            strip_frontmatter("---\nid: 01A\nnever closed"),
+            "---\nid: 01A\nnever closed"
+        );
+        // Empty frontmatter with empty body.
+        let out = strip_frontmatter("---\n---\n");
+        assert!(out.is_empty() || out == "\n", "empty fm produces empty body, got {out:?}");
+        // `---` sequence inside body doesn't confuse the parser once
+        // the opening was properly closed.
+        let with_dashes_in_body = "---\nid: 01A\n---\n\nline one\n---\nline two\n";
+        let stripped = strip_frontmatter(with_dashes_in_body);
+        assert!(stripped.contains("line one"));
+        assert!(stripped.contains("line two"));
+        assert!(!stripped.contains("id: 01A"));
+    }
+
+    /// Hunts: someone relaxes read_frontmatter_id and returns Some("")
+    /// or Some("value:with:colon") when they shouldn't. Empty-id rows
+    /// would silently poison the shape_vectors table with unfindable
+    /// entries.
+    #[test]
+    fn read_frontmatter_id_rejects_empty_and_handles_adversarial_values() {
+        // Empty value → None (line 464: `if !value.is_empty()`).
+        assert!(read_frontmatter_id("---\nid: \n---\nbody").is_none());
+        assert!(read_frontmatter_id("---\nid:\n---\nbody").is_none());
+        // Trailing whitespace still resolves after trim.
+        assert_eq!(
+            read_frontmatter_id("---\nid: 01WS   \n---\nbody").as_deref(),
+            Some("01WS")
+        );
+        // Colons in the value pass through as part of the raw string
+        // (yaml-lite behavior; we don't split on further colons).
+        assert_eq!(
+            read_frontmatter_id("---\nid: has:colons:in:it\n---\nbody").as_deref(),
+            Some("has:colons:in:it")
+        );
+        // `id:` appearing only in the body (after closing ---) is not
+        // returned — the parser stops at the closing delimiter.
+        let with_body_id = "---\ncreated: t\n---\nid: 01BODY\nreal body";
+        assert!(read_frontmatter_id(with_body_id).is_none());
     }
 
     #[tokio::test]
