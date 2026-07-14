@@ -120,9 +120,11 @@ pub async fn gloss_text<C: Chat + Sync>(
 }
 
 /// Compose a shape gloss for the note at `note_path` and upsert it
-/// into `shape_vectors`. Returns the gloss text on success. Errors
-/// propagate; the caller (worker or write_atomic) decides how loud
-/// to be.
+/// into `shape_vectors`. Returns `Some(gloss)` on success, `None`
+/// when the authorship guard rejected the write (an Agent row
+/// already owns this note — the worker raced the sync service and
+/// lost; skip cleanly, no receipt). Errors propagate; the caller
+/// (worker or write_atomic) decides how loud to be.
 pub async fn gloss_note<C: Chat + Sync>(
     client: &C,
     memory: &Memory,
@@ -132,12 +134,12 @@ pub async fn gloss_note<C: Chat + Sync>(
     note_id: &str,
     note_path: &str,
     body: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     let gloss = gloss_text(client, prompt, system, body).await?;
     if gloss.is_empty() {
         anyhow::bail!("witness returned empty gloss for {note_id}");
     }
-    memory
+    let stored = memory
         .upsert_shape(
             note_id,
             note_path,
@@ -147,7 +149,7 @@ pub async fn gloss_note<C: Chat + Sync>(
             &prompt.hash,
         )
         .await?;
-    Ok(gloss)
+    Ok(if stored { Some(gloss) } else { None })
 }
 
 /// Compose a shape gloss for a turn transcript. No storage side
@@ -298,7 +300,11 @@ pub async fn process_one<C: Chat + Sync>(
     model_id: &str,
     job: &GlossJob,
 ) -> anyhow::Result<Option<String>> {
-    // Agent-authored rows win the race — never overwritten.
+    // Fast path: skip the gloss call entirely when the agent
+    // already owns this note. The SQL guard in `upsert_shape` also
+    // rejects a witness→agent overwrite, so the pre-check is an
+    // optimization (avoid a wasted model call), not the correctness
+    // boundary.
     if let Some(existing) = memory.read_shape(&job.note_id)? {
         if existing.author == ShapeAuthor::Agent {
             return Ok(None);
@@ -308,7 +314,10 @@ pub async fn process_one<C: Chat + Sync>(
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("reading {}", path.display()))?;
     let body = strip_frontmatter(&text).to_string();
-    let gloss = gloss_note(
+    // gloss_note returns None when the SQL guard vetoed the write —
+    // meaning the sync service claimed the note as Agent-authored
+    // between our pre-check and our upsert. Either way, no receipt.
+    gloss_note(
         client,
         memory,
         prompt,
@@ -318,8 +327,7 @@ pub async fn process_one<C: Chat + Sync>(
         &job.note_path,
         &body,
     )
-    .await?;
-    Ok(Some(gloss))
+    .await
 }
 
 /// Long-running task: drain the shape queue, gloss each job,

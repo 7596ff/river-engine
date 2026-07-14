@@ -1468,6 +1468,12 @@ impl Memory {
     /// writes, `Agent` for values pulled from a note's `shape:`
     /// frontmatter (in which case `model_id="agent"` and
     /// `prompt_hash=""` by convention).
+    ///
+    /// Returns `true` when a row was inserted or updated, `false`
+    /// when the authorship guard vetoed the write (an agent-authored
+    /// row must never be overwritten by a witness gloss — the guard
+    /// is enforced in SQL so it holds even if callers forget to
+    /// pre-check). All other combinations proceed as before.
     pub async fn upsert_shape(
         &self,
         note_id: &str,
@@ -1476,7 +1482,7 @@ impl Memory {
         author: ShapeAuthor,
         model_id: &str,
         prompt_hash: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let vector = self
             .embedder
             .embed(&[gloss.to_string()])
@@ -1487,7 +1493,7 @@ impl Memory {
         let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         let at = jiff::Timestamp::now().to_string();
         let db = self.db.lock().expect("db lock");
-        db.execute(
+        let changed = db.execute(
             "INSERT INTO shape_vectors
                (note_id, file_path, gloss, author, model_id, prompt_hash, embedding, at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -1498,7 +1504,9 @@ impl Memory {
                model_id = excluded.model_id,
                prompt_hash = excluded.prompt_hash,
                embedding = excluded.embedding,
-               at = excluded.at",
+               at = excluded.at
+             WHERE NOT (shape_vectors.author = 'agent'
+                        AND excluded.author = 'witness')",
             rusqlite::params![
                 note_id,
                 file_path,
@@ -1510,7 +1518,7 @@ impl Memory {
                 at
             ],
         )?;
-        Ok(())
+        Ok(changed > 0)
     }
 
     /// Read one `shape_vectors` row by `note_id`; `None` if absent.
@@ -4074,5 +4082,93 @@ pub mod tests {
     fn segment_with_cap_on_empty_and_whitespace_returns_empty() {
         assert!(segment_with_cap("", 100).is_empty());
         assert!(segment_with_cap("   \n  \n\n   ", 100).is_empty());
+    }
+
+    /// Hunts: the shape-authorship TOCTOU race. If a Witness write
+    /// lands on a note that already has an Agent row (because the
+    /// sync service raced ahead), the storage layer must reject it —
+    /// this is defense-in-depth against a caller who forgot the
+    /// pre-check, and it closes the tiny window between the pre-
+    /// check and the write in shape::process_one.
+    #[tokio::test]
+    async fn upsert_shape_rejects_witness_overwriting_agent_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem = memory(dir.path());
+        // Agent claims the row first.
+        let first_wrote = mem
+            .upsert_shape(
+                "01A",
+                "knowledge/01A.md",
+                "the agent's own skeleton",
+                ShapeAuthor::Agent,
+                "agent",
+                "",
+            )
+            .await
+            .unwrap();
+        assert!(first_wrote, "initial insert must land");
+
+        // Witness tries to overwrite: guard must reject.
+        let second_wrote = mem
+            .upsert_shape(
+                "01A",
+                "knowledge/01A.md",
+                "witness's skeleton",
+                ShapeAuthor::Witness,
+                "haiku-4.5",
+                "hash-x",
+            )
+            .await
+            .unwrap();
+        assert!(!second_wrote, "witness must not overwrite agent");
+        // Row unchanged.
+        let row = mem.read_shape("01A").unwrap().unwrap();
+        assert_eq!(row.author, ShapeAuthor::Agent);
+        assert_eq!(row.gloss, "the agent's own skeleton");
+        assert_eq!(row.model_id, "agent");
+
+        // Agent overwriting Agent is fine (agent updates their own).
+        let third_wrote = mem
+            .upsert_shape(
+                "01A",
+                "knowledge/01A.md",
+                "agent's revised skeleton",
+                ShapeAuthor::Agent,
+                "agent",
+                "",
+            )
+            .await
+            .unwrap();
+        assert!(third_wrote, "agent may overwrite their own row");
+        let row = mem.read_shape("01A").unwrap().unwrap();
+        assert_eq!(row.gloss, "agent's revised skeleton");
+
+        // Witness overwriting witness is fine (drift-repair).
+        let _ = mem
+            .upsert_shape(
+                "01B",
+                "knowledge/01B.md",
+                "v1",
+                ShapeAuthor::Witness,
+                "m1",
+                "h1",
+            )
+            .await
+            .unwrap();
+        let updated = mem
+            .upsert_shape(
+                "01B",
+                "knowledge/01B.md",
+                "v2",
+                ShapeAuthor::Witness,
+                "m2",
+                "h2",
+            )
+            .await
+            .unwrap();
+        assert!(updated, "witness→witness updates freely");
+        let row = mem.read_shape("01B").unwrap().unwrap();
+        assert_eq!(row.gloss, "v2");
+        assert_eq!(row.model_id, "m2");
     }
 }
