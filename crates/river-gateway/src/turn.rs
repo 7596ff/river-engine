@@ -25,7 +25,9 @@ use crate::model::{Chat, ToolCall};
 use crate::record::{RecordRole, TurnRecord, last_turn};
 use crate::tools::{Registry, ToolContext};
 
-pub const HEARTBEAT_MARKER: &str = "Read HEARTBEAT.md.";
+/// The retired marker remains recognizable in old records, but new heartbeat
+/// turns carry a dynamic `[workspace]` landscape instead.
+pub const LEGACY_HEARTBEAT_MARKER: &str = "Read HEARTBEAT.md.";
 pub const DEFAULT_CHANNEL: &str = "local_main";
 pub const LOCAL_ADAPTER: &str = "local";
 /// Marker prefix for the system frame the connect duty appends when
@@ -64,6 +66,13 @@ pub struct Health {
     pub queue_depth: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeCause {
+    Heartbeat,
+    ChannelMessage,
+    DigestionEvent,
+}
+
 enum Wake {
     Notifications(Vec<Notification>),
     Heartbeat,
@@ -75,6 +84,17 @@ enum Wake {
     /// The queue changed while parked: recompute the select arms.
     Recheck,
     Shutdown,
+}
+
+impl Wake {
+    fn cause(&self) -> Option<WakeCause> {
+        match self {
+            Self::Notifications(_) => Some(WakeCause::ChannelMessage),
+            Self::Heartbeat => Some(WakeCause::Heartbeat),
+            Self::Digestion { .. } => Some(WakeCause::DigestionEvent),
+            Self::Recheck | Self::Shutdown => None,
+        }
+    }
 }
 
 const QUIET_TRIGGER: Duration = Duration::from_secs(300);
@@ -160,6 +180,8 @@ pub struct TurnLoop<C: Chat> {
     flash_frames: Option<mpsc::Receiver<FlashFrame>>,
     atomic_max_words: usize,
     shape_queue: Option<mpsc::Sender<crate::shape::GlossJob>>,
+    /// Cause of the turn currently in flight. None between turns.
+    current_wake_cause: Option<WakeCause>,
 }
 
 impl<C: Chat> TurnLoop<C> {
@@ -288,6 +310,7 @@ impl<C: Chat> TurnLoop<C> {
             flash_frames,
             atomic_max_words,
             shape_queue,
+            current_wake_cause: None,
         })
     }
 
@@ -392,6 +415,8 @@ impl<C: Chat> TurnLoop<C> {
 
         self.turn_number += 1;
         let n = self.turn_number;
+        let wake_cause = wake.cause().expect("turn called only for a real wake");
+        self.current_wake_cause = Some(wake_cause);
         // Channels read this turn, with the last entry id consumed —
         // the settle cursor points at it (never past it).
         let mut read_channels: Vec<(String, String)> = Vec::new();
@@ -466,9 +491,7 @@ impl<C: Chat> TurnLoop<C> {
                     }
                 }
             }
-            Wake::Heartbeat => {
-                self.append(n, RecordRole::User, HEARTBEAT_MARKER)?;
-            }
+            Wake::Heartbeat => {}
             Wake::Digestion { id, candidate } => {
                 digestion = Some(crate::tools::DigestionInfo {
                     candidate_id: id,
@@ -539,6 +562,17 @@ impl<C: Chat> TurnLoop<C> {
             );
             self.append(n, RecordRole::System, &notice)?;
             self.warned_high = true;
+        }
+
+        // The heartbeat landscape is assembled last so it is the freshest
+        // message at the first model call. It is strictly cause-gated: no
+        // channel or digestion wake can manufacture this synthetic user.
+        if wake_cause == WakeCause::Heartbeat {
+            let state_path = self.workspace.join("state/landscape-generator.json");
+            if let Some(prompt) = crate::wake_prompt::generate(&self.workspace, &state_path)? {
+                let framed = format!("{}\n\n{prompt}", crate::wake_prompt::WORKSPACE_PREFIX);
+                self.append(n, RecordRole::User, &framed)?;
+            }
         }
 
         // Presence: the agent is doing something on this channel.
@@ -752,6 +786,7 @@ impl<C: Chat> TurnLoop<C> {
         // Persist-before-announce: every append above fsynced inline,
         // so the record already holds the whole turn.
         let _ = self.settled.send(n);
+        self.current_wake_cause = None;
         tracing::debug!(turn = n, "settled");
         Ok(())
     }
@@ -1252,16 +1287,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heartbeat_appends_the_instruction() {
+    async fn heartbeat_injects_workspace_landscape_last() {
         let dir = tempfile::tempdir().unwrap();
         let model = FakeModel::replying(vec![done("quiet hour")]);
+        let seen = model.clone();
         let mut h = harness(dir.path(), model);
 
         h.turn_loop.turn(Wake::Heartbeat).await.unwrap();
 
         let lines = scan(&dir.path().join("record/turns.jsonl")).unwrap();
-        assert_eq!(lines[0].content.as_deref(), Some("Read HEARTBEAT.md."));
+        let wake = lines[0].content.as_deref().unwrap();
+        assert!(wake.starts_with("[workspace]\n\nYou last settled"), "{wake}");
+        assert!(wake.ends_with(crate::wake_prompt::CLOSING), "{wake}");
         assert_eq!(lines[0].role, RecordRole::User);
+        let calls = seen.seen.lock().unwrap();
+        let messages = &calls[0].1;
+        assert_eq!(messages.last().unwrap().role, crate::model::Role::User);
+        assert!(messages.last().unwrap().content.starts_with("[workspace]"));
+        assert_eq!(h.turn_loop.current_wake_cause, None, "cause clears at settle");
+    }
+
+    #[tokio::test]
+    async fn channel_wake_never_injects_workspace_landscape() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FakeModel::replying(vec![done("hello")]);
+        let seen = model.clone();
+        let mut h = harness(dir.path(), model);
+        let note = say(&mut h, DEFAULT_CHANNEL, "hi").await;
+
+        h.turn_loop.turn(Wake::Notifications(vec![note])).await.unwrap();
+
+        let calls = seen.seen.lock().unwrap();
+        assert!(calls[0].1.iter().all(|message| !message.content.starts_with("[workspace]")));
+        assert!(!dir.path().join("state/landscape-generator.json").exists());
     }
 
     #[tokio::test]

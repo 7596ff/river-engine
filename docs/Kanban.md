@@ -16,7 +16,7 @@ kanban-plugin: board
 - [ ] minimal turn loop — serialized event queue → model call → reply (no tools yet)
 - [ ] in-memory rolling context (naive; swapped for persistent context later)
 - [ ] turn record — record/turns.jsonl one-stream append + tail-scan, ULIDs, channel tags, persist-once under turn numbers
-- [ ] heartbeat wake — timer + "Read HEARTBEAT.md." marker
+- [ ] dynamic heartbeat wake prompt — timer + heartbeat-only workspace landscape, visible atomic baseline state, active projects, append-only live threads tool, and fixed permission closing. `HEARTBEAT.md` remains on disk but is no longer a wake-time input. Spec: `docs/superpowers/specs/2026-07-15-dynamic-wake-prompt-claude.md`.
 - [ ] channel cursors — me/not-me roles, read position = last agent entry, explicit cursor on read-without-speak
 - [ ] lossless compaction — context folds only what the witness has compressed; nothing uncompressed ever dropped
 - [ ] calibrated token estimator — WMA against reported prompt tokens

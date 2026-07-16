@@ -665,3 +665,28 @@ The index is never truth. Rebuilds preserve malformed/torn-line
 tolerance, duplicate moves retain append order within their turn, turn
 keys restore regenerated moves to chronological reads, and the witness
 cursor remains the contiguous set of distinct move turns.
+
+## 2026-07-15 — heartbeat wakes receive a dynamic workspace landscape
+
+The dynamic-wake specification replaces two binding wall details. Wall
+chapter 01 requires the literal `Read HEARTBEAT.md.` user marker, and
+chapter 08 describes `HEARTBEAT.md` as the wake-time briefing. It also
+broadens chapter 08's exact engine-managed path list by introducing
+engine state at `state/landscape-generator.json` and an explicit agent
+tool write at `projects/threads.json`.
+
+Decision: the dynamic-wake specification supersedes those details.
+`WakeCause::Heartbeat` injects one synthetic user message prefixed
+`[workspace]` after all other turn-start assembly; channel and digestion
+wakes never invoke the generator. `HEARTBEAT.md` remains untouched on
+disk as philosophical documentation, and the retired literal marker is
+recognized only when classifying historical record lines.
+
+The generator atomically owns `state/landscape-generator.json`; the
+`threads` tool atomically owns `projects/threads.json` and joins the
+default per-agent tool profile additively. No other path ownership
+changes. The landscape omits its own state file from Git changes so its
+successful timestamp update cannot create a permanent self-generated
+"uncommitted change" on every later wake. All other committed and
+uncommitted workspace paths, including `projects/threads.json`, remain
+observable.

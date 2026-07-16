@@ -15,6 +15,7 @@ mod shape;
 mod surface;
 mod tools;
 mod turn;
+mod wake_prompt;
 mod witness;
 
 use std::future::Future;

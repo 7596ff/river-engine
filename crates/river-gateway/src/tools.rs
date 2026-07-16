@@ -135,6 +135,7 @@ impl Registry {
                 Box::new(ReadMovesTool),
                 Box::new(CompactTool),
                 Box::new(SettleTool),
+                Box::new(ThreadsTool),
             ],
         }
     }
@@ -1609,6 +1610,79 @@ impl Tool for SettleTool {
     }
 }
 
+struct ThreadsTool;
+impl Tool for ThreadsTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "threads".into(),
+            description: "Track append-only live thread status in projects/threads.json. Call with no arguments to list live threads, with slug to read its full history, or with slug and status to append an update. Status `done` hides a thread; any later status reopens it.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "slug": { "type": "string" },
+                    "status": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    fn execute<'a>(&'a self, args: Value, ctx: &'a ToolContext) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let slug = args.get("slug").and_then(Value::as_str);
+            let status = args.get("status").and_then(Value::as_str);
+            if args.get("status").is_some() && status.is_none() {
+                anyhow::bail!("status must be a string");
+            }
+            if args.get("slug").is_some() && slug.is_none() {
+                anyhow::bail!("slug must be a string");
+            }
+            if status.is_some() && slug.is_none() {
+                anyhow::bail!("status requires slug");
+            }
+
+            let path = crate::wake_prompt::threads_path(&ctx.workspace);
+            let mut store = crate::wake_prompt::load_threads(&path)?;
+            match (slug, status) {
+                (None, None) => {
+                    let mut live = crate::wake_prompt::live_threads(&store);
+                    live.sort_by(|a, b| b.1.at.cmp(&a.1.at).then_with(|| a.0.cmp(&b.0)));
+                    let out = live.into_iter().map(|(slug, entry)| json!({
+                        "slug": slug,
+                        "latest_status": entry.status,
+                        "at": entry.at,
+                    })).collect::<Vec<_>>();
+                    Ok(serde_json::to_string(&out)?)
+                }
+                (Some(slug), None) => {
+                    if slug.trim().is_empty() {
+                        anyhow::bail!("slug must not be empty");
+                    }
+                    let history = store.get(slug)
+                        .ok_or_else(|| anyhow::anyhow!("thread {slug:?} does not exist"))?;
+                    Ok(serde_json::to_string(history)?)
+                }
+                (Some(slug), Some(status)) => {
+                    if slug.trim().is_empty() {
+                        anyhow::bail!("slug must not be empty");
+                    }
+                    if status.trim().is_empty() {
+                        anyhow::bail!("status must not be empty");
+                    }
+                    let entry = crate::wake_prompt::ThreadEntry {
+                        at: jiff::Timestamp::now().to_string(),
+                        status: status.to_string(),
+                    };
+                    store.entry(slug.to_string()).or_default().push(entry.clone());
+                    crate::wake_prompt::save_threads(&path, &store)?;
+                    Ok(serde_json::to_string(&entry)?)
+                }
+                (None, Some(_)) => unreachable!("validated above"),
+            }
+        })
+    }
+}
+
 fn parse_string_list(args: &Value, key: &str) -> anyhow::Result<Vec<String>> {
     match args.get(key) {
         Some(Value::Array(items)) => items
@@ -1680,6 +1754,7 @@ mod tests {
             "compact",
             "write_atomic",
             "settle",
+            "threads",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2559,6 +2634,34 @@ mod tests {
         let out = run(&registry, &ctx, "settle", json!({"next_heartbeat": "soon"})).await;
         assert!(out.contains("next_heartbeat"), "{out}");
         assert!(ctx.settle_intent.lock().unwrap().is_none(), "no intent on error");
+    }
+
+    #[tokio::test]
+    async fn threads_append_done_and_reopen_preserves_history() {
+        let (ctx, _dir, _) = ctx();
+        let registry = Registry::core();
+        let created = run(&registry, &ctx, "threads", json!({"slug":"reading","status":"chapter 5"})).await;
+        assert_eq!(serde_json::from_str::<Value>(&created).unwrap()["status"], "chapter 5");
+        let live = run(&registry, &ctx, "threads", json!({})).await;
+        assert_eq!(serde_json::from_str::<Value>(&live).unwrap().as_array().unwrap().len(), 1);
+
+        run(&registry, &ctx, "threads", json!({"slug":"reading","status":"done"})).await;
+        let hidden = run(&registry, &ctx, "threads", json!({})).await;
+        assert!(serde_json::from_str::<Value>(&hidden).unwrap().as_array().unwrap().is_empty());
+
+        run(&registry, &ctx, "threads", json!({"slug":"reading","status":"chapter 6"})).await;
+        let history = run(&registry, &ctx, "threads", json!({"slug":"reading"})).await;
+        let history = serde_json::from_str::<Value>(&history).unwrap();
+        assert_eq!(history.as_array().unwrap().len(), 3);
+        assert_eq!(history[0]["status"], "chapter 5");
+        assert_eq!(history[2]["status"], "chapter 6");
+    }
+
+    #[tokio::test]
+    async fn threads_unknown_slug_history_errors_instead_of_returning_empty() {
+        let (ctx, _dir, _) = ctx();
+        let out = run(&Registry::core(), &ctx, "threads", json!({"slug":"missing"})).await;
+        assert!(out.starts_with("error:"), "{out}");
     }
 
     #[tokio::test]

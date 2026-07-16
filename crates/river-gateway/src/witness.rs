@@ -24,7 +24,7 @@ use tokio::sync::watch;
 
 use crate::model::{Chat, ChatMessage};
 use crate::record::{self, MovesFile, RecordLine, RecordRole};
-use crate::turn::{DIGESTION_MARKER, HEARTBEAT_MARKER};
+use crate::turn::{DIGESTION_MARKER, LEGACY_HEARTBEAT_MARKER};
 
 pub const NOTHING_TO_GLEAN: &str = "nothing to glean";
 const GLEAN_WINDOW_TURNS: u64 = 6;
@@ -833,8 +833,9 @@ fn is_digestion_turn(lines: &[RecordLine], turn: u64) -> bool {
 }
 
 /// A heartbeat-driven turn: its only inbound is the
-/// [`HEARTBEAT_MARKER`] user line the turn loop appends on the timer
-/// fire (wall ch. 01). Conservative, matching `is_digestion_turn`: any
+/// dynamic `[workspace]` user line the turn loop appends on the timer
+/// fire. The retired HEARTBEAT marker remains recognized in old records.
+/// Conservative, matching `is_digestion_turn`: any
 /// other inbound (a real user message, a non-marker system frame)
 /// disqualifies, so a heartbeat turn that also caught a mid-turn
 /// arrival is not skipped.
@@ -844,7 +845,9 @@ fn is_heartbeat_turn(lines: &[RecordLine], turn: u64) -> bool {
         match line.role {
             RecordRole::User => {
                 let Some(content) = &line.content else { continue };
-                if content.trim() == HEARTBEAT_MARKER {
+                if content.trim() == LEGACY_HEARTBEAT_MARKER
+                    || content.starts_with(crate::wake_prompt::WORKSPACE_PREFIX)
+                {
                     saw_marker = true;
                 } else {
                     return false;
@@ -1299,11 +1302,16 @@ mod tests {
     }
 
     /// Shape of a heartbeat turn as written by `TurnLoop`: a single
-    /// User-role line with the [HEARTBEAT_MARKER] content, plus
+    /// User-role line with the dynamic workspace landscape, plus
     /// whatever the agent did in response (often loom work).
     fn record_heartbeat_turn(workspace: &Path, turn: u64, reply: &str) {
         let mut rec = TurnRecord::open(workspace).unwrap();
-        rec.append(turn, "local_main", RecordRole::User, Some(HEARTBEAT_MARKER))
+        rec.append(
+            turn,
+            "local_main",
+            RecordRole::User,
+            Some("[workspace]\n\nNothing here is a task. Pick something, start something else, or rest."),
+        )
             .unwrap();
         rec.append(turn, "local_main", RecordRole::Assistant, Some(reply))
             .unwrap();
@@ -2253,11 +2261,11 @@ mod tests {
 
     /// Hunts: symmetry with is_digestion_turn — a heartbeat turn is
     /// only heartbeat-driven if the sole user line is the exact
-    /// HEARTBEAT_MARKER content. Any real user message disqualifies.
+    /// workspace landscape content. Any real user message disqualifies.
     #[test]
     fn is_heartbeat_turn_non_marker_user_line_disqualifies() {
         let lines = vec![
-            user_line(5, HEARTBEAT_MARKER),
+            user_line(5, "[workspace]\n\nlandscape"),
             user_line(5, "[local_main] cass: hi"),
         ];
         assert!(!is_heartbeat_turn(&lines, 5));
@@ -2269,7 +2277,7 @@ mod tests {
     #[test]
     fn is_heartbeat_turn_system_frame_disqualifies() {
         let lines = vec![
-            user_line(5, HEARTBEAT_MARKER),
+            user_line(5, "[workspace]\n\nlandscape"),
             system_line(5, "compaction happened"),
         ];
         assert!(!is_heartbeat_turn(&lines, 5));
